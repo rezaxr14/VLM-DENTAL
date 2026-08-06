@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environment
+.venv/
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Project-specific caches & large files
+hf_cache/
+checkpoints/
+data/*.parquet
+data/*.json
+data/*.jsonl
+*.jsonl
+
+# API keys & secrets
+.env
+.env.*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Model weights & large binaries
+*.bin
+*.safetensors
+*.pt
+*.pth
+*.onnx
+*.ckpt
+
+# Logs
+*.log
+run_log.jsonl
