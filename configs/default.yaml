@@ -1,0 +1,76 @@
+# Default configuration for dental_agent.
+# Override per-environment with kaggle.yaml, colab.yaml, or rtx4090.yaml.
+
+seed: 42
+environment: auto  # auto | kaggle | colab | local
+
+data:
+  dataset_repo: "ibrahimhamamci/DENTEX"
+  target_size: [1024, 512]
+  holdout_fraction: 0.20
+  parquet_cache: true
+
+model:
+  name: "Qwen/Qwen2.5-VL-3B-Instruct"
+  load_in_4bit: true
+  bnb_quant_type: "nf4"
+  bnb_compute_dtype: "bfloat16"
+  bnb_double_quant: true
+
+training:
+  lora:
+    r: 16
+    alpha: 32
+    dropout: 0.05
+    bias: "none"
+    target_modules:
+      - "q_proj"
+      - "k_proj"
+      - "v_proj"
+      - "o_proj"
+      - "gate_proj"
+      - "up_proj"
+      - "down_proj"
+
+  reward_weights:
+    accuracy: 1.0
+    format: 0.2
+    tool_validity: 0.2
+    efficiency: 0.1
+    judge: 0.0
+
+  # SFT (Stage 1)
+  sft_epochs: 1
+  sft_lr: 1.0e-4
+  sft_log_every: 1
+
+  # GRPO (Stage 2)
+  grpo_group_size: 4
+  grpo_lr: 1.0e-5
+  grpo_epochs_per_batch: 1
+  grpo_clip_eps: 0.2
+  grpo_kl_beta: 0.04
+  grpo_max_tool_calls: 4
+
+  # Stage 0 (grounding detector)
+  detector_epochs: 1
+  detector_batch_size: 2
+  detector_lr: 5.0e-4
+
+api:
+  generator_provider: "gemini"
+  generator_model: "gemini-3.6-flash"
+  verifier_provider: "anthropic"
+  verifier_model: "claude-opus-4-1"
+  gemini_rpm_limit: 5
+  gemini_rpd_limit: 20
+  gemini_safety_margin: 0.95
+  trace_candidates_k: 3
+  max_retries: 3
+  retry_delay: 5.0
+
+evaluation:
+  judge_sample_n: 10
+  bootstrap_n: 2000
+  bootstrap_ci: 0.95
+  ece_n_bins: 10
