@@ -53,8 +53,12 @@ def tool_fdi_label(quadrant: int, tooth_position: int) -> str | None:
     return None
 
 
-def get_anatomical_name(quadrant: int, tooth_position: int) -> str:
-    """Return the full anatomical name (e.g., 'Maxillary Right Central Incisor (11)')."""
+def get_anatomical_name(quadrant_or_fdi: int | str, tooth_position: int | None = None) -> str:
+    """Return the full anatomical name (e.g., 'Maxillary Right Central Incisor (FDI #11)')."""
+    if tooth_position is None:
+        quadrant, tooth_position = fdi_decode(quadrant_or_fdi)
+    else:
+        quadrant = int(quadrant_or_fdi)
     q_name = QUADRANT_NAMES.get(quadrant, f"Quadrant {quadrant}")
     t_name = TOOTH_NAMES.get(tooth_position, f"Tooth {tooth_position}")
     label = tool_fdi_label(quadrant, tooth_position) or "??"

@@ -12,15 +12,15 @@ def tool_zoom_crop(
     image: Image.Image,
     bbox: list[float],
     padding_frac: float = 0.25,
+    context_padding: float | None = None,
 ) -> Image.Image:
     """Return a cropped, zoomed-in view around *bbox* (``[x, y, w, h]``).
 
-    Adds *padding_frac* extra context on each side, clamped to image bounds.
-    This is the agent's zoom/crop tool — deterministic, so its behavior is
-    fully predictable and auditable.
+    Adds padding extra context on each side, clamped to image bounds.
     """
+    pad = context_padding if context_padding is not None else padding_frac
     x, y, w, h = bbox
-    pad_x, pad_y = w * padding_frac, h * padding_frac
+    pad_x, pad_y = w * pad, h * pad
     left = max(0, x - pad_x)
     top = max(0, y - pad_y)
     right = min(image.width, x + w + pad_x)

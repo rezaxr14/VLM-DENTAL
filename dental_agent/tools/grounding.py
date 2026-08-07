@@ -39,15 +39,15 @@ class OracleGroundingTool:
     def __init__(
         self,
         annots_df: pd.DataFrame,
-        categories_df: pd.DataFrame,
+        categories_df: pd.DataFrame | None = None,
         diag_col: str | None = None,
     ) -> None:
-        self.annots_df = annots_df
-        self.categories_df = categories_df
+        self.annots_df = pd.DataFrame(annots_df) if isinstance(annots_df, list) else annots_df
+        self.categories_df = pd.DataFrame(categories_df) if isinstance(categories_df, list) else (categories_df if categories_df is not None else pd.DataFrame())
         self.diag_col = diag_col or self._detect_diag_col()
         self.diag_lookup = (
-            dict(zip(categories_df["id"], categories_df["name"]))
-            if len(categories_df) else {}
+            dict(zip(self.categories_df["id"], self.categories_df["name"]))
+            if len(self.categories_df) and "id" in self.categories_df and "name" in self.categories_df else {}
         )
 
     def _detect_diag_col(self) -> str | None:

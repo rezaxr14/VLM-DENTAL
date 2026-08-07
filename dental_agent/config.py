@@ -129,10 +129,10 @@ def load_env(env_path: str | Path | None = None) -> bool:
     try:
         import dotenv
         if env_path is not None:
-            return dotenv.load_dotenv(dotenv_path=str(env_path), override=False)
+            return dotenv.load_dotenv(dotenv_path=str(env_path), override=True)
         found = dotenv.find_dotenv(usecwd=True)
         if found:
-            return dotenv.load_dotenv(found, override=False)
+            return dotenv.load_dotenv(found, override=True)
         return False
     except ImportError:
         return False

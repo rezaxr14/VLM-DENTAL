@@ -1,7 +1,10 @@
 """
-Multi-provider LLM/VLM API client pool with retry logic and multimodal support.
-Supports Gemini (Google GenAI), Anthropic Claude, and OpenAI (GPT-4o).
-Includes GeminiKeyPool for multi-key rotation with RPM/RPD rate-limit tracking.
+API Key Pool and Rate Limiting for Multi-Provider Vision-Language Model Inference.
+
+Manages round-robin rotation, requests-per-minute (RPM), and requests-per-day (RPD)
+quotas across Google Gemini keys, with automatic multi-model fallback (e.g., primary
+gemini-2.5-flash -> fallback gemini-1.5-flash for 40 RPD/key), and cached clients
+for Anthropic and OpenAI.
 """
 
 from __future__ import annotations
@@ -13,41 +16,54 @@ import json
 import os
 import time
 from typing import Any, Optional
-
 import pandas as pd
 from PIL import Image
 
+from dental_agent.config import load_env
+
+# Automatically load .env if not already in environment
+load_env()
+
 
 # ---------------------------------------------------------------------------
-# GeminiKeyPool: multi-key rotation with per-key RPM/RPD tracking
+# Exceptions
 # ---------------------------------------------------------------------------
 
 class AllKeysExhaustedToday(Exception):
-    """Raised by GeminiKeyPool when every configured key has hit today's request cap.
-    run_aim1_batch catches this specifically and stops cleanly rather than
-    retrying with backoff — a daily quota won't reset in seconds, only overnight."""
+    """Raised when every key in the pool has reached its daily request cap across all models."""
     pass
 
 
+# ---------------------------------------------------------------------------
+# Gemini Key Pool with Multi-Model Fallback (e.g. 20 + 20 = 40 RPD per key)
+# ---------------------------------------------------------------------------
+
 class GeminiKeyPool:
     """Round-robins calls across GEMINI_API_KEYS, respecting each key's own RPM and RPD
-    limits, persisting daily-usage state to disk so it survives a session restart —
-    including into a new calendar day, at which point each key's counter resets
-    automatically (detected by comparing today's date to the saved state).
-
-    Keys are identified by their POSITION in the list, never by their value,
-    so this state file is safe to sync without leaking anything.
+    limits with automatic multi-model fallback.
+    
+    When the primary model (e.g. gemini-2.5-flash) reaches its 20 RPD cap on all keys,
+    it automatically falls back to the secondary model (e.g. gemini-1.5-flash) for
+    another 20 RPD, providing 40 total daily requests per key.
+    
+    Daily-usage state persists to disk so it survives session restarts and resets
+    automatically on new calendar days.
     """
 
     def __init__(
         self,
         keys: list[str],
+        models: list[str] | None = None,
         rpm: int = 5,
         rpd: int = 20,
-        safety_margin: float = 0.95,
+        safety_margin: float = 1.0,
         state_path: str | None = None,
     ) -> None:
         self.keys = keys
+        self.models = models or [
+            os.environ.get("GEMINI_PRIMARY_MODEL", "gemini-3.6-flash"),
+            os.environ.get("GEMINI_FALLBACK_MODEL", "gemini-3.5-flash"),
+        ]
         self.rpm_limit = max(1, int(rpm * safety_margin))
         self.rpd_limit = max(1, int(rpd * safety_margin))
         self.state_path = state_path or os.path.join(
@@ -59,8 +75,11 @@ class GeminiKeyPool:
 
     def _load(self) -> dict[str, Any]:
         if os.path.exists(self.state_path):
-            with open(self.state_path) as f:
-                return json.load(f)
+            try:
+                with open(self.state_path) as f:
+                    return json.load(f)
+            except Exception:
+                return {}
         return {}
 
     def _save(self) -> None:
@@ -75,50 +94,88 @@ class GeminiKeyPool:
             kid = str(i)
             entry = self.state.get(kid)
             if entry is None or entry.get("date") != today:
-                self.state[kid] = {"date": today, "calls_today": 0, "last_call_ts": 0.0}
+                self.state[kid] = {
+                    "date": today,
+                    "last_call_ts": 0.0,
+                    "models": {m: 0 for m in self.models},
+                    "calls_today": 0,
+                }
                 changed = True
+            else:
+                # Ensure all models are present in subdict
+                if "models" not in entry:
+                    entry["models"] = {m: entry.get("calls_today", 0) for m in self.models}
+                    changed = True
+                for m in self.models:
+                    if m not in entry["models"]:
+                        entry["models"][m] = 0
+                        changed = True
         if changed:
             self._save()
 
-    def acquire(self) -> tuple[int, str]:
-        """Blocks only as long as needed for the chosen key's own RPM spacing, then
-        returns (index, key). Raises AllKeysExhaustedToday if every key has hit its
-        daily cap."""
+    def acquire(self, model: str | None = None) -> tuple[int, str, str]:
+        """Blocks for RPM spacing, returns (key_index, key_str, effective_model).
+        
+        If `model` is provided, tries that model first; if exhausted across all keys,
+        falls back to remaining models in self.models.
+        """
         if not self.keys:
-            raise ValueError("GEMINI_API_KEYS is empty — set it before calling provider='gemini'.")
+            raise ValueError("GEMINI_API_KEYS is empty — set GEMINI_API_KEY in .env before calling.")
         self._reset_if_new_day()
 
-        for _ in range(len(self.keys)):
-            idx = self._next_idx % len(self.keys)
-            self._next_idx += 1
-            entry = self.state[str(idx)]
-            if entry["calls_today"] >= self.rpd_limit:
-                continue  # this key is done for today
-            elapsed = time.time() - entry["last_call_ts"]
-            min_interval = 60.0 / self.rpm_limit
-            if elapsed < min_interval:
-                time.sleep(min_interval - elapsed)
-            entry["last_call_ts"] = time.time()
-            entry["calls_today"] += 1
-            self._save()
-            return idx, self.keys[idx]
+        # Build candidate model list with requested model first
+        candidate_models = list(self.models)
+        if model and model in candidate_models:
+            candidate_models.remove(model)
+            candidate_models.insert(0, model)
+        elif model:
+            candidate_models.insert(0, model)
 
+        for target_model in candidate_models:
+            for _ in range(len(self.keys)):
+                idx = self._next_idx % len(self.keys)
+                self._next_idx += 1
+                entry = self.state[str(idx)]
+                model_calls = entry.get("models", {}).get(target_model, 0)
+                if model_calls >= self.rpd_limit:
+                    continue  # key reached daily limit for this model
+
+                elapsed = time.time() - entry.get("last_call_ts", 0.0)
+                min_interval = 60.0 / self.rpm_limit
+                if elapsed < min_interval:
+                    time.sleep(min_interval - elapsed)
+
+                entry["last_call_ts"] = time.time()
+                entry["models"][target_model] = model_calls + 1
+                entry["calls_today"] = sum(entry["models"].values())
+                self._save()
+                return idx, self.keys[idx], target_model
+
+        total_cap = len(self.keys) * self.rpd_limit * len(self.models)
         raise AllKeysExhaustedToday(
-            f"All {len(self.keys)} Gemini key(s) have hit today's cap "
-            f"({self.rpd_limit} calls/key after the safety margin). Gemini's free tier "
-            f"resets around midnight Pacific time — re-run tomorrow; "
-            f"resume=True in run_aim1_batch will pick up exactly where this left off."
+            f"All {len(self.keys)} Gemini key(s) have reached today's total quota "
+            f"({total_cap} total requests across models {self.models} at {self.rpd_limit} RPD/model/key). "
+            f"Gemini free tier resets around midnight Pacific time — resume=True in run_aim1_batch "
+            f"will pick up exactly where this left off."
         )
 
     def status(self) -> pd.DataFrame:
-        """How much of today's budget is left per key."""
+        """Return budget and calls used per key and per model."""
         self._reset_if_new_day()
-        return pd.DataFrame([{
-            "key_index": i,
-            "calls_today": self.state[str(i)]["calls_today"],
-            "rpd_limit": self.rpd_limit,
-            "remaining_today": max(0, self.rpd_limit - self.state[str(i)]["calls_today"]),
-        } for i in range(len(self.keys))])
+        rows = []
+        for i in range(len(self.keys)):
+            entry = self.state.get(str(i), {})
+            models_dict = entry.get("models", {})
+            for m in self.models:
+                used = models_dict.get(m, 0)
+                rows.append({
+                    "key_index": i,
+                    "model": m,
+                    "calls_today": used,
+                    "rpd_limit": self.rpd_limit,
+                    "remaining_today": max(0, self.rpd_limit - used),
+                })
+        return pd.DataFrame(rows)
 
 
 # ---------------------------------------------------------------------------
@@ -134,9 +191,14 @@ def get_gemini_pool() -> GeminiKeyPool:
     if _gemini_pool is None:
         keys_raw = os.environ.get("GEMINI_API_KEYS") or os.environ.get("GEMINI_API_KEY", "")
         keys = [k.strip().strip("'\"") for k in keys_raw.split(",") if k.strip().strip("'\"")]
+        models_raw = os.environ.get("GEMINI_MODELS", "")
+        models = [m.strip() for m in models_raw.split(",") if m.strip()] or [
+            os.environ.get("GEMINI_PRIMARY_MODEL", "gemini-2.5-flash"),
+            os.environ.get("GEMINI_FALLBACK_MODEL", "gemini-1.5-flash"),
+        ]
         rpm = int(os.environ.get("GEMINI_RPM_LIMIT", "5"))
         rpd = int(os.environ.get("GEMINI_RPD_LIMIT", "20"))
-        _gemini_pool = GeminiKeyPool(keys, rpm=rpm, rpd=rpd)
+        _gemini_pool = GeminiKeyPool(keys, models=models, rpm=rpm, rpd=rpd)
     return _gemini_pool
 
 
@@ -203,8 +265,7 @@ def call_llm(
     max_retries: int = 3,
     retry_delay: float = 2.0,
 ) -> str:
-    """Universal API caller for proprietary vision-language models with retry logic.
-    Uses GeminiKeyPool for the 'gemini' provider to respect RPM/RPD limits."""
+    """Universal API caller for vision-language models with retry logic and multi-model fallback."""
     last_error: Exception | None = None
 
     for attempt in range(1, max_retries + 1):
@@ -214,7 +275,7 @@ def call_llm(
                 from google.genai import types
 
                 pool = get_gemini_pool()
-                _, api_key = pool.acquire()
+                _, api_key, actual_model = pool.acquire(model=model)
                 client = genai.Client(api_key=api_key)
 
                 parts: list[Any] = [user_content]
@@ -222,7 +283,7 @@ def call_llm(
                     parts.append(image.convert("RGB"))
 
                 resp = client.models.generate_content(
-                    model=model,
+                    model=actual_model,
                     contents=parts,
                     config=types.GenerateContentConfig(
                         system_instruction=system_prompt,
@@ -259,38 +320,36 @@ def call_llm(
 
             elif provider == "openai":
                 client = _POOL.get_openai()
-                user_blocks: list[dict[str, Any]] = []
+                user_msg_content: list[dict[str, Any]] = []
                 if image is not None:
                     b64 = _pil_to_base64_jpeg(image)
-                    user_blocks.append({
+                    user_msg_content.append({
                         "type": "image_url",
                         "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
                     })
-                user_blocks.append({"type": "text", "text": user_content})
+                user_msg_content.append({"type": "text", "text": user_content})
 
                 response = client.chat.completions.create(
                     model=model,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
                     messages=[
                         {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_blocks},
+                        {"role": "user", "content": user_msg_content},
                     ],
+                    max_tokens=max_tokens,
+                    temperature=temperature,
                 )
-                return response.choices[0].message.content.strip()
+                return response.choices[0].message.content or ""
 
             else:
-                raise ValueError(f"Unknown API provider: {provider}")
+                raise ValueError(f"Unknown provider '{provider}'")
 
         except AllKeysExhaustedToday:
-            raise  # bubble straight out — don't retry a daily quota
+            raise
         except Exception as e:
             last_error = e
             if attempt < max_retries:
-                time.sleep(retry_delay * attempt)
-            else:
-                raise RuntimeError(
-                    f"API call to {provider}/{model} failed after {max_retries} attempts: {e}"
-                ) from last_error
+                time.sleep(retry_delay * (2 ** (attempt - 1)))
 
-    return ""
+    raise RuntimeError(
+        f"Failed to call {provider}/{model} after {max_retries} attempts: {last_error}"
+    )
