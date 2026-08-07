@@ -3,7 +3,7 @@ DENTEX dataset loading, annotation parsing, and image-path resolution.
 
 Wraps the DENTEX HuggingFace dataset repo into a clean
 (images_df, annots_df, categories_df) triple with resolved local paths,
-quality checks, and parquet caching for fast reloads.
+quality checks, automatic zip extraction, and parquet caching for fast reloads.
 """
 
 from __future__ import annotations
@@ -12,32 +12,109 @@ import glob
 import json
 import os
 from pathlib import Path
+import time
 from typing import Any
+import zipfile
 
 import pandas as pd
-from huggingface_hub import snapshot_download
+from huggingface_hub import hf_hub_download, snapshot_download
 from PIL import Image
 from tqdm import tqdm
 
 
 # ---------------------------------------------------------------------------
-# Download
+# Resilient Download Helpers
 # ---------------------------------------------------------------------------
+
+def download_dentex_file(
+    filename: str,
+    repo_id: str = "ibrahimhamamci/DENTEX",
+    cache_dir: str | None = None,
+    max_retries: int = 5,
+    retry_delay: float = 3.0,
+) -> Path:
+    """Download a specific file from the DENTEX dataset repository with retry logic."""
+    # 1. Try local cache first for instant reloads without network roundtrips
+    try:
+        local_path = hf_hub_download(
+            repo_id=repo_id,
+            filename=filename,
+            repo_type="dataset",
+            cache_dir=cache_dir,
+            local_files_only=True,
+        )
+        return Path(local_path)
+    except Exception:
+        pass
+
+    # 2. Download with retry if not already present in local cache
+    for attempt in range(1, max_retries + 1):
+        try:
+            local_path = hf_hub_download(
+                repo_id=repo_id,
+                filename=filename,
+                repo_type="dataset",
+                cache_dir=cache_dir,
+            )
+            return Path(local_path)
+        except Exception as e:
+            if attempt == max_retries:
+                raise RuntimeError(
+                    f"Failed to download {filename} from {repo_id} after {max_retries} attempts: {e}"
+                )
+            print(f"Download attempt {attempt}/{max_retries} failed for {filename} ({e}). Retrying in {retry_delay}s...")
+            time.sleep(retry_delay * attempt)
+    raise RuntimeError(f"Unexpected error downloading {filename}")
+
 
 def download_dentex(
     repo_id: str = "ibrahimhamamci/DENTEX",
     cache_dir: str | None = None,
+    split_name: str = "validation",
 ) -> Path:
     """Download (or reuse cached) DENTEX dataset files.
-
-    Returns the local path where files are available.
+    
+    If split_name is 'validation' or 'val', downloads validation files directly
+    without waiting for the full 10GB training dataset.
     """
-    dentex_path = snapshot_download(
-        repo_id=repo_id,
-        repo_type="dataset",
-        cache_dir=cache_dir,
-    )
-    return Path(dentex_path)
+    if split_name in ("val", "validation"):
+        # Download validation assets directly
+        val_zip = download_dentex_file("DENTEX/validation_data.zip", repo_id=repo_id, cache_dir=cache_dir)
+        val_json = download_dentex_file("DENTEX/validation_triple.json", repo_id=repo_id, cache_dir=cache_dir)
+        return val_zip.parent.parent
+
+    try:
+        dentex_path = snapshot_download(
+            repo_id=repo_id,
+            repo_type="dataset",
+            cache_dir=cache_dir,
+            max_workers=2,
+        )
+        return Path(dentex_path)
+    except Exception as e:
+        print(f"snapshot_download failed ({e}); falling back to file-by-file download...")
+        if split_name == "train":
+            download_dentex_file("DENTEX/training_data.zip", repo_id=repo_id, cache_dir=cache_dir)
+        download_dentex_file("DENTEX/validation_data.zip", repo_id=repo_id, cache_dir=cache_dir)
+        val_json = download_dentex_file("DENTEX/validation_triple.json", repo_id=repo_id, cache_dir=cache_dir)
+        return val_json.parent.parent
+
+
+def extract_dentex_zips(root_dir: str | Path) -> None:
+    """Extract any downloaded .zip archives (validation_data.zip, training_data.zip, etc.) in place."""
+    zip_files = glob.glob(os.path.join(str(root_dir), "**", "*.zip"), recursive=True)
+    for zf in zip_files:
+        extract_target = os.path.splitext(zf)[0]
+        # Check if already extracted
+        if os.path.exists(extract_target) and os.path.isdir(extract_target) and len(os.listdir(extract_target)) > 0:
+            continue
+        try:
+            print(f"Extracting {os.path.basename(zf)}...")
+            with zipfile.ZipFile(zf, "r") as z:
+                z.extractall(Path(zf).parent)
+            print(f"Extracted {os.path.basename(zf)} successfully.")
+        except Exception as e:
+            print(f"Warning: Failed to extract {zf}: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -45,7 +122,7 @@ def download_dentex(
 # ---------------------------------------------------------------------------
 
 def load_coco_json(path: str | Path) -> dict:
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -90,13 +167,13 @@ def score_candidate(jf: str, d: dict, split_name: str = "train") -> int:
     """Heuristic score: higher = more likely to be the fully-annotated file."""
     score = 0
     name = jf.lower()
-    if split_name in name:
-        score += 1
+    if split_name in name or (split_name in ("val", "validation") and "val" in name):
+        score += 2
     ann0 = d["annotations"][0] if d.get("annotations") else {}
     for key in ("category_id_1", "category_id_2", "category_id_3", "extra"):
         if key in ann0:
             score += 1
-    if "diagnosis" in name or "disease" in name:
+    if "diagnosis" in name or "disease" in name or "triple" in name:
         score += 2
     return score
 
@@ -149,19 +226,22 @@ def build_dataframes(
                 pd.read_parquet(paths["categories"]),
             )
 
-    images_df = pd.DataFrame(coco["images"])
-    annots_df = pd.DataFrame(coco["annotations"])
+    images_df = pd.DataFrame(coco.get("images", []))
+    annots_df = pd.DataFrame(coco.get("annotations", []))
     categories_df = pd.DataFrame(coco.get("categories", []))
 
     # Ensure bbox is a plain list (for parquet serialization)
     if "bbox" in annots_df.columns:
         annots_df["bbox"] = annots_df["bbox"].apply(list)
 
-    if data_dir and use_cache:
+    if data_dir and use_cache and len(images_df):
         os.makedirs(data_dir, exist_ok=True)
-        images_df.to_parquet(paths["images"])
-        annots_df.to_parquet(paths["annots"])
-        categories_df.to_parquet(paths["categories"])
+        try:
+            images_df.to_parquet(paths["images"])
+            annots_df.to_parquet(paths["annots"])
+            categories_df.to_parquet(paths["categories"])
+        except Exception:
+            pass
 
     return images_df, annots_df, categories_df
 
@@ -177,12 +257,14 @@ def resolve_image_paths(
     image_files = (
         glob.glob(os.path.join(str(dentex_path), "**", "*.png"), recursive=True)
         + glob.glob(os.path.join(str(dentex_path), "**", "*.jpg"), recursive=True)
+        + glob.glob(os.path.join("data", "**", "*.png"), recursive=True)
     )
     by_basename = {os.path.basename(p): p for p in image_files}
     images_df = images_df.copy()
-    images_df["local_path"] = images_df["file_name"].apply(
-        lambda fn: by_basename.get(os.path.basename(fn))
-    )
+    if "file_name" in images_df.columns:
+        images_df["local_path"] = images_df["file_name"].apply(
+            lambda fn: by_basename.get(os.path.basename(fn))
+        )
     return images_df
 
 
@@ -195,7 +277,7 @@ def validate_images(
     """
     bad_files: list[tuple[str, str]] = []
     modes: list[str] = []
-    paths = images_df["local_path"].dropna()
+    paths = images_df["local_path"].dropna() if "local_path" in images_df.columns else []
     iterator = tqdm(paths, desc="Validating images") if verbose else paths
 
     for p in iterator:
@@ -247,15 +329,20 @@ def list_files(root: str | Path, max_depth: int = 3, max_per_dir: int = 15) -> N
 
 def load_dentex_dataset(
     data_dir: str | Path | None = None,
-    split_name: str = "train",
+    split_name: str = "validation",
     use_cache: bool = True,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Top-level convenience loader for DENTEX dataset.
 
-    Downloads or discovers files, parses the best annotation file, resolves
-    local image paths, and returns (images_df, annots_df, categories_df).
+    Downloads or discovers files, auto-extracts zip archives, parses the
+    best annotation file, resolves local image paths, and returns
+    (images_df, annots_df, categories_df).
     """
-    dentex_path = download_dentex(cache_dir=str(data_dir) if data_dir else None)
+    dentex_path = download_dentex(
+        cache_dir=str(data_dir) if data_dir else None,
+        split_name=split_name,
+    )
+    extract_dentex_zips(dentex_path)
     all_coco = discover_annotation_files(dentex_path)
     _, best_coco = pick_best_annotation_file(all_coco, split_name=split_name)
     images_df, annots_df, categories_df = build_dataframes(
@@ -263,4 +350,3 @@ def load_dentex_dataset(
     )
     images_df = resolve_image_paths(images_df, dentex_path)
     return images_df, annots_df, categories_df
-

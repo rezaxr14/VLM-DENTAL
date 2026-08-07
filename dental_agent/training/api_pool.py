@@ -347,8 +347,11 @@ def call_llm(
             raise
         except Exception as e:
             last_error = e
+            err_str = str(e).lower()
             if attempt < max_retries:
-                time.sleep(retry_delay * (2 ** (attempt - 1)))
+                # If 503 (high demand) or 429 (rate limit), increase backoff and allow rotating keys
+                backoff = (retry_delay * 2 ** (attempt - 1)) if "503" not in err_str else (retry_delay + attempt * 2)
+                time.sleep(backoff)
 
     raise RuntimeError(
         f"Failed to call {provider}/{model} after {max_retries} attempts: {last_error}"

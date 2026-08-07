@@ -29,10 +29,25 @@ from dental_agent.training.api_pool import (
 )
 from dental_agent.utils.serialization import to_jsonable
 
-GENERATOR_PROVIDER = "gemini"
-VERIFIER_PROVIDER = "anthropic"
-GENERATOR_MODEL = "gemini-2.5-flash"
-VERIFIER_MODEL = "claude-3-5-sonnet-20241022"
+def _is_valid_key(val: str | None) -> bool:
+    if not val:
+        return False
+    v = val.strip().lower()
+    return bool(v and not v.startswith("your_") and not v.startswith("placeholder") and v != "none")
+
+
+_has_anthropic = _is_valid_key(os.environ.get("ANTHROPIC_API_KEY"))
+
+GENERATOR_PROVIDER = os.environ.get("GENERATOR_PROVIDER", "gemini")
+VERIFIER_PROVIDER = os.environ.get(
+    "VERIFIER_PROVIDER",
+    "anthropic" if _has_anthropic else "gemini",
+)
+GENERATOR_MODEL = os.environ.get("GEMINI_PRIMARY_MODEL", "gemini-3.6-flash")
+VERIFIER_MODEL = os.environ.get(
+    "VERIFIER_MODEL",
+    "claude-3-5-sonnet-20241022" if _has_anthropic else os.environ.get("GEMINI_FALLBACK_MODEL", "gemini-3.5-flash"),
+)
 
 GENERATOR_SYSTEM_PROMPT = (
     "You are generating TRAINING DATA for a dental radiograph analysis agent. Given an "
