@@ -100,21 +100,33 @@ def download_dentex(
         return val_json.parent.parent
 
 
-def extract_dentex_zips(root_dir: str | Path) -> None:
-    """Extract any downloaded .zip archives (validation_data.zip, training_data.zip, etc.) in place."""
+def extract_dentex_zips(root_dir: str | Path, remove_zips: bool = True) -> None:
+    """Extract any downloaded .zip archives (validation_data.zip, training_data.zip, etc.) in place
+    and remove the .zip files after successful extraction to save disk space."""
     zip_files = glob.glob(os.path.join(str(root_dir), "**", "*.zip"), recursive=True)
     for zf in zip_files:
         extract_target = os.path.splitext(zf)[0]
-        # Check if already extracted
-        if os.path.exists(extract_target) and os.path.isdir(extract_target) and len(os.listdir(extract_target)) > 0:
-            continue
-        try:
-            print(f"Extracting {os.path.basename(zf)}...")
-            with zipfile.ZipFile(zf, "r") as z:
-                z.extractall(Path(zf).parent)
-            print(f"Extracted {os.path.basename(zf)} successfully.")
-        except Exception as e:
-            print(f"Warning: Failed to extract {zf}: {e}")
+        already_extracted = (
+            os.path.exists(extract_target)
+            and os.path.isdir(extract_target)
+            and len(os.listdir(extract_target)) > 0
+        )
+        if not already_extracted:
+            try:
+                print(f"Extracting {os.path.basename(zf)}...")
+                with zipfile.ZipFile(zf, "r") as z:
+                    z.extractall(Path(zf).parent)
+                print(f"Extracted {os.path.basename(zf)} successfully.")
+            except Exception as e:
+                print(f"Warning: Failed to extract {zf}: {e}")
+                continue
+
+        if remove_zips and os.path.exists(zf):
+            try:
+                os.remove(zf)
+                print(f"Cleaned up {os.path.basename(zf)} to save disk space.")
+            except Exception as e:
+                print(f"Warning: Could not remove {zf}: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -327,24 +339,29 @@ def list_files(root: str | Path, max_depth: int = 3, max_per_dir: int = 15) -> N
             print(f"{indent}  ... ({len(filenames) - max_per_dir} more files)")
 
 
-def find_local_dentex_dir(data_dir: str | Path | None = None) -> Path | None:
-    """Find a local directory containing DENTEX dataset files."""
+def find_local_dentex_dir(data_dir: str | Path | None = None, split_name: str = "validation") -> Path | None:
+    """Find a local directory containing DENTEX dataset files for the requested split."""
     candidates: list[Path] = []
     if data_dir:
         p = Path(data_dir)
         candidates.extend([p, p / "dentex", p / "DENTEX"])
     candidates.extend([
-        Path("data/dentex"),
         Path("data/dentex/DENTEX"),
+        Path("data/dentex"),
         Path("data"),
     ])
     for c in candidates:
         if c.exists() and c.is_dir():
-            jsons = list(c.glob("**/*.json"))
-            zips = list(c.glob("**/*.zip"))
-            imgs = list(c.glob("**/*.png"))
-            if jsons or zips or imgs:
-                return c
+            # Check for split-specific files
+            is_train = split_name in ("train", "training")
+            if is_train:
+                has_train_data = any(c.rglob("training_data*")) or any(c.rglob("train*")) or any(c.rglob("disease*"))
+                if has_train_data:
+                    return c
+            else:
+                has_val_data = any(c.rglob("validation_data*")) or any(c.rglob("val*"))
+                if has_val_data:
+                    return c
     return None
 
 
@@ -360,10 +377,11 @@ def load_dentex_dataset(
     best annotation file, resolves local image paths, and returns
     (images_df, annots_df, categories_df).
     """
-    local_dir = find_local_dentex_dir(data_dir)
+    local_dir = find_local_dentex_dir(data_dir, split_name)
     if local_dir is not None:
         dentex_path = local_dir
     else:
+        print(f"Dataset for split '{split_name}' not found locally. Triggering download...")
         dentex_path = download_dentex(
             cache_dir=str(data_dir) if data_dir else None,
             split_name=split_name,
