@@ -258,7 +258,7 @@ def call_llm(
     provider: str,
     model: str,
     system_prompt: str,
-    user_content: str,
+    user_content: str | list[dict[str, Any]],
     image: Optional[Image.Image] = None,
     max_tokens: int = 1024,
     temperature: float = 0.0,
@@ -278,16 +278,50 @@ def call_llm(
                 _, api_key, actual_model = pool.acquire(model=model)
                 client = genai.Client(api_key=api_key)
 
-                parts: list[Any] = [user_content]
-                if image is not None:
-                    parts.append(image.convert("RGB"))
+                if isinstance(user_content, list):
+                    # Multi-turn history provided directly in standard format (role, content)
+                    contents = []
+                    extracted_system = []
+                    for msg in user_content:
+                        if msg["role"] == "system":
+                            extracted_system.append(msg["content"])
+                            continue
+                            
+                        role = "user" if msg["role"] == "user" else "model"
+                        parts = []
+                        content_payload = msg["content"]
+                        if isinstance(content_payload, str):
+                            parts.append(types.Part.from_text(text=content_payload))
+                        elif isinstance(content_payload, list):
+                            for item in content_payload:
+                                if item["type"] == "text":
+                                    parts.append(types.Part.from_text(text=item["text"]))
+                                elif item["type"] == "image":
+                                    b64 = _pil_to_base64_jpeg(item["image"].convert("RGB"))
+                                    import base64
+                                    raw_bytes = base64.b64decode(b64)
+                                    parts.append(types.Part.from_bytes(data=raw_bytes, mime_type="image/jpeg"))
+                        contents.append(types.Content(role=role, parts=parts))
+                        
+                    if not system_prompt and extracted_system:
+                        system_prompt = "\n".join(extracted_system)
+                else:
+                    # Single-turn mode
+                    parts: list[Any] = [types.Part.from_text(text=user_content)]
+                    if image is not None:
+                        b64 = _pil_to_base64_jpeg(image.convert("RGB"))
+                        import base64
+                        raw_bytes = base64.b64decode(b64)
+                        parts.append(types.Part.from_bytes(data=raw_bytes, mime_type="image/jpeg"))
+                    contents = parts
 
                 resp = client.models.generate_content(
                     model=actual_model,
-                    contents=parts,
+                    contents=contents,
                     config=types.GenerateContentConfig(
-                        system_instruction=system_prompt,
+                        system_instruction=system_prompt if system_prompt else None,
                         max_output_tokens=max_tokens,
+                        temperature=temperature,
                     ),
                 )
                 return resp.text.strip() if resp.text else ""

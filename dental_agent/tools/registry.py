@@ -86,6 +86,11 @@ class ToolRegistry:
     ) -> "ToolRegistry":
         """Instantiate a registry populated with default diagnostic tools."""
         registry = cls()
+        
+        # Late imports to avoid circular dependencies
+        from dental_agent.tools.windowing import tool_window_level
+        from dental_agent.tools.denoise import tool_denoise
+        from dental_agent.tools.contralateral import tool_contralateral_compare
 
         # 1. zoom_crop
         registry.register(
@@ -95,15 +100,31 @@ class ToolRegistry:
             schema={"bbox": [0, 0, 100, 100]},
         )
 
-        # 2. enhance_contrast
+        # 2. window_level
         registry.register(
-            name="enhance_contrast",
-            func=tool_enhance_contrast,
-            description="Increases visual contrast (factor default 1.5) for subtle lesion detection.",
-            schema={"factor": 1.5},
+            name="window_level",
+            func=tool_window_level,
+            description="Applies medical intensity windowing to reveal specific density structures (e.g. bone, enamel, soft_tissue, metal_reduction).",
+            schema={"preset": "bone"},
+        )
+        
+        # 3. denoise
+        registry.register(
+            name="denoise",
+            func=tool_denoise,
+            description="Applies edge-preserving noise reduction to distinguish real pathology from sensor grain/noise.",
+            schema={"method": "bilateral"},
+        )
+        
+        # 4. contralateral_compare
+        registry.register(
+            name="contralateral_compare",
+            func=tool_contralateral_compare,
+            description="Crops a region in one quadrant and its anatomical mirror in the opposite quadrant, returning a side-by-side composite for symmetry comparison.",
+            schema={"bbox": [0, 0, 100, 100], "quadrant": 1},
         )
 
-        # 3. fdi_label
+        # 5. fdi_label
         registry.register(
             name="fdi_label",
             func=tool_fdi_label,
@@ -111,7 +132,7 @@ class ToolRegistry:
             schema={"quadrant": 1, "tooth_position": 6},
         )
 
-        # 4. locate_abnormal_teeth (optional grounding backend)
+        # 6. locate_abnormal_teeth (optional grounding backend)
         if grounding_tool is not None:
             registry.register(
                 name="locate_abnormal_teeth",

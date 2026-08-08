@@ -38,13 +38,33 @@ def reward_tool_validity(trajectory: Mapping[str, Any]) -> float:
 def reward_efficiency(trajectory: Mapping[str, Any], max_calls: int = 4) -> float:
     """Tool efficiency reward (R_efficiency in §5.5).
 
-    Rewards succinct, non-redundant tool usage. Starts at 1.0 and decays linearly
-    toward 0.0 as tool calls approach max_calls.
+    Rewards succinct, non-redundant tool usage. Starts at 1.0 and deducts specific
+    calibrated penalties for each tool invoked. Heavy computational tools or 
+    redundant calls are penalized more.
     """
-    n_calls = trajectory.get("tool_calls", 0)
-    if n_calls <= 0:
+    turns = trajectory.get("turns", [])
+    tool_turns = [t for t in turns if isinstance(t, dict) and t.get("parsed", {}).get("tool")]
+    
+    if not tool_turns:
         return 1.0
-    return max(0.0, 1.0 - (n_calls / max_calls))
+        
+    TOOL_PENALTIES = {
+        "zoom_crop": 0.05,
+        "window_level": 0.05,
+        "denoise": 0.05,
+        "contralateral_compare": 0.08,
+        "fdi_label": 0.02,
+        "locate_abnormal_teeth": 0.10,
+    }
+    
+    score = 1.0
+    for t in tool_turns:
+        tool_name = t.get("parsed", {}).get("tool", "")
+        penalty = TOOL_PENALTIES.get(tool_name, 0.05)
+        score -= penalty
+        
+    # Cap between 0.0 and 1.0
+    return max(0.0, min(1.0, score))
 
 
 def reward_accuracy(

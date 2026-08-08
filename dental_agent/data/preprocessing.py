@@ -57,3 +57,31 @@ def remap_bbox(
     x, y, w, h = bbox
     off_x, off_y = offset
     return [x * scale + off_x, y * scale + off_y, w * scale, h * scale]
+
+
+import numpy as np
+
+def check_image_quality(img: Image.Image) -> tuple[bool, str]:
+    """
+    Quality gate for dental X-rays to detect severe corruption before inference/training.
+    Returns (is_valid, reason).
+    """
+    img_array = np.array(img.convert("L"))
+    
+    # 1. Size check
+    if img_array.shape[0] < 100 or img_array.shape[1] < 100:
+        return False, "Image too small or unreadable"
+        
+    # 2. Horizontal banding / scan-line corruption check (like test_5.png)
+    # If there are extreme intensity jumps between adjacent rows across the entire image width,
+    # it strongly indicates digital scan-line failure/corruption rather than anatomical structure.
+    row_means = np.mean(img_array, axis=1)
+    row_diffs = np.abs(np.diff(row_means))
+    if np.max(row_diffs) > 75:  # 75 pixel intensity jump on average across a whole row is huge
+        return False, "Severe horizontal banding / scan failure detected"
+        
+    # 3. Blank/solid image check
+    if np.std(img_array) < 5:
+        return False, "Image is nearly blank or solid color"
+        
+    return True, "OK"

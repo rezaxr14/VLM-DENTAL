@@ -6,7 +6,7 @@ import pytest
 from PIL import Image
 
 from dental_agent.tools.zoom_crop import tool_zoom_crop
-from dental_agent.tools.contrast import tool_enhance_contrast
+from dental_agent.tools.windowing import tool_window_level
 from dental_agent.tools.grounding import compute_iou, OracleGroundingTool
 from dental_agent.tools.registry import ToolRegistry
 
@@ -29,10 +29,10 @@ def test_zoom_crop_clamping(synthetic_image: Image.Image) -> None:
     assert crop.height <= synthetic_image.height
 
 
-def test_contrast_enhancement(synthetic_image: Image.Image) -> None:
-    enhanced = tool_enhance_contrast(synthetic_image, factor=2.0)
-    assert isinstance(enhanced, Image.Image)
-    assert enhanced.size == synthetic_image.size
+def test_window_level(synthetic_image: Image.Image) -> None:
+    windowed = tool_window_level(synthetic_image, preset="enamel")
+    assert isinstance(windowed, Image.Image)
+    assert windowed.size == synthetic_image.size
 
 
 def test_compute_iou() -> None:
@@ -71,9 +71,12 @@ def test_oracle_grounding_tool(sample_annotations_df, sample_categories_df) -> N
 def test_tool_registry() -> None:
     registry = ToolRegistry.create_default()
     assert registry.get("zoom_crop") is not None
-    assert registry.get("enhance_contrast") is not None
+    assert registry.get("window_level") is not None
+    assert registry.get("denoise") is not None
+    assert registry.get("contralateral_compare") is not None
     assert registry.get("fdi_label") is not None
 
     desc = registry.format_tool_descriptions()
     assert "zoom_crop" in desc
-    assert "enhance_contrast" in desc
+    assert "window_level" in desc
+    assert "denoise" in desc

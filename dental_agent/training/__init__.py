@@ -12,13 +12,10 @@ from dental_agent.training.api_pool import (
     image_to_b64,
 )
 from dental_agent.training.trace_generation import (
-    generate_trace,
+    generate_interactive_trajectory,
     verify_trace,
     build_trace_example,
-    estimate_aim1_api_calls,
     run_aim1_batch,
-    generate_expert_trace,
-    generate_trace_dataset,
 )
 from dental_agent.training.sft import (
     build_sft_example,
@@ -58,13 +55,10 @@ __all__ = [
     "AllKeysExhaustedToday",
     "get_gemini_pool",
     "image_to_b64",
-    "generate_trace",
+    "generate_interactive_trajectory",
     "verify_trace",
     "build_trace_example",
-    "estimate_aim1_api_calls",
     "run_aim1_batch",
-    "generate_expert_trace",
-    "generate_trace_dataset",
     "build_sft_example",
     "TraceSFTDataset",
     "DentalSFTDataset",
