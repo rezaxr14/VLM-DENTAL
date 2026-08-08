@@ -27,10 +27,16 @@ ENV/
 # Project-specific caches & large files
 hf_cache/
 checkpoints/
+data/dentex/
+data/sample_images/
+data/tool_verification/
 data/*.parquet
-data/*.json
-data/*.jsonl
-*.jsonl
+data/*.zip
+*.zip
+
+# Allow synthetic traces to be tracked and synchronized via Git
+!data/traces/
+!data/traces/*
 
 # API keys & secrets
 .env

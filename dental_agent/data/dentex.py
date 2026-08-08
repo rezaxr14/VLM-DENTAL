@@ -327,6 +327,27 @@ def list_files(root: str | Path, max_depth: int = 3, max_per_dir: int = 15) -> N
             print(f"{indent}  ... ({len(filenames) - max_per_dir} more files)")
 
 
+def find_local_dentex_dir(data_dir: str | Path | None = None) -> Path | None:
+    """Find a local directory containing DENTEX dataset files."""
+    candidates: list[Path] = []
+    if data_dir:
+        p = Path(data_dir)
+        candidates.extend([p, p / "dentex", p / "DENTEX"])
+    candidates.extend([
+        Path("data/dentex"),
+        Path("data/dentex/DENTEX"),
+        Path("data"),
+    ])
+    for c in candidates:
+        if c.exists() and c.is_dir():
+            jsons = list(c.glob("**/*.json"))
+            zips = list(c.glob("**/*.zip"))
+            imgs = list(c.glob("**/*.png"))
+            if jsons or zips or imgs:
+                return c
+    return None
+
+
 def load_dentex_dataset(
     data_dir: str | Path | None = None,
     split_name: str = "validation",
@@ -334,14 +355,20 @@ def load_dentex_dataset(
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Top-level convenience loader for DENTEX dataset.
 
-    Downloads or discovers files, auto-extracts zip archives, parses the
+    Checks local project data directories first for instant loading. If not found locally,
+    downloads or discovers files, auto-extracts zip archives, parses the
     best annotation file, resolves local image paths, and returns
     (images_df, annots_df, categories_df).
     """
-    dentex_path = download_dentex(
-        cache_dir=str(data_dir) if data_dir else None,
-        split_name=split_name,
-    )
+    local_dir = find_local_dentex_dir(data_dir)
+    if local_dir is not None:
+        dentex_path = local_dir
+    else:
+        dentex_path = download_dentex(
+            cache_dir=str(data_dir) if data_dir else None,
+            split_name=split_name,
+        )
+
     extract_dentex_zips(dentex_path)
     all_coco = discover_annotation_files(dentex_path)
     _, best_coco = pick_best_annotation_file(all_coco, split_name=split_name)
