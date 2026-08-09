@@ -29,4 +29,9 @@ def to_jsonable(obj: Any) -> Any:
     if hasattr(obj, "detach") and hasattr(obj, "cpu") and hasattr(obj, "numpy"):
         return to_jsonable(obj.detach().cpu().numpy())
 
+    # Check for PIL Image
+    from PIL import Image
+    if isinstance(obj, Image.Image):
+        return "<Image>"
+
     return obj

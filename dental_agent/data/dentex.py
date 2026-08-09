@@ -356,11 +356,11 @@ def find_local_dentex_dir(data_dir: str | Path | None = None, split_name: str = 
             # Check for split-specific files
             is_train = split_name in ("train", "training")
             if is_train:
-                has_train_data = any(c.rglob("training_data*")) or any(c.rglob("train*")) or any(c.rglob("disease*"))
+                has_train_data = any(c.rglob("training_data*")) or any(c.rglob("train*.json")) or any(c.rglob("disease*.json"))
                 if has_train_data:
                     return c
             else:
-                has_val_data = any(c.rglob("validation_data*")) or any(c.rglob("val*"))
+                has_val_data = any(c.rglob("validation_data*")) or any(c.rglob("val*.json"))
                 if has_val_data:
                     return c
     return None
