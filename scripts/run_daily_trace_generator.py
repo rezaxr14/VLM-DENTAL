@@ -209,7 +209,7 @@ def main() -> None:
         image_id = int(img_record["id"])
         image_file = os.path.basename(str(img_record.get("local_path", "")))
 
-        print(f"[{idx}/{len(todo_images)}] Processing Image ID {image_id} ({image_file})...", end=" ", flush=True)
+        print(f"[{idx}/{len(todo_images)}] Processing Image ID {image_id} ({image_file})...", flush=True)
 
         try:
             t0 = time.time()

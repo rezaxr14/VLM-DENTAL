@@ -60,8 +60,9 @@ def _format_ground_truth(anns: pd.DataFrame, cat_lookup: dict[int, str], diag_co
     findings = []
     for _, ann in anns.iterrows():
         diag_id = ann.get(diag_col)
-        # Fix: fallback to "unknown" instead of guessing "Caries"
-        diag_name = cat_lookup.get(diag_id, "unknown")
+        # Dentex hardcoded mapping if JSON doesn't provide it
+        fallback_map = {0: "Impacted", 1: "Caries", 2: "Periapical Lesion", 3: "Deep Caries"}
+        diag_name = cat_lookup.get(diag_id) or fallback_map.get(diag_id, "unknown")
         
         findings.append({
             "quadrant": int(ann.get("category_id_1", 1)),
@@ -375,14 +376,27 @@ def verify_trace(
     call_llm_fn: Callable[..., str] = call_llm,
 ) -> dict[str, Any]:
     """Verify trace using the Verifier model."""
-    trace_text = json.dumps(trajectory.get("turns", []), indent=2)
+    
+    # Extract the assistant's reasoning from the SFT messages array
+    messages = trajectory.get("messages", [])
+    assistant_msgs = [m["content"] for m in messages if m["role"] == "assistant"]
+    trace_text = "\n\n".join(assistant_msgs)
+    
     user_content = f"Ground Truth: {json.dumps(ground_truth)}\n\nCandidate Trace:\n{trace_text}"
     
-    raw = call_llm_fn(provider, model, VERIFIER_SYSTEM_PROMPT, user_content, image=image, temperature=0.0)
+    raw = call_llm_fn(provider, model, VERIFIER_SYSTEM_PROMPT, user_content, image=image, temperature=0.0, response_mime_type="application/json")
     parsed = parse_agent_json(raw)
     
     if parsed and "grounded" in parsed:
         return parsed
+        
+    # Fallback for truncated JSON responses
+    if '"grounded": true' in raw.lower() or '"grounded":true' in raw.lower():
+        return {"grounded": True, "reason": "Extracted from truncated JSON"}
+    if '"grounded": false' in raw.lower() or '"grounded":false' in raw.lower():
+        return {"grounded": False, "reason": "Extracted from truncated JSON"}
+        
+    print(f"DEBUG Verifier Raw Output: {raw}")
     return {"grounded": False, "reason": "verifier output unparseable"}
 
 
@@ -425,6 +439,8 @@ def build_trace_example(
         traj = generate_interactive_trajectory(image, ground_truth, registry, call_llm_fn=call_llm_fn)
         if traj:
             candidates.append(traj)
+        else:
+            print("  [Generator Failed] generate_interactive_trajectory returned None")
 
     verified = []
     for t in candidates:
@@ -432,6 +448,13 @@ def build_trace_example(
         if v_result.get("grounded"):
             t["verifier_reason"] = v_result.get("reason")
             verified.append(t)
+        else:
+            print(f"  [Verifier Rejected] Reason: {v_result.get('reason')}")
+            # print trace snippet for debugging
+            msgs = t.get("messages", [])
+            assistant_msgs = [m["content"] for m in msgs if m["role"] == "assistant"]
+            if assistant_msgs:
+                print(f"  [Trace Snippet]: {assistant_msgs[-1][:200]}...")
 
     return {
         "image_id": image_id,

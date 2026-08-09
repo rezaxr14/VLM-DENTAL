@@ -264,6 +264,7 @@ def call_llm(
     temperature: float = 0.0,
     max_retries: int = 3,
     retry_delay: float = 2.0,
+    response_mime_type: Optional[str] = None,
 ) -> str:
     """Universal API caller for vision-language models with retry logic and multi-model fallback."""
     last_error: Exception | None = None
@@ -320,8 +321,9 @@ def call_llm(
                     contents=contents,
                     config=types.GenerateContentConfig(
                         system_instruction=system_prompt if system_prompt else None,
-                        max_output_tokens=max_tokens,
                         temperature=temperature,
+                        max_output_tokens=max_tokens,
+                        response_mime_type=response_mime_type,
                     ),
                 )
                 return resp.text.strip() if resp.text else ""

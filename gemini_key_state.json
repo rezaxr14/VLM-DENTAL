@@ -1,39 +1,39 @@
 {
   "0": {
     "date": "2026-08-09",
-    "last_call_ts": 1786233755.9042962,
+    "last_call_ts": 1786234512.5096998,
     "models": {
-      "gemini-3.6-flash": 8,
+      "gemini-3.6-flash": 12,
       "gemini-3.5-flash": 0
     },
-    "calls_today": 8
+    "calls_today": 12
   },
   "1": {
     "date": "2026-08-09",
-    "last_call_ts": 1786233771.9605675,
+    "last_call_ts": 1786234527.3602858,
     "models": {
-      "gemini-3.6-flash": 6,
+      "gemini-3.6-flash": 10,
       "gemini-3.5-flash": 1
     },
-    "calls_today": 7
+    "calls_today": 11
   },
   "2": {
     "date": "2026-08-09",
-    "last_call_ts": 1786233784.2898998,
+    "last_call_ts": 1786234538.2059333,
     "models": {
-      "gemini-3.6-flash": 5,
-      "gemini-3.5-flash": 1
+      "gemini-3.6-flash": 6,
+      "gemini-3.5-flash": 2
     },
-    "calls_today": 6
+    "calls_today": 8
   },
   "3": {
     "date": "2026-08-09",
-    "last_call_ts": 1786231673.0360615,
+    "last_call_ts": 1786234320.3634698,
     "models": {
       "gemini-3.6-flash": 3,
-      "gemini-3.5-flash": 1
+      "gemini-3.5-flash": 2
     },
-    "calls_today": 4
+    "calls_today": 5
   },
   "4": {
     "date": "2026-08-09",
