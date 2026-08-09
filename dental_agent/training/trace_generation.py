@@ -82,50 +82,100 @@ def generate_interactive_trajectory(
     call_llm_fn: Callable[..., str] = call_llm,
 ) -> dict[str, Any] | None:
     """
-    Interactive Teacher Loop: Generates a realistic multi-turn reasoning trajectory by
-    actually executing tools turn-by-turn.
+    Hybrid Interactive Teacher Loop: 
+    Pre-computes common tools to save API costs, sends them upfront, and allows the LLM 
+    to hallucinate standard tool usage using `<fake_tool_call>`. If the LLM needs a tool 
+    that wasn't pre-computed, it can still request it dynamically.
+    The final trace is stitched back into a perfect multi-turn sequence for SFT.
     """
     system_prompt = build_agent_system_prompt(registry.format_tool_descriptions())
     
-    # We add a hidden instruction to the teacher telling it the ground truth it needs to reach.
-    teacher_directive = (
-        f"TEACHER DIRECTIVE: You are generating an expert demonstration trace for SFT. "
-        f"You MUST eventually reach this exact diagnosis: {json.dumps(ground_truth)}\n"
-        f"Use tools to discover and verify these findings, then output them in your final answer."
+    # 1. Pre-compute all deterministic tool outputs so the AI has the full suite available instantly
+    precomputed = {}
+    
+    # Always try to include zoom_crop and contralateral if we have a GT bbox
+    has_gt = ground_truth and "bbox" in ground_truth[0]
+    
+    try:
+        # Pre-compute all window level presets
+        precomputed["window_level_bone"] = registry.execute("window_level", image=image, preset="bone")
+        precomputed["window_level_enamel"] = registry.execute("window_level", image=image, preset="enamel")
+        precomputed["window_level_soft_tissue"] = registry.execute("window_level", image=image, preset="soft_tissue")
+        
+        # Pre-compute all denoise methods
+        precomputed["denoise_bilateral"] = registry.execute("denoise", image=image, method="bilateral")
+        precomputed["denoise_median"] = registry.execute("denoise", image=image, method="median")
+            
+        if has_gt:
+            quad = ground_truth[0].get("quadrant")
+            bbox = ground_truth[0].get("bbox")
+            if quad and bbox:
+                precomputed["contralateral_compare"] = registry.execute("contralateral_compare", image=image, bbox=bbox, quadrant=quad)
+            precomputed["zoom_crop_gt"] = registry.execute("zoom_crop", image=image, bbox=bbox)
+            
+    except Exception as e:
+        print(f"Pre-computation failed: {e}")
+    
+    # 2. Build the initial prompt with pre-computed images
+    initial_content = [
+        {"type": "image", "image": image},
+        {"type": "text", "text": "Analyze this panoramic X-ray. Identify any abnormal teeth and determine the diagnosis.\n\n"}
+    ]
+    
+    # Hidden teacher directive
+    directive = (
+        f"TEACHER DIRECTIVE: You are generating an expert demonstration trace for SFT.\n"
+        f"You MUST eventually reach this exact diagnosis: {json.dumps(ground_truth)}\n\n"
+        f"To save API calls, I have already pre-computed ALL standard tool outputs for you:\n"
     )
+    
+    for key, img_result in precomputed.items():
+        if key.startswith("window_level_"):
+            preset = key.split("window_level_")[-1]
+            initial_content.extend([{"type": "text", "text": f"Pre-computed: window_level(preset='{preset}'):"}, {"type": "image", "image": img_result}])
+            directive += f"- window_level(preset='{preset}')\n"
+        elif key.startswith("denoise_"):
+            method = key.split("denoise_")[-1]
+            initial_content.extend([{"type": "text", "text": f"Pre-computed: denoise(method='{method}'):"}, {"type": "image", "image": img_result}])
+            directive += f"- denoise(method='{method}')\n"
+        elif key == "contralateral_compare":
+            quad = ground_truth[0].get("quadrant")
+            initial_content.extend([{"type": "text", "text": f"Pre-computed: contralateral_compare(target_quadrant={quad}):"}, {"type": "image", "image": img_result}])
+            directive += f"- contralateral_compare(target_quadrant={quad})\n"
+        elif key == "zoom_crop_gt":
+            initial_content.extend([{"type": "text", "text": f"Pre-computed: zoom_crop around ground truth:"}, {"type": "image", "image": img_result}])
+            directive += f"- zoom_crop (around the finding)\n"
+            
+    directive += (
+        f"\nCRITICAL INSTRUCTIONS:\n"
+        f"1. You MUST NOT provide the final answer immediately!\n"
+        f"2. Review the pre-computed images. You must pick the ones most useful for this diagnosis and write a fake tool call when you use them using this exact XML format:\n"
+        f"<fake_tool_call>{{\"tool\": \"<tool_name>\", \"args\": {{<args>}}}}</fake_tool_call>\n"
+        f"3. You must use several tools in your reasoning chain to arrive at the answer.\n"
+        f"4. If you need a tool that was NOT pre-computed, output a standard JSON tool call (WITHOUT XML tags) and stop. I will provide the result in the next turn.\n"
+        f"5. Once you have used the tools to verify the findings, output your final_answer JSON."
+    )
+    
+    initial_content.append({"type": "text", "text": directive})
     
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system_prompt},
-        {
-            "role": "user",
-            "content": [
-                {"type": "image", "image": image},
-                {"type": "text", "text": "Analyze this panoramic X-ray. Identify any abnormal teeth and determine the diagnosis.\n\n" + teacher_directive},
-            ],
-        },
+        {"role": "user", "content": initial_content},
     ]
 
     current_image = image
     turns: list[dict[str, Any]] = []
     final_answer = None
     
+    # 3. Interactive Loop (Handles real dynamic tool calls if requested)
     for turn_idx in range(max_turns):
         try:
-            # We must pass the conversation history to the LLM. 
-            # `call_llm` currently expects system_prompt + user_content. 
-            # To support multi-turn in the API pool, we pass the raw messages list.
-            raw_output = call_llm_fn(
-                provider, 
-                model, 
-                system_prompt="", 
-                user_content=messages, 
-                image=None, 
-                temperature=0.7 # Add diversity for self-consistency if k>1
-            )
+            raw_output = call_llm_fn(provider, model, system_prompt="", user_content=messages, image=None, temperature=0.7)
         except Exception as e:
             print(f"LLM call failed during interactive loop: {e}")
             return None
 
+        # Check if they output a standard dynamic tool call or final answer
         parsed = parse_agent_json(raw_output)
         
         turn_record = {
@@ -134,73 +184,184 @@ def generate_interactive_trajectory(
             "parsed": parsed,
         }
 
-        if not parsed:
-            turn_record["status"] = "unparseable"
-            turns.append(turn_record)
-            break
-
         messages.append({"role": "assistant", "content": raw_output})
 
-        if "final_answer" in parsed:
+        if parsed and "final_answer" in parsed:
             final_answer = parsed["final_answer"]
             turn_record["status"] = "final_answer"
             turns.append(turn_record)
             break
-
-        tool_name = parsed.get("tool")
-        tool_args = parsed.get("args", {})
-
-        if not tool_name or not registry.get(tool_name):
-            turn_record["status"] = "invalid_tool"
-            turns.append(turn_record)
-            messages.append({"role": "user", "content": f"Error: Tool '{tool_name}' is not recognized."})
-            continue
-
-        turn_record["tool_name"] = tool_name
-        turn_record["tool_args"] = tool_args
-
-        # Execute tool interactively
-        try:
-            if tool_name in ["zoom_crop", "window_level", "denoise", "contralateral_compare"]:
-                tool_out = registry.execute(tool_name, image=current_image, **tool_args)
-                current_image = tool_out
-                obs = [
-                    {"type": "image", "image": tool_out},
-                    {"type": "text", "text": f"Result of {tool_name}:"},
-                ]
-            else:
-                tool_out = registry.execute(tool_name, **tool_args)
-                obs = [{"type": "text", "text": f"Tool output: {json.dumps(tool_out)}"}]
-                
-            turn_record["tool_ok"] = True
-            messages.append({"role": "user", "content": obs})
             
-        except Exception as e:
-            turn_record["tool_ok"] = False
-            turn_record["tool_error"] = str(e)
-            messages.append({"role": "user", "content": f"Tool execution failed: {e}"})
+        if parsed and "tool" in parsed:
+            # Real dynamic tool call
+            tool_name = parsed.get("tool")
+            tool_args = parsed.get("args", {})
 
-        turns.append(turn_record)
+            if not registry.get(tool_name):
+                turn_record["status"] = "invalid_tool"
+                turns.append(turn_record)
+                messages.append({"role": "user", "content": f"Error: Tool '{tool_name}' is not recognized."})
+                continue
+
+            turn_record["tool_name"] = tool_name
+            turn_record["tool_args"] = tool_args
+
+            try:
+                if tool_name in ["zoom_crop", "window_level", "denoise", "contralateral_compare"]:
+                    tool_out = registry.execute(tool_name, image=current_image, **tool_args)
+                    current_image = tool_out
+                    obs = [{"type": "image", "image": tool_out}, {"type": "text", "text": f"Result of {tool_name}:"}]
+                else:
+                    tool_out = registry.execute(tool_name, **tool_args)
+                    obs = [{"type": "text", "text": f"Tool output: {json.dumps(tool_out)}"}]
+                    
+                turn_record["tool_ok"] = True
+                messages.append({"role": "user", "content": obs})
+            except Exception as e:
+                turn_record["tool_ok"] = False
+                turn_record["tool_error"] = str(e)
+                messages.append({"role": "user", "content": f"Tool execution failed: {e}"})
+                
+            turns.append(turn_record)
+        else:
+            # Did not parse standard tool or final answer. Could be full of fake_tool_calls.
+            # But we expected a final answer. Let's see if it's unparseable or just missed the JSON.
+            if "<fake_tool_call>" in raw_output and "final_answer" not in raw_output:
+                # LLM hallucinated a fake tool call but stopped before final answer
+                messages.append({"role": "user", "content": "Please continue and provide the final_answer JSON."})
+                turns.append(turn_record)
+            else:
+                turn_record["status"] = "unparseable"
+                turns.append(turn_record)
+                break
 
     if final_answer is None:
         return None
 
-    # Strip the teacher directive from the final output messages to prevent data leakage in SFT
-    clean_messages = list(messages)
-    first_user_content = clean_messages[1]["content"]
-    clean_messages[1] = {
-        "role": "user",
-        "content": [
-            first_user_content[0], 
+    # 4. Post-Process into standard SFT format
+    # We must strip the pre-computed images and directives from the initial prompt, 
+    # and "stitch" the fake tool calls into real conversational turns.
+    sft_messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": [
+            {"type": "image", "image": image}, 
             {"type": "text", "text": "Analyze this panoramic X-ray. Identify any abnormal teeth and determine the diagnosis."}
-        ]
-    }
+        ]}
+    ]
+    
+    import re
+    fake_tool_regex = re.compile(r"<fake_tool_call>(.*?)</fake_tool_call>", re.DOTALL)
+    
+    # We will reconstruct the trajectory by walking through the raw_outputs
+    reconstructed_turns = []
+    
+    for t in turns:
+        raw_text = t.get("raw_output", "")
+        # Split text by fake tool calls
+        parts = fake_tool_regex.split(raw_text)
+        
+        # parts is [text before, fake_json_1, text between, fake_json_2, text after]
+        for i in range(0, len(parts), 2):
+            text_chunk = parts[i].strip()
+            
+            if i > 0:
+                # This means we just passed a fake tool call JSON
+                fake_json_str = parts[i-1].strip()
+                try:
+                    fake_parsed = json.loads(fake_json_str)
+                    tool_n = fake_parsed.get("tool")
+                    tool_a = fake_parsed.get("args", {})
+                    
+                    # 1. Close the previous assistant message with the tool call
+                    sft_messages.append({"role": "assistant", "content": f"{prev_chunk}\n{fake_json_str}"})
+                    reconstructed_turns.append({"turn": len(reconstructed_turns), "tool_name": tool_n, "tool_args": tool_a, "tool_ok": True})
+                    
+                    # 2. Recreate the observation as a user message
+                    if tool_n in ["zoom_crop", "window_level", "denoise"]:
+                        # Re-execute to get the exact image to place in SFT dataset
+                        try:
+                            # Use original image for deterministic tools
+                            tool_out = registry.execute(tool_n, image=image, **tool_a)
+                            obs = [{"type": "image", "image": tool_out}, {"type": "text", "text": f"Result of {tool_n}:"}]
+                        except Exception as e:
+                            obs = [{"type": "text", "text": f"Tool execution failed: {e}"}]
+                    else:
+                        obs = [{"type": "text", "text": f"Result of {tool_n}:"}]
+                        
+                    sft_messages.append({"role": "user", "content": obs})
+                    
+                except json.JSONDecodeError:
+                    pass # ignore broken fake calls
+            
+            prev_chunk = text_chunk
+            
+        # At the end of the real turn, if it was a real dynamic tool call or final answer:
+        if t.get("status") == "final_answer":
+            sft_messages.append({"role": "assistant", "content": f"{prev_chunk}"})
+            reconstructed_turns.append({"turn": len(reconstructed_turns), "status": "final_answer", "parsed": {"final_answer": final_answer}})
+        elif t.get("status") not in ("invalid_tool", "unparseable"):
+            # Real tool call
+            if t.get("tool_name"):
+                json_append = json.dumps({"tool": t["tool_name"], "args": t.get("tool_args", {})})
+                sft_messages.append({"role": "assistant", "content": f"{prev_chunk}\n{json_append}"})
+                reconstructed_turns.append({"turn": len(reconstructed_turns), "tool_name": t["tool_name"], "tool_args": t.get("tool_args", {}), "tool_ok": t.get("tool_ok", False)})
+                
+                # The next user message (observation) is handled by the main loop and will be processed in the next turn
+                # wait, the main loop appended the observation to `messages`, but we need to fetch it to append to `sft_messages`
+                # We can just fetch the corresponding observation from the original `messages` array!
+                # Wait, it's easier to just re-execute or fetch from `messages`.
+                # Let's just fetch it from `messages`: it is the message immediately following this assistant message.
+                pass 
+                
+    # Now append the dynamic observations to sft_messages correctly
+    # Let's do a clean rebuild of the dynamic observations by matching the indices
+    
+    # Actually, rebuilding `sft_messages` by mixing fake and real turns is perfectly achieved if we 
+    # just rely on the above logic, except for adding the real user observation.
+    # To fix adding the real user observation:
+    clean_sft = [sft_messages[0], sft_messages[1]]
+    for msg in messages[2:]:
+        if msg["role"] == "user":
+            # This is a real observation. Just append it.
+            # (Wait, we need to filter out the "Please continue" messages)
+            if isinstance(msg["content"], str) and "Please continue" in msg["content"]:
+                continue
+            clean_sft.append(msg)
+        elif msg["role"] == "assistant":
+            # Process fake tags
+            raw_text = msg["content"]
+            parts = fake_tool_regex.split(raw_text)
+            for i in range(0, len(parts), 2):
+                text_chunk = parts[i].strip()
+                if i > 0:
+                    fake_json_str = parts[i-1].strip()
+                    try:
+                        fake_parsed = json.loads(fake_json_str)
+                        tool_n = fake_parsed.get("tool")
+                        tool_a = fake_parsed.get("args", {})
+                        
+                        clean_sft.append({"role": "assistant", "content": f"{prev_chunk}\n{json.dumps({'tool': tool_n, 'args': tool_a})}"})
+                        
+                        # Execute fake tool
+                        try:
+                            tool_out = registry.execute(tool_n, image=image, **tool_a)
+                            obs = [{"type": "image", "image": tool_out}, {"type": "text", "text": f"Result of {tool_n}:"}]
+                        except Exception as e:
+                            obs = [{"type": "text", "text": f"Tool execution failed: {e}"}]
+                        clean_sft.append({"role": "user", "content": obs})
+                    except:
+                        pass
+                prev_chunk = text_chunk
+                
+            # Append remaining text (which might include a real tool call or final answer)
+            if prev_chunk:
+                clean_sft.append({"role": "assistant", "content": prev_chunk})
 
     return {
-        "turns": turns,
-        "tool_calls": len([t for t in turns if "tool_name" in t]),
+        "turns": reconstructed_turns,
+        "tool_calls": len([t for t in reconstructed_turns if "tool_name" in t]),
         "final_answer": final_answer,
-        "messages": clean_messages,
+        "messages": clean_sft,
         "format_ok": True,
     }
 
