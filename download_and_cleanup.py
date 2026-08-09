@@ -8,7 +8,7 @@ load_dotenv()  # Load environment variables from .env file
 from dental_agent.data.dentex import download_dentex, extract_dentex_zips
 
 def main():
-    cache_dir = r"C:\Users\rezax\dental_agent_cache"
+    cache_dir = str(Path("hf_cache").absolute())
     target_data_dir = Path("data/dentex")
     
     print(f"Resuming download using cache directory: {cache_dir}")
