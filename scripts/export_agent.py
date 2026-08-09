@@ -46,7 +46,7 @@ if __name__ == "__main__":
 
 def export_standalone_agent_module(
     output_path: str | Path = "standalone_agent.py",
-    model_id: str = "Qwen/Qwen2.5-VL-7B-Instruct",
+    model_id: str = "Qwen/Qwen3-VL-8B-Instruct",
     adapter_path: str | Path | None = "checkpoints/grpo-final",
 ) -> Path:
     """Generate and write a standalone single-file agent runner module."""
@@ -65,7 +65,7 @@ def export_standalone_agent_module(
 @click.command()
 @click.option("--output", "-o", default="standalone_agent.py", help="Output python file path.")
 @click.option("--adapter", "-a", default="checkpoints/grpo-final", help="Path to LoRA adapter weights.")
-@click.option("--model-id", default="Qwen/Qwen2.5-VL-7B-Instruct", help="Base HuggingFace model ID.")
+@click.option("--model-id", default="Qwen/Qwen3-VL-8B-Instruct", help="Base HuggingFace model ID.")
 def main(output: str, adapter: str, model_id: str) -> None:
     export_standalone_agent_module(output_path=output, model_id=model_id, adapter_path=adapter)
 

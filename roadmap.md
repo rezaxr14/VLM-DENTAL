@@ -30,7 +30,7 @@ This document outlines the end-to-end trajectory for building our autonomous den
 ## 📅 Phase 3: Supervised Fine-Tuning (SFT) - Stage 1
 - [ ] Wire the completed tool suite (including the R-CNN/Grounding tool) into the VLM's tool-calling interface.
 - [ ] Set up `unsloth` or `trl` for efficient LoRA/QLoRA parameter-efficient fine-tuning (PEFT).
-- [ ] Load the open-weight VLM backbone (starting with `Qwen2.5-VL-3B-Instruct` on free tiers).
+- [ ] Load the open-weight VLM backbone (starting with `Qwen3-VL-2B-Instruct` on free tiers).
 - [ ] Train the VLM on the generated CoT dataset so it reliably produces well-formed reasoning + tool calls (learning the *shape* of the behavior).
 
 ---
@@ -55,7 +55,7 @@ This document outlines the end-to-end trajectory for building our autonomous den
 ---
 
 ## 📅 Phase 7: Full Evaluation
-- [ ] **Zero-shot baselines**: Evaluate GPT-4o / Qwen2.5-VL without tools.
+- [ ] **Zero-shot baselines**: Evaluate GPT-4o / Qwen3-VL without tools.
 - [ ] **SFT-only baseline**: Evaluate the Stage 1 agent without RL to isolate the contribution of RL (Hypothesis 2).
 - [ ] **No-tools RL agent**: Evaluate the full agent reasoning over the whole image without tool access to isolate the contribution of tools (Hypothesis 1).
 - [ ] **Full agent**: Evaluate the proposed SFT + tools + RL system.

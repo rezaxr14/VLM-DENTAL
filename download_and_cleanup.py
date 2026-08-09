@@ -1,6 +1,10 @@
 import os
 import shutil
 from pathlib import Path
+from dotenv import load_dotenv
+
+load_dotenv()  # Load environment variables from .env file
+
 from dental_agent.data.dentex import download_dentex, extract_dentex_zips
 
 def main():

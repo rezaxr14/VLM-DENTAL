@@ -35,7 +35,7 @@ class ModelConfig:
     """VLM backbone settings."""
 
     # Staged choice from the proposal: 3B for prototyping, 7B for final.
-    name: str = "Qwen/Qwen2.5-VL-3B-Instruct"
+    name: str = "Qwen/Qwen3-VL-2B-Instruct"
     load_in_4bit: bool = True
     bnb_quant_type: str = "nf4"
     bnb_compute_dtype: str = "bfloat16"

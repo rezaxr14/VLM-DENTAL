@@ -91,6 +91,7 @@ class ToolRegistry:
         from dental_agent.tools.windowing import tool_window_level
         from dental_agent.tools.denoise import tool_denoise
         from dental_agent.tools.contralateral import tool_contralateral_compare
+        from dental_agent.tools.grounding import tool_locate_tooth
 
         # 1. zoom_crop
         registry.register(
@@ -140,5 +141,13 @@ class ToolRegistry:
                 description="Specialist detector returning candidate bounding boxes and FDI positions for abnormal teeth.",
                 schema={"image_id": 0},
             )
+
+        # 7. locate_tooth (YOLOv8 grounding)
+        registry.register(
+            name="locate_tooth",
+            func=tool_locate_tooth,
+            description="Locates a specific tooth using a trained object detector and returns its bounding box.",
+            schema={"tooth": 38},
+        )
 
         return registry

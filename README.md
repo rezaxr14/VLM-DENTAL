@@ -1,6 +1,6 @@
 # Dental-Agent: Tool-Augmented Agentic VLM for Panoramic Dental Radiographs
 
-An Agentic, Tool-Augmented Vision-Language Model framework for panoramic dental radiograph diagnosis on the **DENTEX** benchmark. Built on the **Qwen2.5-VL** backbone with multi-turn tool calling and **GRPO** (Group Relative Policy Optimization) reinforcement learning.
+An Agentic, Tool-Augmented Vision-Language Model framework for panoramic dental radiograph diagnosis on the **DENTEX** benchmark. Built on the **Qwen3-VL** backbone with multi-turn tool calling and **GRPO** (Group Relative Policy Optimization) reinforcement learning.
 
 See [dentex-agentic-vlm-proposal.md](dentex-agentic-vlm-proposal.md) for the full research proposal and methodology.
 
@@ -28,7 +28,7 @@ VLM-DENTAL/
 │   ├── agent/                    # Orchestration loop, prompts, parsing, trajectory visualization
 │   ├── data/                     # DENTEX download, COCO parsing, preprocessing, split handling
 │   ├── evaluation/               # Metrics, baselines, ablations, sweeps, failure analysis
-│   ├── model/                    # Qwen2.5-VL loading, QLoRA wrapping, checkpoints, generation
+│   ├── model/                    # Qwen3-VL loading, QLoRA wrapping, checkpoints, generation
 │   ├── rewards/                  # Graded accuracy, format, tool validity, efficiency, LLM judge
 │   ├── tools/                    # Deterministic tools (zoom, contrast, FDI) and detectors
 │   ├── training/                 # Aim 1 trace generation, Stage 1 SFT, Stage 2 GRPO, Stage 0
@@ -97,8 +97,8 @@ dental-agent evaluate --checkpoint checkpoints/grpo-final --output results/
 ## ⚙️ Configuration & Compute Tiers
 
 Configuration is managed via YAML under `configs/`:
-- `configs/default.yaml`: Base configuration for Kaggle / Colab (16GB VRAM, Qwen2.5-VL-3B, 4-bit NF4, GRPO Group Size = 4).
-- `configs/rtx4090.yaml`: High-VRAM workstation configuration (24GB VRAM, Qwen2.5-VL-7B, GRPO Group Size = 8).
+- `configs/default.yaml`: Base configuration for Kaggle / Colab (16GB VRAM, Qwen3-VL-2B, 4-bit NF4, GRPO Group Size = 4).
+- `configs/rtx4090.yaml`: High-VRAM workstation configuration (24GB VRAM, Qwen3-VL-8B, GRPO Group Size = 8).
 
 Override settings via CLI or by passing a custom config file:
 ```bash

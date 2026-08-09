@@ -14,12 +14,7 @@ from dental_agent.tools.fdi import (
     QUADRANT_NAMES,
     TOOTH_NAMES,
 )
-from dental_agent.tools.grounding import (
-    compute_iou,
-    tool_locate_abnormal_teeth,
-    OracleGroundingTool,
-    LearnedGroundingTool,
-)
+from dental_agent.tools.grounding import tool_locate_tooth
 from dental_agent.tools.synthetic import make_synthetic_dental_image
 from dental_agent.tools.registry import ToolRegistry, ToolDefinition, register_tool
 
@@ -34,10 +29,7 @@ __all__ = [
     "flip_quadrant",
     "QUADRANT_NAMES",
     "TOOTH_NAMES",
-    "compute_iou",
-    "tool_locate_abnormal_teeth",
-    "OracleGroundingTool",
-    "LearnedGroundingTool",
+    "tool_locate_tooth",
     "make_synthetic_dental_image",
     "ToolRegistry",
     "ToolDefinition",

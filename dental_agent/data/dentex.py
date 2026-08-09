@@ -220,6 +220,7 @@ def build_dataframes(
     coco: dict[str, Any],
     data_dir: str | None = None,
     use_cache: bool = True,
+    split_name: str = "default",
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Parse COCO JSON into (images_df, annots_df, categories_df).
 
@@ -227,9 +228,9 @@ def build_dataframes(
     """
     if data_dir and use_cache:
         paths = {
-            "images": os.path.join(data_dir, "images_df.parquet"),
-            "annots": os.path.join(data_dir, "annots_df.parquet"),
-            "categories": os.path.join(data_dir, "categories_df.parquet"),
+            "images": os.path.join(data_dir, f"{split_name}_images_df.parquet"),
+            "annots": os.path.join(data_dir, f"{split_name}_annots_df.parquet"),
+            "categories": os.path.join(data_dir, f"{split_name}_categories_df.parquet"),
         }
         if all(os.path.exists(p) for p in paths.values()):
             return (
@@ -391,7 +392,7 @@ def load_dentex_dataset(
     all_coco = discover_annotation_files(dentex_path)
     _, best_coco = pick_best_annotation_file(all_coco, split_name=split_name)
     images_df, annots_df, categories_df = build_dataframes(
-        best_coco, data_dir=str(data_dir) if data_dir else None, use_cache=use_cache
+        best_coco, data_dir=str(data_dir) if data_dir else None, use_cache=use_cache, split_name=split_name
     )
     images_df = resolve_image_paths(images_df, dentex_path)
     return images_df, annots_df, categories_df

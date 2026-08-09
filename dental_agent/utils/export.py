@@ -45,7 +45,7 @@ if __name__ == "__main__":
 
 def export_standalone_agent_module(
     output_path: str | Path = "standalone_agent.py",
-    model_id: str = "Qwen/Qwen2.5-VL-7B-Instruct",
+    model_id: str = "Qwen/Qwen3-VL-8B-Instruct",
     adapter_path: str | Path | None = "checkpoints/grpo-final",
 ) -> Path:
     """Generate and write a standalone single-file agent runner module."""

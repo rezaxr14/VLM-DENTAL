@@ -28,6 +28,7 @@ ENV/
 hf_cache/
 checkpoints/
 data/dentex/
+data/yolo_dentex/
 data/sample_images/
 data/tool_verification/
 data/*.parquet
@@ -58,3 +59,4 @@ Thumbs.db
 # Logs
 *.log
 run_log.jsonl
+runs/

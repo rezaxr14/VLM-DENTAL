@@ -1,7 +1,7 @@
 """
 Model backbone initialization and LoRA wrapping.
 
-Loads Qwen2.5-VL with 4-bit NF4 quantization and QLoRA adapters.
+Loads Qwen3-VL with 4-bit NF4 quantization and QLoRA adapters.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ from dental_agent.config import ProjectConfig, ModelConfig
 
 
 def get_model_classes():
-    """Dynamically import Qwen2.5-VL classes with graceful fallback."""
+    """Dynamically import Qwen3-VL classes with graceful fallback."""
     try:
         from transformers import Qwen2_5_VLForConditionalGeneration as ModelClass
     except ImportError:
@@ -26,7 +26,7 @@ def load_model(
     config: ProjectConfig | ModelConfig | None = None,
     device_map: str = "auto",
 ) -> Tuple[Any, Any]:
-    """Load Qwen2.5-VL backbone and processor with 4-bit NF4 quantization.
+    """Load Qwen3-VL backbone and processor with 4-bit NF4 quantization.
 
     Returns (model, processor).
     """

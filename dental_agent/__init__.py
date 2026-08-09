@@ -2,7 +2,7 @@
 dental_agent — An Agentic, Tool-Augmented Vision-Language Model
 for Panoramic Dental Radiograph Diagnosis.
 
-Built on Qwen2.5-VL with GRPO reinforcement learning and a suite of
+Built on Qwen3-VL with GRPO reinforcement learning and a suite of
 callable diagnostic tools (zoom/crop, contrast enhancement, FDI numbering,
 grounding/segmentation). Trained and evaluated on the DENTEX benchmark.
 

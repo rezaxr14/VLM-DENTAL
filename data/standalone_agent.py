@@ -9,7 +9,7 @@ import torch
 from peft import PeftModel
 from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
 
-MODEL_ID = "Qwen/Qwen2.5-VL-7B-Instruct"
+MODEL_ID = "Qwen/Qwen3-VL-8B-Instruct"
 ADAPTER_PATH = "checkpoints/grpo-final"
 
 def load_standalone_agent(device: str = "cuda" if torch.cuda.is_available() else "cpu"):

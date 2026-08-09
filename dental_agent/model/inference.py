@@ -1,5 +1,5 @@
 """
-Inference generation and vision-token probing utilities for Qwen2.5-VL.
+Inference generation and vision-token probing utilities for Qwen3-VL.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ def probe_vision_tokens(
     image: Image.Image,
     prompt_text: str = "Analyze this X-ray.",
 ) -> int:
-    """Measure how many tokens a single image consumes under Qwen2.5-VL's patch merger."""
+    """Measure how many tokens a single image consumes under Qwen3-VL's patch merger."""
     try:
         from qwen_vl_utils import process_vision_info
     except ImportError:

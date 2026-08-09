@@ -61,7 +61,7 @@ def estimate_grpo_memory_gb(
     is_4bit: bool = True,
     lora_rank: int = 16,
 ) -> dict[str, Any]:
-    """Rule-of-thumb VRAM estimate for GRPO with QLoRA + activation checkpointing on Qwen2.5-VL-7B."""
+    """Rule-of-thumb VRAM estimate for GRPO with QLoRA + activation checkpointing on Qwen3-VL-8B."""
     base_weights = 4.5 if is_4bit else 15.0  # ~4.5 GB for 4-bit 7B
     lora_overhead = 0.3  # trainable adapter weights + optimizer states (AdamW)
     act_per_seq = 0.6 * (max_seq_len / 2048)
