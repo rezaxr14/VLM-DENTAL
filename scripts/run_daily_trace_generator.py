@@ -203,6 +203,9 @@ def main() -> None:
 
     generated_in_session = 0
     verified_in_session = 0
+    generator_failures = 0
+    verifier_rejections = 0
+    failure_counts: dict[str, int] = {}
     session_start_time = time.time()
 
     for idx, img_record in enumerate(todo_images, start=1):
@@ -227,9 +230,17 @@ def main() -> None:
 
             generated_in_session += 1
             verified_in_session += n_v
+            
+            # Tabulate failures
+            for reason in example.get("failure_reasons", []):
+                if reason.startswith("Generator:"):
+                    generator_failures += 1
+                elif reason.startswith("Verifier:"):
+                    verifier_rejections += 1
+                failure_counts[reason] = failure_counts.get(reason, 0) + 1
 
             status_str = f"[OK] Verified ({n_v} trace)" if n_v > 0 else "[WARN] Unverified"
-            print(f"{status_str} in {elapsed:.1f}s (Total saved: {len(completed_ids) + generated_in_session})", flush=True)
+            print(f"{status_str} in {elapsed:.1f}s (Total saved: {len(completed_ids) + verified_in_session})", flush=True)
 
             # Respect safe inter-request pacing
             if idx < len(todo_images) and args.pacing_delay > 0:
@@ -256,9 +267,18 @@ def main() -> None:
     print("=" * 70)
     print(f"* Images Processed this session : {generated_in_session}")
     print(f"* Grounded Traces Generated    : {verified_in_session}")
+    print(f"* Generator Failures           : {generator_failures}")
+    print(f"* Verifier Rejections          : {verifier_rejections}")
     print(f"* Total Saved Dataset Size     : {total_saved} / {total_eligible} images")
     print(f"* Session Duration             : {total_time / 60:.1f} minutes")
     print(f"* Output File                  : {output_path}")
+    
+    if failure_counts:
+        print("\nTOP FAILURE REASONS:")
+        sorted_failures = sorted(failure_counts.items(), key=lambda x: x[1], reverse=True)
+        for reason, count in sorted_failures[:5]:
+            print(f"  {count}x : {reason[:100]}...")
+            
     print("=" * 70)
 
     print("\nGIT SYNC INSTRUCTIONS:")

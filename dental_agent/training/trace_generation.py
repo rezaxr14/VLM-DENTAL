@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -81,7 +82,7 @@ def generate_interactive_trajectory(
     provider: str = GENERATOR_PROVIDER,
     model: str = GENERATOR_MODEL,
     call_llm_fn: Callable[..., str] = call_llm,
-) -> dict[str, Any] | None:
+) -> tuple[dict[str, Any] | None, str | None]:
     """
     Hybrid Interactive Teacher Loop: 
     Pre-computes common tools to save API costs, sends them upfront, and allows the LLM 
@@ -171,10 +172,9 @@ def generate_interactive_trajectory(
     # 3. Interactive Loop (Handles real dynamic tool calls if requested)
     for turn_idx in range(max_turns):
         try:
-            raw_output = call_llm_fn(provider, model, system_prompt="", user_content=messages, image=None, temperature=0.7)
+            raw_output = call_llm_fn(provider, model, system_prompt="", user_content=messages, image=None, temperature=0.7, max_tokens=4096)
         except Exception as e:
-            print(f"LLM call failed during interactive loop: {e}")
-            return None
+            return None, f"LLM API error on turn {turn_idx}: {e}"
 
         # Check if they output a standard dynamic tool call or final answer
         parsed = parse_agent_json(raw_output)
@@ -234,10 +234,10 @@ def generate_interactive_trajectory(
             else:
                 turn_record["status"] = "unparseable"
                 turns.append(turn_record)
-                break
+                return None, f"Unparseable output on turn {turn_idx}: {raw_output[:300]}"
 
     if final_answer is None:
-        return None
+        return None, f"No final_answer after {max_turns} turns"
 
     # 4. Post-Process into standard SFT format
     # We must strip the pre-computed images and directives from the initial prompt, 
@@ -252,6 +252,9 @@ def generate_interactive_trajectory(
     
     import re
     fake_tool_regex = re.compile(r"<fake_tool_call>(.*?)</fake_tool_call>", re.DOTALL)
+    # Regex to clean up any leaked/partial fake_tool_call fragments
+    leaked_tag_re = re.compile(r"</?fake_tool_call>", re.IGNORECASE)
+    leaked_partial_re = re.compile(r"<fake_[^>]*>")
     
     # We will reconstruct the trajectory by walking through the raw_outputs
     reconstructed_turns = []
@@ -331,6 +334,9 @@ def generate_interactive_trajectory(
         elif msg["role"] == "assistant":
             # Process fake tags
             raw_text = msg["content"]
+            # Sanitize any leaked/partial template fragments before processing
+            raw_text = leaked_tag_re.sub('', raw_text)
+            raw_text = leaked_partial_re.sub('', raw_text)
             parts = fake_tool_regex.split(raw_text)
             for i in range(0, len(parts), 2):
                 text_chunk = parts[i].strip()
@@ -350,12 +356,15 @@ def generate_interactive_trajectory(
                         except Exception as e:
                             obs = [{"type": "text", "text": f"Tool execution failed: {e}"}]
                         clean_sft.append({"role": "user", "content": obs})
-                    except:
+                    except Exception:
                         pass
                 prev_chunk = text_chunk
                 
             # Append remaining text (which might include a real tool call or final answer)
             if prev_chunk:
+                # Final sanitization pass
+                prev_chunk = leaked_tag_re.sub('', prev_chunk)
+                prev_chunk = leaked_partial_re.sub('', prev_chunk)
                 clean_sft.append({"role": "assistant", "content": prev_chunk})
 
     return {
@@ -364,7 +373,7 @@ def generate_interactive_trajectory(
         "final_answer": final_answer,
         "messages": clean_sft,
         "format_ok": True,
-    }
+    }, None
 
 
 def verify_trace(
@@ -384,19 +393,22 @@ def verify_trace(
     
     user_content = f"Ground Truth: {json.dumps(ground_truth)}\n\nCandidate Trace:\n{trace_text}"
     
-    raw = call_llm_fn(provider, model, VERIFIER_SYSTEM_PROMPT, user_content, image=image, temperature=0.0, response_mime_type="application/json")
+    raw = call_llm_fn(provider, model, VERIFIER_SYSTEM_PROMPT, user_content, image=image, temperature=0.0, max_tokens=2048, response_mime_type="application/json")
     parsed = parse_agent_json(raw)
     
     if parsed and "grounded" in parsed:
         return parsed
         
-    # Fallback for truncated JSON responses
+    # Fallback for truncated JSON responses — try to extract the reason too
+    reason_match = re.search(r'"reason"\s*:\s*"([^"]+)"', raw)
+    extracted_reason = reason_match.group(1) if reason_match else None
+    
     if '"grounded": true' in raw.lower() or '"grounded":true' in raw.lower():
-        return {"grounded": True, "reason": "Extracted from truncated JSON"}
+        return {"grounded": True, "reason": extracted_reason or "Verified (partial JSON recovery)"}
     if '"grounded": false' in raw.lower() or '"grounded":false' in raw.lower():
-        return {"grounded": False, "reason": "Extracted from truncated JSON"}
+        return {"grounded": False, "reason": extracted_reason or "Rejected (partial JSON recovery)"}
         
-    print(f"DEBUG Verifier Raw Output: {raw}")
+    print(f"DEBUG Verifier Raw Output: {raw[:500]}")
     return {"grounded": False, "reason": "verifier output unparseable"}
 
 
@@ -435,12 +447,14 @@ def build_trace_example(
     registry = ToolRegistry.create_default()
 
     candidates = []
+    failure_reasons = []
     for _ in range(k):
-        traj = generate_interactive_trajectory(image, ground_truth, registry, call_llm_fn=call_llm_fn)
+        traj, fail_reason = generate_interactive_trajectory(image, ground_truth, registry, call_llm_fn=call_llm_fn)
         if traj:
             candidates.append(traj)
         else:
-            print("  [Generator Failed] generate_interactive_trajectory returned None")
+            failure_reasons.append(f"Generator: {fail_reason}")
+            print(f"  [Generator Failed] {fail_reason}")
 
     verified = []
     for t in candidates:
@@ -449,7 +463,9 @@ def build_trace_example(
             t["verifier_reason"] = v_result.get("reason")
             verified.append(t)
         else:
-            print(f"  [Verifier Rejected] Reason: {v_result.get('reason')}")
+            reason = v_result.get('reason')
+            failure_reasons.append(f"Verifier: {reason}")
+            print(f"  [Verifier Rejected] Reason: {reason}")
             # print trace snippet for debugging
             msgs = t.get("messages", [])
             assistant_msgs = [m["content"] for m in msgs if m["role"] == "assistant"]
@@ -463,6 +479,7 @@ def build_trace_example(
         "n_candidates": len(candidates),
         "n_verified": len(verified),
         "verified_traces": verified,
+        "failure_reasons": failure_reasons,
     }
 
 
