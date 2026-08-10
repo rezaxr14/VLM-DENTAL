@@ -8,7 +8,7 @@ This document outlines the current state of the VLM-DENTAL project, the mileston
 
 ### 1. Data Pipeline & Environment
 - **Dataset Consolidation:** Successfully merged and formatted the DENTEX and Tufts Dental databases.
-- **Colab/Kaggle Architecture:** Set up modular, memory-efficient notebooks (`VLM_Dental_Colab_Master`, `SFT`, `GRPO`). Implemented smart storage routing to use ephemeral disk space for heavy datasets while safely persisting output traces and weights directly to Google Drive.
+- **Colab/Kaggle Architecture:** Set up modular, memory-efficient notebooks (`VLM_Dental_Colab_TraceGen_and_YOLO`, `SFT`, `GRPO`). Implemented smart storage routing to use ephemeral disk space for heavy datasets while safely persisting output traces and weights directly to Google Drive.
 - **API Key Management:** Built `api_pool.py` with robust round-robin rotation, automatic rate-limit handling, and fallback logic for Gemini and Anthropic APIs.
 
 ### 2. Autonomous Trace Generation (Phase 1)
