@@ -46,17 +46,22 @@ def compute_token_log_probs(
     use_reference: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Per-token log-probs + loss mask, for either the current policy (default) or the
-    frozen reference policy (use_reference=True). The reference policy is obtained by
-    temporarily disabling the LoRA adapter — the base model underneath IS the reference
-    policy, so this needs no second copy of the model in memory."""
+    frozen reference policy (use_reference=True)."""
     labels = enc["labels"]
     model_inputs = {k: v for k, v in enc.items() if k != "labels"}
 
-    use_disable = use_reference and hasattr(model, "disable_adapter")
-    context = model.disable_adapter() if use_disable else contextlib.nullcontext()
-    with context:
-        with torch.set_grad_enabled(not use_reference):
-            outputs = model(**model_inputs)
+    # Toggle between trainable GRPO adapter and frozen SFT reference
+    if use_reference and hasattr(model, "set_adapter"):
+        model.set_adapter("reference")
+    elif not use_reference and hasattr(model, "set_adapter"):
+        model.set_adapter("grpo_policy")
+
+    with torch.set_grad_enabled(not use_reference):
+        outputs = model(**model_inputs)
+
+    # Revert to grpo_policy just in case
+    if use_reference and hasattr(model, "set_adapter"):
+        model.set_adapter("grpo_policy")
 
     logits = outputs.logits[:, :-1, :]
     shift_labels = labels[:, 1:].to(logits.device)
@@ -149,6 +154,9 @@ def collect_grpo_group(
             old_lp, mask = compute_token_log_probs(model, enc, use_reference=False)
         old_log_probs_list.append(old_lp.detach())
         masks_list.append(mask)
+        
+        # Clear VRAM after each rollout forward pass
+        torch.cuda.empty_cache()
 
     return trajectories, rewards, old_log_probs_list, masks_list
 
@@ -221,6 +229,10 @@ def grpo_step(
 
                 loss = (per_token_loss * mask).sum() / mask.sum().clamp(min=1) / n_total_rollouts
                 loss.backward()
+                
+                # Clear VRAM after processing each trajectory in the batch
+                torch.cuda.empty_cache()
+                
         optimizer.step()
 
     model.eval()
@@ -301,6 +313,7 @@ def train_grpo(
     annots_df: pd.DataFrame,
     categories_df: pd.DataFrame,
     config: ProjectConfig | TrainingConfig | None = None,
+    sft_model_dir: str | Path | None = None,
     checkpoint_dir: str | Path = "checkpoints",
     sft_checkpoint_tag: str = "sft-final",
     group_size: int | None = None,
@@ -311,6 +324,7 @@ def train_grpo(
     diag_col: str = "category_id_3",
 ) -> str:
     """Execute Stage 2 GRPO multi-turn policy optimization with group advantage normalization."""
+    from peft import PeftModel, LoraConfig
     tr_cfg = config.training if isinstance(config, ProjectConfig) else (config or TrainingConfig())
     G = group_size or tr_cfg.grpo_group_size
     lr = learning_rate or tr_cfg.grpo_lr
@@ -321,7 +335,25 @@ def train_grpo(
     print(f"--- Starting Stage 2 GRPO Training (GroupSize={G}, KLBeta={beta}, ClipEps={eps}, LR={lr}) ---")
 
     model, processor = load_model(config)
-    model = apply_lora(model, config)
+    
+    # Dual-adapter setup for GRPO reference KL penalty
+    if sft_model_dir and os.path.exists(sft_model_dir):
+        print(f"Loading SFT Reference Model from {sft_model_dir}...")
+        model = PeftModel.from_pretrained(model, sft_model_dir, adapter_name="reference", is_trainable=False)
+        # Create a new trainable adapter mimicking the SFT one
+        grpo_config = LoraConfig(
+            r=model.peft_config["reference"].r,
+            lora_alpha=model.peft_config["reference"].lora_alpha,
+            target_modules=model.peft_config["reference"].target_modules,
+            lora_dropout=model.peft_config["reference"].lora_dropout,
+            bias="none",
+            task_type="CAUSAL_LM"
+        )
+        model.add_adapter("grpo_policy", grpo_config)
+        model.set_adapter("grpo_policy")
+    else:
+        print(f"WARNING: No SFT model found at {sft_model_dir}. Falling back to base model reference.")
+        model = apply_lora(model, config)
 
     cat_lookup = dict(zip(categories_df["id"], categories_df["name"])) if len(categories_df) else {}
     registry = ToolRegistry.create_default()
