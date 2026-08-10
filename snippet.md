@@ -3,7 +3,10 @@
 Here are the most frequently used commands to run various parts of the VLM-DENTAL pipeline locally.
 
 > [!NOTE]
-> Ensure your virtual environment is activated and you are in the root directory (`VLM-DENTAL`) before running these.
+> Ensure you activate your virtual environment before running any of the commands below. In PowerShell, run:
+> ```powershell
+> .\.venv\Scripts\Activate.ps1
+> ```
 
 ## 1. Trace Generation
 Generate the synthetic CoT trajectories using the Gemini API.
