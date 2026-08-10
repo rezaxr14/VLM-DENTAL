@@ -52,7 +52,7 @@ VERIFIER_SYSTEM_PROMPT = (
     "ground truth, and a candidate multi-turn reasoning trace, judge ONLY whether every claim "
     "in the trace is actually supported by the image and the tools used. Reject any trace asserting "
     "things that cannot be seen in the visual evidence, even if the final answer is technically correct.\n"
-    'Respond with exactly one JSON object: {"grounded": true/false, "reason": "..."}.'
+    'Respond with EXACTLY ONE JSON object and NO OTHER TEXT: {"grounded": true, "reason": "..."}.'
 )
 
 
@@ -65,9 +65,15 @@ def _format_ground_truth(anns: pd.DataFrame, cat_lookup: dict[int, str], diag_co
         fallback_map = {0: "Impacted", 1: "Caries", 2: "Periapical Lesion", 3: "Deep Caries"}
         diag_name = cat_lookup.get(diag_id) or fallback_map.get(diag_id, "unknown")
         
+        # Convert DENTEX 0-indexed categories to standard FDI notation
+        # DENTEX quadrant (0-3) -> FDI (1-4)
+        # DENTEX position (0-7) -> FDI (1-8)
+        fdi_quadrant = int(ann.get("category_id_1", 0)) + 1
+        fdi_position = int(ann.get("category_id_2", 0)) + 1
+        
         findings.append({
-            "quadrant": int(ann.get("category_id_1", 1)),
-            "tooth_position": int(ann.get("category_id_2", 1)),
+            "quadrant": fdi_quadrant,
+            "tooth_position": fdi_position,
             "diagnosis": diag_name,
             "bbox": list(ann.get("bbox", [0, 0, 50, 50])),
         })
@@ -145,8 +151,9 @@ def generate_interactive_trajectory(
             initial_content.extend([{"type": "text", "text": f"Pre-computed: contralateral_compare(target_quadrant={quad}):"}, {"type": "image", "image": img_result}])
             directive += f"- contralateral_compare(target_quadrant={quad})\n"
         elif key == "zoom_crop_gt":
-            initial_content.extend([{"type": "text", "text": f"Pre-computed: zoom_crop around ground truth:"}, {"type": "image", "image": img_result}])
-            directive += f"- zoom_crop (around the finding)\n"
+            bbox = ground_truth[0].get("bbox")
+            initial_content.extend([{"type": "text", "text": f"Pre-computed: zoom_crop(bbox={bbox}):"}, {"type": "image", "image": img_result}])
+            directive += f"- zoom_crop(bbox={bbox})\n"
             
     directive += (
         f"\nCRITICAL INSTRUCTIONS:\n"
