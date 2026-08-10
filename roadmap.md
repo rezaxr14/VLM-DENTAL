@@ -1,68 +1,50 @@
-# VLM-Dental Agent: Project Roadmap
+# VLM-DENTAL: Agentic Radiologist Project Roadmap
 
-This document outlines the end-to-end trajectory for building our autonomous dental diagnostic agent, derived directly from the **Think, Look, Measure** research proposal.
-
----
-
-## ✅ Phase 1: Setup & Data Curation (Completed / In Progress)
-- [x] Scaffolded the project structure (Agent, Tools, Training, Utils).
-- [x] Configured environment-aware settings (local/Kaggle/Colab) and persistent directories.
-- [x] Integrated automated downloading and extraction for the HuggingFace DENTEX dataset.
-- [x] Implemented COCO-JSON annotation parsing and robust caching using Parquet DataFrames.
-- [x] Engineered the **Hybrid Interactive Teacher Loop** for Chain-of-Thought (CoT) generation.
-- [x] Built the **Strict Verifier** that evaluates the generated clinical reasoning and rejects ungrounded hallucinations via LLM-as-judge.
-- [ ] Complete the download and extraction of the full 10GB DENTEX `training` split (Currently downloading).
-- [ ] Run the automated `run_daily_trace_generator.py` pipeline across the full dataset to generate thousands of verified CoT traces.
+This document outlines the current state of the VLM-DENTAL project, the milestones we've achieved, and the remaining steps required to deploy the final autonomous dental diagnostic agent.
 
 ---
 
-## 🚀 Phase 2: Tool Suite + Stage 0 (Active Phase)
-- [x] Built a dynamic `ToolRegistry` to expose Python functions to the VLM.
-- [x] Implemented **Window Leveling** (`window_level`) with clinical presets: Bone, Enamel, and Soft Tissue.
-- [x] Implemented **Denoising** (`denoise`) using Median and Bilateral filters.
-- [x] Implemented **Zoom & Crop** (`zoom_crop`) for high-resolution inspection.
-- [x] Implemented **Contralateral Compare** (`contralateral_compare`) for symmetry assessment.
-- [x] Implemented **FDI numbering function** mapping tooth positions.
-- [ ] **Stage 0 (Grounding Tool)**: Pretrain/fine-tune a segmentation/grounding tool (Faster R-CNN, Grounding DINO, or SAM/MedSAM variant) on DENTEX's quadrant and quadrant-enumeration subsets. This supervised detector allows the VLM to request bounding boxes/masks for specific teeth.
+## 🟢 Completed Milestones (What We've Built)
+
+### 1. Data Pipeline & Environment
+- **Dataset Consolidation:** Successfully merged and formatted the DENTEX and Tufts Dental databases.
+- **Colab/Kaggle Architecture:** Set up modular, memory-efficient notebooks (`VLM_Dental_Colab_Master`, `SFT`, `GRPO`). Implemented smart storage routing to use ephemeral disk space for heavy datasets while safely persisting output traces and weights directly to Google Drive.
+- **API Key Management:** Built `api_pool.py` with robust round-robin rotation, automatic rate-limit handling, and fallback logic for Gemini and Anthropic APIs.
+
+### 2. Autonomous Trace Generation (Phase 1)
+- **Interactive Teacher Loop:** Created an agentic loop where a powerful teacher VLM sequentially invokes tools (zoom, contrast, denoise) to hunt for pathologies, mimicking a real radiologist.
+- **Cross-Family Verification:** Implemented a strict verifier (e.g., Claude 3.5 Sonnet) that rejects hallucinated reasoning traces that aren't strictly supported by visual evidence.
+- **Bulletproof Parsing Engine:** Overhauled the JSON extractor to intelligently parse mixed XML/JSON outputs, seamlessly repair truncated API responses, and dynamically scavenge broken outputs to keep trajectory loops alive.
+
+### 3. SFT Training Pipeline (Phase 3)
+- **Multi-Modal Collator:** Built `QwenVLDataCollator` to natively parse complex, multi-turn trajectories with dynamically generated image crops directly into Qwen-VL's processor.
+- **4-Bit QLoRA Optimization:** Enabled high-efficiency LoRA training for 3B+ parameter models on consumer GPUs (e.g., Colab T4).
+
+### 4. RL/GRPO Implementation (Phase 5)
+- **Dual-Adapter Memory Architecture:** Engineered a highly efficient PEFT setup that loads the SFT weights as a frozen `"reference"` adapter and creates a trainable `"grpo_policy"` adapter. By rapidly toggling between them in memory, we compute KL-Divergence penalties without needing a second 3B model loaded into VRAM.
+- **VRAM Protections:** Integrated strict cache-clearing mechanisms at the rollout-step level to prevent OOM crashes during heavy multi-turn trajectory sampling.
 
 ---
 
-## 📅 Phase 3: Supervised Fine-Tuning (SFT) - Stage 1
-- [ ] Wire the completed tool suite (including the R-CNN/Grounding tool) into the VLM's tool-calling interface.
-- [ ] Set up `unsloth` or `trl` for efficient LoRA/QLoRA parameter-efficient fine-tuning (PEFT).
-- [ ] Load the open-weight VLM backbone (starting with `Qwen3-VL-2B-Instruct` on free tiers).
-- [ ] Train the VLM on the generated CoT dataset so it reliably produces well-formed reasoning + tool calls (learning the *shape* of the behavior).
+## 🟡 Currently In Progress (User Action Required)
+
+- **Dataset Trace Generation:** Running `run_daily_trace_generator.py` on Colab to build the synthetic dataset of expert demonstrations.
+- **YOLO Grounding Tool Training:** Running the `yolov8m.pt` training loop for 500 epochs to create the dense bounding-box tool for the VLM agent.
 
 ---
 
-## 📅 Phase 4: GRPO Smoke Test (3B)
-- [ ] Implement the customized reward functions (Accuracy, Format, Tool Validity, Efficiency, plus optional LLM-judge grounding reward).
-- [ ] Get the GRPO (Group Relative Policy Optimization) loop running end-to-end at small scale (group size G≈4) on free-tier constraints to validate rollout mechanics.
+## 🔴 Left To Do (Future Milestones)
 
----
+### Phase 3: Execute Supervised Fine-Tuning
+Once trace generation is complete, run `VLM_Dental_Colab_SFT.ipynb` to teach the base Qwen-VL model how to use tools and reason like the Teacher VLM.
 
-## 📅 Phase 5: First Real GRPO Run (3B → 7B)
-- [ ] Run full-group (G≈8) GRPO on the 3B model on a dedicated RTX 4090.
-- [ ] Once the 3B pipeline is validated, initialize the first 7B QLoRA SFT/GRPO attempts.
+### Phase 4: Baseline Agent Evaluation
+- Create `scripts/run_eval.py` to test the SFT model.
+- Compare the model's accuracy in a standard "Zero-Shot" setting vs. an "Agentic Tool-Use" setting to quantify the performance gains of the interactive tools.
 
----
+### Phase 5: Execute GRPO Reinforcement Learning
+Run `VLM_Dental_Colab_GRPO.ipynb` to apply Group Relative Policy Optimization. This will penalize the agent for hallucinating, reward it for accurate diagnoses, and optimize its tool-usage efficiency.
 
-## 📅 Phase 6: Full-Scale Training & Reward Sweep
-- [ ] Full 7B GRPO training on dedicated compute.
-- [ ] Complete the reward-weight sweep to analyze the impact of different reward components.
-- [ ] (Optional) Port to EasyR1 if the 4090 throughput becomes a bottleneck for the ablation matrix.
-
----
-
-## 📅 Phase 7: Full Evaluation
-- [ ] **Zero-shot baselines**: Evaluate GPT-4o / Qwen3-VL without tools.
-- [ ] **SFT-only baseline**: Evaluate the Stage 1 agent without RL to isolate the contribution of RL (Hypothesis 2).
-- [ ] **No-tools RL agent**: Evaluate the full agent reasoning over the whole image without tool access to isolate the contribution of tools (Hypothesis 1).
-- [ ] **Full agent**: Evaluate the proposed SFT + tools + RL system.
-- [ ] **Specialist detector**: Compare against a prior supervised specialist detector (e.g., YOLO/Faster R-CNN pipeline) to quantify the accuracy/interpretability trade-off (Hypothesis 3).
-- [ ] **Detailed Error Analysis**: Disaggregate prediction errors into specific failure modes to understand agent behavior:
-  - *Localization Errors*: Mistaken quadrant or FDI tooth position.
-  - *Classification Errors*: Correct tooth located, but wrong disease diagnosed.
-  - *Tool Misuse*: Agent failed to invoke the correct tool for the suspected lesion.
-- [ ] **Reasoning-grounding check**: Run the LLM-judge protocol to check if final reasoning stays evidentially grounded in cited tool outputs.
-- [ ] **Cross-dataset generalization**: Zero-shot evaluation on secondary datasets to check out-of-distribution performance.
+### Phase 6: Interactive Clinical UI
+- Build a web interface (using Gradio or Streamlit).
+- Allow dentists to upload panoramic X-rays and watch the VLM-DENTAL agent visually zoom, enhance, and reason through the image step-by-step in real-time.

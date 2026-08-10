@@ -20,7 +20,8 @@ def tool_zoom_crop(
     """
     pad = context_padding if context_padding is not None else padding_frac
     x, y, w, h = bbox
-    pad_x, pad_y = w * pad, h * pad
+    pad_x = max(w * pad, 50.0)
+    pad_y = max(h * pad, 50.0)
     left = max(0, x - pad_x)
     top = max(0, y - pad_y)
     right = min(image.width, x + w + pad_x)

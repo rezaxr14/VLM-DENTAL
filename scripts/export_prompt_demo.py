@@ -123,7 +123,7 @@ def main():
     for gt in findings:
         quad = gt.get('quadrant')
         bbox = gt.get('bbox')
-        directive += f"- contralateral_compare(target_quadrant={quad})\n"
+        directive += f"- contralateral_compare(bbox={bbox}, quadrant={quad})\n"
         directive += f"- zoom_crop(bbox={bbox})\n"
 
     directive += "\nCRITICAL INSTRUCTIONS:\n"

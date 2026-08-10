@@ -18,11 +18,11 @@ def tool_denoise(
     img_array = np.array(image)
     
     if method == "bilateral":
-        # d=9, sigmaColor=75, sigmaSpace=75 are standard strong but safe smoothing parameters
-        denoised = cv2.bilateralFilter(img_array, d=9, sigmaColor=75, sigmaSpace=75)
+        # d=15, sigmaColor=120, sigmaSpace=120 for strong noise reduction on high-res X-rays
+        denoised = cv2.bilateralFilter(img_array, d=15, sigmaColor=120, sigmaSpace=120)
     elif method == "median":
-        # 5x5 median filter
-        denoised = cv2.medianBlur(img_array, ksize=5)
+        # 9x9 median filter for strong salt-and-pepper noise removal
+        denoised = cv2.medianBlur(img_array, ksize=9)
     else:
         denoised = img_array
         

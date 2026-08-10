@@ -151,8 +151,9 @@ def generate_interactive_trajectory(
         elif key.startswith("contralateral_compare_gt_"):
             idx = int(key.split("_gt_")[-1])
             quad = ground_truth[idx].get("quadrant")
-            initial_content.extend([{"type": "text", "text": f"Pre-computed: contralateral_compare(target_quadrant={quad}):"}, {"type": "image", "image": img_result}])
-            directive += f"- contralateral_compare(target_quadrant={quad})\n"
+            bbox = ground_truth[idx].get("bbox")
+            initial_content.extend([{"type": "text", "text": f"Pre-computed: contralateral_compare(bbox={bbox}, quadrant={quad}):"}, {"type": "image", "image": img_result}])
+            directive += f"- contralateral_compare(bbox={bbox}, quadrant={quad})\n"
         elif key.startswith("zoom_crop_gt_"):
             idx = int(key.split("_gt_")[-1])
             bbox = ground_truth[idx].get("bbox")
