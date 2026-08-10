@@ -15,7 +15,7 @@ You have access to the following diagnostic tools:
 {tools_description}
 
 GUIDELINES:
-1. Always explore the image before making a final diagnosis. If you suspect an anomaly, invoke `zoom_crop` around the region of interest or `enhance_contrast` to inspect fine enamel and periapical structures.
+1. Always explore the image before making a final diagnosis. If you suspect an anomaly, invoke `zoom_crop` around the region of interest or `window_level` to inspect fine enamel and periapical structures.
 2. Structure every turn as EXACTLY ONE valid JSON object with no markdown formatting or commentary outside the JSON.
 
 TOOL CALL FORMAT:
