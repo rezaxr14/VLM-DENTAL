@@ -114,12 +114,14 @@ def generate_interactive_trajectory(
         precomputed["denoise_bilateral"] = registry.execute("denoise", image=image, method="bilateral")
         precomputed["denoise_median"] = registry.execute("denoise", image=image, method="median")
             
-        if has_gt:
-            quad = ground_truth[0].get("quadrant")
-            bbox = ground_truth[0].get("bbox")
-            if quad and bbox:
-                precomputed["contralateral_compare"] = registry.execute("contralateral_compare", image=image, bbox=bbox, quadrant=quad)
-            precomputed["zoom_crop_gt"] = registry.execute("zoom_crop", image=image, bbox=bbox)
+        if ground_truth:
+            for i, gt in enumerate(ground_truth):
+                quad = gt.get("quadrant")
+                bbox = gt.get("bbox")
+                if quad and bbox:
+                    precomputed[f"contralateral_compare_gt_{i}"] = registry.execute("contralateral_compare", image=image, bbox=bbox, quadrant=quad)
+                if bbox:
+                    precomputed[f"zoom_crop_gt_{i}"] = registry.execute("zoom_crop", image=image, bbox=bbox)
             
     except Exception as e:
         print(f"Pre-computation failed: {e}")
@@ -146,12 +148,14 @@ def generate_interactive_trajectory(
             method = key.split("denoise_")[-1]
             initial_content.extend([{"type": "text", "text": f"Pre-computed: denoise(method='{method}'):"}, {"type": "image", "image": img_result}])
             directive += f"- denoise(method='{method}')\n"
-        elif key == "contralateral_compare":
-            quad = ground_truth[0].get("quadrant")
+        elif key.startswith("contralateral_compare_gt_"):
+            idx = int(key.split("_gt_")[-1])
+            quad = ground_truth[idx].get("quadrant")
             initial_content.extend([{"type": "text", "text": f"Pre-computed: contralateral_compare(target_quadrant={quad}):"}, {"type": "image", "image": img_result}])
             directive += f"- contralateral_compare(target_quadrant={quad})\n"
-        elif key == "zoom_crop_gt":
-            bbox = ground_truth[0].get("bbox")
+        elif key.startswith("zoom_crop_gt_"):
+            idx = int(key.split("_gt_")[-1])
+            bbox = ground_truth[idx].get("bbox")
             initial_content.extend([{"type": "text", "text": f"Pre-computed: zoom_crop(bbox={bbox}):"}, {"type": "image", "image": img_result}])
             directive += f"- zoom_crop(bbox={bbox})\n"
             
@@ -172,7 +176,6 @@ def generate_interactive_trajectory(
         {"role": "user", "content": initial_content},
     ]
 
-    current_image = image
     turns: list[dict[str, Any]] = []
     final_answer = None
     
@@ -222,8 +225,8 @@ def generate_interactive_trajectory(
 
             try:
                 if tool_name in ["zoom_crop", "window_level", "denoise", "contralateral_compare"]:
-                    tool_out = registry.execute(tool_name, image=current_image, **tool_args)
-                    current_image = tool_out
+                    # Always execute against the base image to prevent state corruption (e.g., cropping a crop)
+                    tool_out = registry.execute(tool_name, image=image, **tool_args)
                     obs = [{"type": "image", "image": tool_out}, {"type": "text", "text": f"Result of {tool_name}:"}]
                 else:
                     tool_out = registry.execute(tool_name, **tool_args)
