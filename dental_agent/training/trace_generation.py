@@ -177,7 +177,13 @@ def generate_interactive_trajectory(
             return None, f"LLM API error on turn {turn_idx}: {e}"
 
         # Check if they output a standard dynamic tool call or final answer
-        parsed = parse_agent_json(raw_output)
+        # Strip all fake tool calls first to find the real JSON action
+        import re
+        fake_tool_regex = re.compile(r"<fake_tool_call>.*?</fake_tool_call>", re.DOTALL)
+        clean_for_parsing = fake_tool_regex.sub("", raw_output)
+        clean_for_parsing = re.sub(r"<fake_tool_call>.*?$", "", clean_for_parsing, flags=re.DOTALL)
+        
+        parsed = parse_agent_json(clean_for_parsing)
         
         turn_record = {
             "turn": turn_idx,
@@ -226,10 +232,13 @@ def generate_interactive_trajectory(
             turns.append(turn_record)
         else:
             # Did not parse standard tool or final answer. Could be full of fake_tool_calls.
-            # But we expected a final answer. Let's see if it's unparseable or just missed the JSON.
-            if "<fake_tool_call>" in raw_output and "final_answer" not in raw_output:
+            if "<fake_tool_call>" in raw_output and "final_answer" not in clean_for_parsing:
                 # LLM hallucinated a fake tool call but stopped before final answer
                 messages.append({"role": "user", "content": "Please continue and provide the final_answer JSON."})
+                turns.append(turn_record)
+            elif "final_answer" in clean_for_parsing or "tool" in clean_for_parsing:
+                # It tried to output a JSON action but it was severely mangled
+                messages.append({"role": "user", "content": "Your JSON was malformed or truncated. Please output the valid JSON object."})
                 turns.append(turn_record)
             else:
                 turn_record["status"] = "unparseable"

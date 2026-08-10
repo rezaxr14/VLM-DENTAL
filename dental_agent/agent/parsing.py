@@ -10,50 +10,83 @@ from typing import Any, Optional
 
 
 def parse_agent_json(text: str) -> Optional[dict[str, Any]]:
-    """Robustly extract and parse a JSON dictionary from model output text.
+    """Robustly extract and parse the primary actionable JSON dictionary from model output text.
 
-    Handles:
-    1. Direct JSON strings.
-    2. Markdown code fences (```json ... ``` or ``` ... ```), including nested fences.
-    3. Trailing/leading text around the outermost JSON object.
-    4. Minor syntax fixes (e.g. trailing commas before closing braces).
-    5. Truncated JSON repair (closing unbalanced braces/brackets/strings).
+    Intelligently handles:
+    1. Mixed XML and JSON: It ignores XML tags like `<fake_tool_call>...</fake_tool_call>` and searches for the standalone `{"final_answer": ...}` or `{"tool": ...}`.
+    2. Markdown code fences, including nested ones.
+    3. Trailing/leading text around the JSON object.
+    4. Truncated JSON repair (closing unbalanced braces/brackets/strings).
     """
     if not text or not isinstance(text, str):
         return None
 
     cleaned = text.strip()
 
-    # 1. Strip markdown code fences — try all ```json blocks, pick the best one
+    # 1. Look for explicit XML tool calls, but we only care about the REAL final_answer or dynamic tool.
+    # The real answer is usually at the very end. Let's try to find a standalone JSON blob that contains "tool" or "final_answer".
+    
+    # Strip markdown code fences if they exist
     code_blocks = re.findall(r"```(?:json)?\s*([\s\S]*?)\s*```", cleaned, re.IGNORECASE)
     if code_blocks:
-        # Try each code block, return the first that parses as a dict
-        for block in code_blocks:
+        # If there are code blocks, try the last one first (usually the final answer)
+        for block in reversed(code_blocks):
             result = _try_parse_json(block.strip())
-            if result is not None:
+            if result is not None and ("final_answer" in result or "tool" in result):
                 return result
-        # If none parsed cleanly, use the longest block for repair attempts below
-        cleaned = max(code_blocks, key=len).strip()
 
-    # 2. Try direct json.loads
-    result = _try_parse_json(cleaned)
-    if result is not None:
-        return result
-
-    # 3. Locate outermost balanced curly braces
-    first_brace = cleaned.find("{")
-    last_brace = cleaned.rfind("}")
-    if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
-        substring = cleaned[first_brace : last_brace + 1]
-        result = _try_parse_json(substring)
-        if result is not None:
+    # 2. Extract ALL independent {} blocks and pick the best one.
+    # We do this by finding all '{' and tracking balanced brackets to extract every possible JSON object in the string.
+    # This prevents the parser from greedily grabbing from the first `{` inside a fake XML tool call to the last `}`.
+    
+    candidates = []
+    stack = []
+    start = -1
+    in_string = False
+    escape = False
+    
+    for i, char in enumerate(cleaned):
+        if escape:
+            escape = False
+            continue
+        if char == '\\':
+            escape = True
+            continue
+        if char == '"':
+            in_string = not in_string
+            continue
+            
+        if not in_string:
+            if char == '{':
+                if not stack:
+                    start = i
+                stack.append('{')
+            elif char == '}':
+                if stack:
+                    stack.pop()
+                    if not stack and start != -1:
+                        candidates.append(cleaned[start:i+1])
+                        start = -1
+                        
+    # Try all balanced candidates from back to front (since the final action is usually last)
+    for cand in reversed(candidates):
+        res = _try_parse_json(cand)
+        if res and ("final_answer" in res or "tool" in res):
+            return res
+            
+    # 3. If no balanced candidates worked (truncation), try repairing the outermost block that looks like an action
+    action_idx = max(cleaned.rfind('{"final_answer"'), cleaned.rfind('{"tool"'))
+    if action_idx != -1:
+        fragment = cleaned[action_idx:]
+        result = _repair_truncated_json(fragment)
+        if result is not None and ("final_answer" in result or "tool" in result):
             return result
 
-    # 4. Attempt truncation repair: close unbalanced braces/brackets
+    # 4. Fallback: Try repairing the absolute largest block we can find just in case
+    first_brace = cleaned.find("{")
     if first_brace != -1:
-        fragment = cleaned[first_brace:]
-        result = _repair_truncated_json(fragment)
-        if result is not None:
+        result = _repair_truncated_json(cleaned[first_brace:])
+        if result is not None and ("final_answer" in result or "tool" in result):
             return result
 
     return None
