@@ -11,7 +11,7 @@ This is the heart of the project containing all reusable logic. It is imported b
 
 ### `dental_agent/agent/` (Agent Loop & Parsing)
 *Logic for the autonomous agent's decision-making cycle.*
-- `loop.py`: **The main execution loop.** Takes an input X-ray image and a user prompt, loops through LLM generations and tool executions, and outputs a complete multi-turn trajectory object.
+- `loop.py`: **The main execution loop (LangGraph-orchestrated).** Takes an input X-ray image and a user prompt, loops through LLM generations and real tool executions, and outputs a complete multi-turn trajectory object.
 - `parsing.py`: **The JSON extractor.** Takes raw LLM text outputs (including mixed XML/Markdown/truncated text), safely isolates the JSON, and outputs a clean Python dictionary representing the chosen action or final answer.
 - `prompts.py`: **The instruction sets.** Takes a list of registered tools, dynamically formats them, and outputs the final text system prompts injected into the LLM context.
 - `visualization.py`: **The rendering utility.** Takes trajectory data and coordinates, and outputs annotated images with bounding boxes and tool results drawn on them for visual debugging.
@@ -23,15 +23,15 @@ This is the heart of the project containing all reusable logic. It is imported b
 - `windowing.py`: **Contrast mapping tool.** Takes an input image and a tissue preset string (e.g., "bone"), and outputs a contrast-adjusted image mimicking a CT scan.
 - `denoise.py`: **Filtering tool.** Takes an input image and a method string ("bilateral" or "median"), and outputs a smoothed image with reduced grain/noise.
 - `contralateral.py`: **Comparison tool.** Takes an input image and a jaw quadrant integer, calculates the opposite side, and outputs a cropped image of the opposing side of the jaw for symmetry comparison.
-- `grounding.py`: **AI detection tool.** Takes an input image, passes it through our trained YOLOv8 model, and outputs an array of bounding boxes locating teeth and pathologies.
+- `grounding.py`: **AI detection tool (WIP — gated behind a detection-quality threshold, e.g. val mAP50 > 0.5, before use in the live agent loop).** Takes an input image, passes it through our trained YOLOv8m model (trained with 5-fold cross-validation), and outputs an array of bounding boxes locating teeth and pathologies.
 - `fdi.py`: **Dental logic helper.** Takes quadrant and tooth position integers, handles the math for FDI two-digit tooth numbering, and outputs standardized positional data.
 - `contrast.py`: **Basic contrast tool.** Takes an input image and a float alpha/beta value, and outputs a manually brightened or darkened image.
 - `synthetic.py`: **Mock tools.** Takes mock arguments, used exclusively for testing the agent loop without real models, and outputs dummy responses.
 
 ### `dental_agent/training/` (Pipelines & RL)
 *The heavy-lifting logic for fine-tuning and reinforcement learning.*
-- `api_pool.py`: **The API router.** Takes raw LLM requests, manages API keys/rate-limits across Gemini and Anthropic, and outputs the final LLM text responses (handling failovers automatically).
-- `trace_generation.py`: **The dataset synthesizer.** Takes raw dataset images and ground-truth annotations, uses a Teacher LLM to solve them interactively, and outputs a JSONL file of "perfect" diagnostic trajectories.
+- `api_pool.py`: **The LLM client router.** Takes raw LLM requests and routes them to a locally-hosted Qwen3-VL-8B-Thinking vLLM endpoint (OpenAI-compatible, running inside the same Kaggle/Colab session) for trace generation, with the original Gemini/Anthropic API routing retained as a fallback/verifier path, and outputs the final LLM text responses.
+- `trace_generation.py`: **The dataset synthesizer.** Takes raw dataset images and ground-truth annotations, drives a locally-hosted Qwen3-VL-8B-Thinking through a real LangGraph tool-execution loop (ground-truth-directed, not blind) to solve them interactively, and outputs a JSONL file of verified diagnostic trajectories.
 - `sft.py`: **The supervised trainer.** Takes the generated JSONL traces and base model architecture, formats them using a multi-modal collator, and outputs fine-tuned Qwen-VL model weights.
 - `grpo.py`: **The RL algorithm.** Takes the SFT model weights and new training data, implements Group Relative Policy Optimization (computing KL-divergence penalties and dual-adapter memory swapping), and outputs highly-optimized RL model weights.
 - `detector.py`: **The YOLO trainer.** Takes COCO/YOLO formatted datasets, runs the Ultralytics training loop, and outputs a trained `.pt` bounding-box model.

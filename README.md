@@ -11,9 +11,9 @@ See [dentex-agentic-vlm-proposal.md](dentex-agentic-vlm-proposal.md) for the ful
 - **Agentic Multi-Turn Diagnostic Loop**: Autonomous tool usage (zoom/crop, contrast enhancement, FDI numbering, abnormal tooth locating) before delivering a structured diagnosis.
 - **Hierarchical DENTEX Grounding**: Support for FDI World Dental Federation notation (quadrants 1–4, tooth positions 1–8) and multi-class pathology classification (Caries, Deep Caries, Periapical Lesions, Impacted Teeth).
 - **Two-Stage Fine-Tuning Pipeline**:
-  - **Aim 1 / Stage 1 (SFT)**: Multi-turn expert demonstration distillation with cross-family LLM verification (Gemini 2.5 Flash + Claude 3.5 Sonnet).
+  - **Aim 1 / Stage 1 (SFT)**: Multi-turn expert demonstration distillation — generated locally with Qwen3-VL-8B-Thinking via a real LangGraph tool-execution loop (ground-truth-directed, Kaggle/Colab), cross-family verified (a different model family than the generator, to reduce correlated blind spots).
   - **Aim 2 / Stage 2 (GRPO)**: Direct policy gradient optimization against multi-objective rewards (FDI accuracy + pathology diagnosis + format adherence + tool efficiency).
-- **Stage 0 Detector**: Dedicated Faster R-CNN MobileNetV3 tooth localization model to replace oracle grounding.
+- **Stage 0 Detector**: Dedicated YOLOv8m tooth localization model, trained with 5-fold cross-validation, to replace oracle grounding — currently training/validating, gated behind a detection-quality threshold before live use.
 - **Robust Evaluation & Ablation Harness**: H1 (tool-use vs. direct reasoning) and H2 (GRPO vs. SFT vs. zero-shot GPT-4o) evaluation suites with bootstrap confidence intervals and calibration (ECE) metrics.
 - **Unified & Environment-Agnostic**: One-click execution on Local Workstations (RTX 4090), Kaggle, and Google Colab with HuggingFace Hub artifact persistence.
 
@@ -97,8 +97,8 @@ dental-agent evaluate --checkpoint checkpoints/grpo-final --output results/
 ## ⚙️ Configuration & Compute Tiers
 
 Configuration is managed via YAML under `configs/`:
-- `configs/default.yaml`: Base configuration for Kaggle / Colab (16GB VRAM, Qwen3-VL-2B, 4-bit NF4, GRPO Group Size = 4).
-- `configs/rtx4090.yaml`: High-VRAM workstation configuration (24GB VRAM, Qwen3-VL-8B, GRPO Group Size = 8).
+- `configs/default.yaml`: Base configuration for Kaggle / Colab (16GB VRAM, **Qwen3-VL-8B-Thinking**, 4-bit NF4 via Unsloth, GRPO Group Size = 4).
+- `configs/rtx4090.yaml`: High-VRAM workstation configuration (24GB VRAM, **same Qwen3-VL-8B-Thinking backbone**, GRPO Group Size = 8) — this tier scales group size and throughput, not model size.
 
 Override settings via CLI or by passing a custom config file:
 ```bash

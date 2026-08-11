@@ -13,7 +13,7 @@ This document outlines the current state of the VLM-DENTAL project, the mileston
 
 ### 2. Autonomous Trace Generation (Phase 1)
 - **Interactive Teacher Loop:** Created an agentic loop where a powerful teacher VLM sequentially invokes tools (zoom, contrast, denoise) to hunt for pathologies, mimicking a real radiologist.
-- **Cross-Family Verification:** Implemented a strict verifier (e.g., Claude 3.5 Sonnet) that rejects hallucinated reasoning traces that aren't strictly supported by visual evidence.
+- **Cross-Family Verification:** Implemented a strict verifier (a different model family than the generator) that rejects hallucinated reasoning traces that aren't strictly supported by visual evidence.
 - **Bulletproof Parsing Engine:** Overhauled the JSON extractor to intelligently parse mixed XML/JSON outputs, seamlessly repair truncated API responses, and dynamically scavenge broken outputs to keep trajectory loops alive.
 
 ### 3. SFT Training Pipeline (Phase 3)
@@ -28,8 +28,8 @@ This document outlines the current state of the VLM-DENTAL project, the mileston
 
 ## 🟡 Currently In Progress (User Action Required)
 
-- **Dataset Trace Generation:** Running `run_daily_trace_generator.py` on Colab to build the synthetic dataset of expert demonstrations.
-- **YOLO Grounding Tool Training:** Running the `yolov8m.pt` training loop for 500 epochs to create the dense bounding-box tool for the VLM agent.
+- **Dataset Trace Generation:** Running `run_daily_trace_generator.py` on Colab/Kaggle to build the synthetic dataset of expert demonstrations — now driven by a locally-hosted Qwen3-VL-8B-Thinking via a real LangGraph tool-execution loop instead of the Gemini API.
+- **YOLO Grounding Tool Training:** Running the `yolov8m.pt` training loop with 5-fold cross-validation to create the dense bounding-box tool for the VLM agent; cross-validation code is written and needs testing.
 
 ---
 
