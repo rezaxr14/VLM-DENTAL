@@ -266,7 +266,11 @@ def build_dataframes(
 def resolve_image_paths(
     images_df: pd.DataFrame, dentex_path: str | Path
 ) -> pd.DataFrame:
-    """Add a ``local_path`` column mapping each image record to its file."""
+    """Add a ``local_path`` column mapping each image record to its file.
+    
+    Prefers resolving relative paths against ``source_file`` (if present) to prevent
+    basename collisions across dataset folders (e.g. quadrant-enumeration vs quadrant-enumeration-disease).
+    """
     image_files = (
         glob.glob(os.path.join(str(dentex_path), "**", "*.png"), recursive=True)
         + glob.glob(os.path.join(str(dentex_path), "**", "*.jpg"), recursive=True)
@@ -274,10 +278,24 @@ def resolve_image_paths(
     )
     by_basename = {os.path.basename(p): p for p in image_files}
     images_df = images_df.copy()
+
+    def _resolve(row: pd.Series) -> str | None:
+        file_name = row.get("file_name")
+        if not file_name or pd.isna(file_name):
+            return None
+        source_file = row.get("source_file")
+        if source_file and not pd.isna(source_file):
+            src_dir = os.path.dirname(str(source_file))
+            cand1 = os.path.normpath(os.path.join(src_dir, str(file_name)))
+            if os.path.exists(cand1):
+                return cand1
+            cand2 = os.path.normpath(os.path.join(src_dir, "xrays", os.path.basename(str(file_name))))
+            if os.path.exists(cand2):
+                return cand2
+        return by_basename.get(os.path.basename(str(file_name)))
+
     if "file_name" in images_df.columns:
-        images_df["local_path"] = images_df["file_name"].apply(
-            lambda fn: by_basename.get(os.path.basename(fn))
-        )
+        images_df["local_path"] = images_df.apply(_resolve, axis=1)
     return images_df
 
 
@@ -366,17 +384,17 @@ def find_local_dentex_dir(data_dir: str | Path | None = None, split_name: str = 
     return None
 
 
-def load_dentex_dataset(
+def load_combined_dentex_dataset(
     data_dir: str | Path | None = None,
-    split_name: str = "validation",
+    split_name: str = "train",
     use_cache: bool = True,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Top-level convenience loader for DENTEX dataset.
+    """Load and combine all DENTEX datasets for a given split that contain FDI tooth enumeration
+    annotations (category_id_1 and category_id_2).
 
-    Checks local project data directories first for instant loading. If not found locally,
-    downloads or discovers files, auto-extracts zip archives, parses the
-    best annotation file, resolves local image paths, and returns
-    (images_df, annots_df, categories_df).
+    For 'train', this merges annotations from both 'quadrant-enumeration-disease' and
+    'quadrant-enumeration' datasets (~1,294 images total), nearly doubling the training
+    data available for YOLO tooth grounding models.
     """
     local_dir = find_local_dentex_dir(data_dir, split_name)
     if local_dir is not None:
@@ -390,9 +408,108 @@ def load_dentex_dataset(
 
     extract_dentex_zips(dentex_path)
     all_coco = discover_annotation_files(dentex_path)
-    _, best_coco = pick_best_annotation_file(all_coco, split_name=split_name)
+
+    matching_coco: list[tuple[str, dict]] = []
+    for jf, d in all_coco.items():
+        if not isinstance(d, dict) or not d.get("annotations"):
+            continue
+        name = jf.lower()
+        if split_name in ("val", "validation"):
+            if "val" not in name and "validation" not in name:
+                continue
+        elif split_name in ("train", "training"):
+            if "train" not in name and "training" not in name:
+                continue
+
+        ann0 = d["annotations"][0] if d["annotations"] else {}
+        if "category_id_1" in ann0 and "category_id_2" in ann0:
+            matching_coco.append((jf, d))
+
+    if not matching_coco:
+        print(f"No multi-file enumeration matches for split '{split_name}'. Falling back to single best file.")
+        best_path, best_coco = pick_best_annotation_file(all_coco, split_name=split_name)
+        matching_coco = [(best_path, best_coco)]
+
+    combined_images: list[dict] = []
+    combined_annots: list[dict] = []
+    combined_categories: list[dict] = []
+
+    global_img_id = 1
+    global_ann_id = 1
+
+    for jf, coco in matching_coco:
+        img_id_map: dict[int, int] = {}
+        for img in coco.get("images", []):
+            old_id = img["id"]
+            new_img = dict(img)
+            new_img["id"] = global_img_id
+            new_img["source_file"] = jf
+            img_id_map[old_id] = global_img_id
+            combined_images.append(new_img)
+            global_img_id += 1
+
+        for ann in coco.get("annotations", []):
+            old_img_id = ann.get("image_id")
+            if old_img_id not in img_id_map:
+                continue
+            new_ann = dict(ann)
+            new_ann["id"] = global_ann_id
+            new_ann["image_id"] = img_id_map[old_img_id]
+            combined_annots.append(new_ann)
+            global_ann_id += 1
+
+        if not combined_categories and coco.get("categories"):
+            combined_categories = coco.get("categories")
+
+    print(f"Combined {len(matching_coco)} annotation file(s) for '{split_name}': {len(combined_images)} images, {len(combined_annots)} annotations.")
+
+    images_df = pd.DataFrame(combined_images)
+    annots_df = pd.DataFrame(combined_annots)
+    categories_df = pd.DataFrame(combined_categories)
+
+    if "bbox" in annots_df.columns:
+        annots_df["bbox"] = annots_df["bbox"].apply(list)
+
+    images_df = resolve_image_paths(images_df, dentex_path)
+    return images_df, annots_df, categories_df
+
+
+def load_dentex_dataset(
+    data_dir: str | Path | None = None,
+    split_name: str = "validation",
+    use_cache: bool = True,
+    combine_enumeration_splits: bool = False,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Top-level convenience loader for DENTEX dataset.
+
+    Checks local project data directories first for instant loading. If not found locally,
+    downloads or discovers files, auto-extracts zip archives, parses annotation files,
+    resolves local image paths, and returns (images_df, annots_df, categories_df).
+    
+    Set ``combine_enumeration_splits=True`` to merge all valid quadrant-enumeration subfolders
+    for split (e.g. quadrant-enumeration-disease + quadrant-enumeration for train).
+    """
+    if combine_enumeration_splits:
+        return load_combined_dentex_dataset(data_dir=data_dir, split_name=split_name, use_cache=use_cache)
+
+    local_dir = find_local_dentex_dir(data_dir, split_name)
+    if local_dir is not None:
+        dentex_path = local_dir
+    else:
+        print(f"Dataset for split '{split_name}' not found locally. Triggering download...")
+        dentex_path = download_dentex(
+            cache_dir=str(data_dir) if data_dir else None,
+            split_name=split_name,
+        )
+
+    extract_dentex_zips(dentex_path)
+    all_coco = discover_annotation_files(dentex_path)
+    best_path, best_coco = pick_best_annotation_file(all_coco, split_name=split_name)
     images_df, annots_df, categories_df = build_dataframes(
         best_coco, data_dir=str(data_dir) if data_dir else None, use_cache=use_cache, split_name=split_name
     )
+    if "source_file" not in images_df.columns:
+        images_df["source_file"] = best_path
     images_df = resolve_image_paths(images_df, dentex_path)
     return images_df, annots_df, categories_df
+

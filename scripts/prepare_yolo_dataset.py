@@ -27,9 +27,13 @@ def convert_to_yolo_format(output_dir: str | Path, split: str = "train", data_di
     images_out.mkdir(parents=True, exist_ok=True)
     labels_out.mkdir(parents=True, exist_ok=True)
     
-    print(f"Loading {split} split from DENTEX...")
+    print(f"Loading {split} split from DENTEX (combine_enumeration_splits={split == 'train'})...")
     try:
-        images_df, annots_df, _ = load_dentex_dataset(data_dir=data_dir, split_name=split)
+        images_df, annots_df, _ = load_dentex_dataset(
+            data_dir=data_dir,
+            split_name=split,
+            combine_enumeration_splits=(split == "train"),
+        )
     except Exception as e:
         print(f"Failed to load split '{split}': {e}")
         return
@@ -37,7 +41,7 @@ def convert_to_yolo_format(output_dir: str | Path, split: str = "train", data_di
     # Filter to only images that exist locally
     valid_images = images_df[images_df["local_path"].notna()].copy()
     
-    print(f"Found {len(valid_images)} valid images. Processing...")
+    print(f"Found {len(valid_images)} valid images for split '{split}'. Processing...")
     
     for _, img_row in tqdm(valid_images.iterrows(), total=len(valid_images)):
         img_id = img_row["id"]
@@ -91,13 +95,16 @@ def convert_to_yolo_format(output_dir: str | Path, split: str = "train", data_di
         if not yolo_lines:
             continue # Skip images with no valid tooth annotations
             
-        # Copy image to YOLO directory
-        dest_img_path = images_out / local_path.name
+        # Create a unique destination stem to prevent cross-folder collisions
+        folder_prefix = local_path.parent.parent.name
+        dest_stem = f"{folder_prefix}_{local_path.stem}" if folder_prefix else f"img_{img_id}_{local_path.stem}"
+        
+        dest_img_path = images_out / f"{dest_stem}{local_path.suffix}"
         if not dest_img_path.exists():
             shutil.copy2(local_path, dest_img_path)
             
         # Write YOLO label file
-        label_path = labels_out / f"{local_path.stem}.txt"
+        label_path = labels_out / f"{dest_stem}.txt"
         with open(label_path, "w") as f:
             f.write("\n".join(yolo_lines) + "\n")
             
