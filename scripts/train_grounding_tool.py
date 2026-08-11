@@ -67,12 +67,17 @@ def cross_validate(args):
         if not yaml_path.exists():
             raise FileNotFoundError(f"Missing {yaml_path}")
 
+        fold_dir = Path("data/models") / f"cv_fold_{fold}"
+        best_pt = fold_dir / "weights" / "best.pt"
+        last_pt = fold_dir / "weights" / "last.pt"
+
+        if resume and best_pt.exists():
+            print(f"\n  FOLD {fold + 1}/{n_folds} — already complete, skipping.")
+            continue
+
         print(f"\n{'=' * 60}")
         print(f"  FOLD {fold + 1}/{n_folds}")
         print(f"{'=' * 60}")
-
-        fold_dir = Path("data/models") / f"cv_fold_{fold}"
-        last_pt = fold_dir / "weights" / "last.pt"
 
         if resume and last_pt.exists():
             print(f"Resuming fold {fold} from {last_pt}")
