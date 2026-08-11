@@ -1,6 +1,7 @@
 import argparse
 import gc
 import json
+import os
 import shutil
 from pathlib import Path
 
@@ -8,11 +9,20 @@ import torch
 from ultralytics import YOLO
 
 
+def get_model_root() -> Path:
+    """Return the directory used for YOLO artifacts. Allows notebook/local overrides."""
+    override = os.environ.get("YOLO_MODELS_ROOT")
+    if override:
+        return Path(override).expanduser()
+    return Path("data/models")
+
+
 def train_single(yaml_path: str, args) -> dict:
     """Train a single YOLO model and return metrics."""
+    model_root = get_model_root()
     resume = getattr(args, "resume", False)
     if resume:
-        last_pt = Path("data/models/grounding_tool/weights/last.pt")
+        last_pt = model_root / "grounding_tool" / "weights" / "last.pt"
         if last_pt.exists():
             print(f"Resuming from {last_pt}")
             model = YOLO(str(last_pt))
@@ -28,7 +38,7 @@ def train_single(yaml_path: str, args) -> dict:
         imgsz=args.imgsz,
         batch=args.batch,
         device=args.device,
-        project="data/models",
+        project=str(model_root),
         name="grounding_tool",
         exist_ok=True,
     )
@@ -41,13 +51,14 @@ def train_single(yaml_path: str, args) -> dict:
     result = model.train(**train_kwargs)
 
     print("\nTraining Complete!")
-    print(f"Model saved to: data/models/grounding_tool/weights/best.pt")
+    print(f"Model saved to: {model_root / 'grounding_tool' / 'weights' / 'best.pt'}")
 
     return {}
 
 
 def cross_validate(args):
     """Train YOLO independently on each CV fold, report metrics, select best."""
+    model_root = get_model_root()
     cv_dir = Path("data/yolo_dentex_cv")
     summary_path = cv_dir / "fold_summary.json"
 
@@ -67,7 +78,7 @@ def cross_validate(args):
         if not yaml_path.exists():
             raise FileNotFoundError(f"Missing {yaml_path}")
 
-        fold_dir = Path("data/models") / f"cv_fold_{fold}"
+        fold_dir = model_root / f"cv_fold_{fold}"
         best_pt = fold_dir / "weights" / "best.pt"
         last_pt = fold_dir / "weights" / "last.pt"
 
@@ -91,7 +102,7 @@ def cross_validate(args):
             imgsz=args.imgsz,
             batch=args.batch,
             device=args.device,
-            project="data/models",
+            project=str(model_root),
             name=f"cv_fold_{fold}",
             exist_ok=True,
         )
@@ -122,8 +133,8 @@ def cross_validate(args):
     best_fold = best["fold"]
 
     # --- Copy best fold weights to final location ---
-    best_src = Path(f"data/models/cv_fold_{best_fold}/weights/best.pt")
-    best_dst = Path("data/models/grounding_tool_cv_best/weights/best.pt")
+    best_src = model_root / f"cv_fold_{best_fold}" / "weights" / "best.pt"
+    best_dst = model_root / "grounding_tool_cv_best" / "weights" / "best.pt"
     best_dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(best_src, best_dst)
 
@@ -160,7 +171,7 @@ def cross_validate(args):
         "mean_map50_95": mean_map50_95,
         "std_map50_95": std_map50_95,
     }
-    results_path = Path("data/models/grounding_tool_cv_best/cv_results.json")
+    results_path = model_root / "grounding_tool_cv_best" / "cv_results.json"
     results_path.parent.mkdir(parents=True, exist_ok=True)
     results_path.write_text(json.dumps(results_data, indent=2))
     print(f"  Results saved to: {results_path}")
