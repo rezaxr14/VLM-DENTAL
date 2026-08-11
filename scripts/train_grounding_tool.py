@@ -10,10 +10,19 @@ from ultralytics import YOLO
 
 def train_single(yaml_path: str, args) -> dict:
     """Train a single YOLO model and return metrics."""
-    model = YOLO(args.model)
+    resume = getattr(args, "resume", False)
+    if resume:
+        last_pt = Path("data/models/grounding_tool/weights/last.pt")
+        if last_pt.exists():
+            print(f"Resuming from {last_pt}")
+            model = YOLO(str(last_pt))
+        else:
+            print("No checkpoint found — starting from scratch.")
+            model = YOLO(args.model)
+    else:
+        model = YOLO(args.model)
 
-    print(f"Starting training on {args.device} for {args.epochs} epochs...")
-    result = model.train(
+    train_kwargs = dict(
         data=str(yaml_path),
         epochs=args.epochs,
         imgsz=args.imgsz,
@@ -23,6 +32,13 @@ def train_single(yaml_path: str, args) -> dict:
         name="grounding_tool",
         exist_ok=True,
     )
+    if hasattr(args, "patience") and args.patience:
+        train_kwargs["patience"] = args.patience
+    if resume:
+        train_kwargs["resume"] = True
+
+    print(f"Starting training on {args.device} for {args.epochs} epochs (patience={getattr(args, 'patience', 'N/A')})...")
+    result = model.train(**train_kwargs)
 
     print("\nTraining Complete!")
     print(f"Model saved to: data/models/grounding_tool/weights/best.pt")
@@ -44,6 +60,8 @@ def cross_validate(args):
     n_folds = summary["n_folds"]
     results = []
 
+    resume = getattr(args, "resume", False)
+
     for fold in range(n_folds):
         yaml_path = cv_dir / f"fold_{fold}" / "dataset.yaml"
         if not yaml_path.exists():
@@ -53,8 +71,16 @@ def cross_validate(args):
         print(f"  FOLD {fold + 1}/{n_folds}")
         print(f"{'=' * 60}")
 
-        model = YOLO(args.model)
-        result = model.train(
+        fold_dir = Path("data/models") / f"cv_fold_{fold}"
+        last_pt = fold_dir / "weights" / "last.pt"
+
+        if resume and last_pt.exists():
+            print(f"Resuming fold {fold} from {last_pt}")
+            model = YOLO(str(last_pt))
+        else:
+            model = YOLO(args.model)
+
+        train_kwargs = dict(
             data=str(yaml_path),
             epochs=args.epochs,
             imgsz=args.imgsz,
@@ -64,6 +90,12 @@ def cross_validate(args):
             name=f"cv_fold_{fold}",
             exist_ok=True,
         )
+        if hasattr(args, "patience") and args.patience:
+            train_kwargs["patience"] = args.patience
+        if resume and last_pt.exists():
+            train_kwargs["resume"] = True
+
+        result = model.train(**train_kwargs)
 
         metrics = {
             "fold": fold,
@@ -132,12 +164,14 @@ def cross_validate(args):
 def main():
     parser = argparse.ArgumentParser(description="Train YOLOv8 Grounding Tool on DENTEX.")
     parser.add_argument("--epochs", type=int, default=50, help="Number of training epochs")
+    parser.add_argument("--patience", type=int, default=None, help="Early stopping patience (epochs without improvement)")
     parser.add_argument("--batch", type=int, default=16, help="Batch size")
     parser.add_argument("--imgsz", type=int, default=640, help="Image size")
     parser.add_argument("--model", type=str, default="yolov8n.pt", help="Base model (yolov8n.pt, yolov8s.pt)")
     parser.add_argument("--device", type=str, default="0", help="Device to run on (e.g., '0' for GPU 0, 'cpu' for CPU)")
     parser.add_argument("--cross-validate", action="store_true", help="Run 5-fold cross-validation instead of single training")
     parser.add_argument("--folds", type=int, default=5, help="Number of CV folds (only used with --cross-validate)")
+    parser.add_argument("--resume", action="store_true", help="Resume training from last checkpoint if available")
     args = parser.parse_args()
 
     if args.cross_validate:
