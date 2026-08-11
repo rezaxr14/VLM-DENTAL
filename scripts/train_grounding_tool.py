@@ -138,6 +138,14 @@ def cross_validate(args):
     best_dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(best_src, best_dst)
 
+    # Keep every fold's best model reachable for later ensemble/ablation work.
+    for fold in range(n_folds):
+        src = model_root / f"cv_fold_{fold}" / "weights" / "best.pt"
+        if src.exists():
+            ensemble_dst = model_root / "fold_best_models" / f"fold_{fold}_best.pt"
+            ensemble_dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, ensemble_dst)
+
     # --- Print summary ---
     print(f"\n{'=' * 60}")
     print("  CROSS-VALIDATION RESULTS")

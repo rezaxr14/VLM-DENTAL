@@ -71,33 +71,43 @@ def download_dentex(
     repo_id: str = "ibrahimhamamci/DENTEX",
     cache_dir: str | None = None,
     split_name: str = "validation",
+    full: bool = False,
 ) -> Path:
-    """Download (or reuse cached) DENTEX dataset files.
-    
-    If split_name is 'validation' or 'val', downloads validation files directly
-    without waiting for the full 10GB training dataset.
+    """Download the DENTEX files needed for the active workload.
+
+    Default behavior is targeted: only the training/validation archives needed by the notebook
+    and the validation triple JSON. Set ``full=True`` to opt into the full repo snapshot when
+    you explicitly want the entire dataset.
     """
+    split_name = split_name.lower()
+
+    if full:
+        try:
+            dentex_path = snapshot_download(
+                repo_id=repo_id,
+                repo_type="dataset",
+                cache_dir=cache_dir,
+                max_workers=2,
+            )
+            return Path(dentex_path)
+        except Exception as e:
+            print(f"snapshot_download failed ({e}); falling back to targeted downloads...")
+
     if split_name in ("val", "validation"):
-        # Download validation assets directly
         val_zip = download_dentex_file("DENTEX/validation_data.zip", repo_id=repo_id, cache_dir=cache_dir)
         val_json = download_dentex_file("DENTEX/validation_triple.json", repo_id=repo_id, cache_dir=cache_dir)
         return val_zip.parent.parent
 
-    try:
-        dentex_path = snapshot_download(
-            repo_id=repo_id,
-            repo_type="dataset",
-            cache_dir=cache_dir,
-            max_workers=2,
-        )
-        return Path(dentex_path)
-    except Exception as e:
-        print(f"snapshot_download failed ({e}); falling back to file-by-file download...")
-        if split_name == "train":
-            download_dentex_file("DENTEX/training_data.zip", repo_id=repo_id, cache_dir=cache_dir)
-        download_dentex_file("DENTEX/validation_data.zip", repo_id=repo_id, cache_dir=cache_dir)
+    if split_name in ("train", "training"):
+        train_zip = download_dentex_file("DENTEX/training_data.zip", repo_id=repo_id, cache_dir=cache_dir)
+        val_zip = download_dentex_file("DENTEX/validation_data.zip", repo_id=repo_id, cache_dir=cache_dir)
         val_json = download_dentex_file("DENTEX/validation_triple.json", repo_id=repo_id, cache_dir=cache_dir)
-        return val_json.parent.parent
+        return train_zip.parent.parent
+
+    # Fallback for any non-standard split name: only grab the targeted validation bundle.
+    val_zip = download_dentex_file("DENTEX/validation_data.zip", repo_id=repo_id, cache_dir=cache_dir)
+    val_json = download_dentex_file("DENTEX/validation_triple.json", repo_id=repo_id, cache_dir=cache_dir)
+    return val_zip.parent.parent
 
 
 def extract_dentex_zips(root_dir: str | Path, remove_zips: bool = True) -> None:

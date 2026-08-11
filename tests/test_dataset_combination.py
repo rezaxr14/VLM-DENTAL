@@ -10,7 +10,7 @@ from pathlib import Path
 # Add project root to sys.path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from dental_agent.data.dentex import load_combined_dentex_dataset
+from dental_agent.data.dentex import download_dentex, load_combined_dentex_dataset
 from scripts.prepare_yolo_dataset import convert_to_yolo_format
 
 
@@ -82,6 +82,28 @@ def test_load_combined_dentex_dataset(mock_dentex_path: Path):
     # Ensure IDs were re-indexed uniquely
     assert list(images_df["id"]) == [1, 2], f"Expected IDs [1, 2], got {list(images_df['id'])}"
     assert list(annots_df["image_id"]) == [1, 2], f"Expected image_ids [1, 2], got {list(annots_df['image_id'])}"
+
+
+def test_download_dentex_trains_only_needed_files(monkeypatch, tmp_path):
+    requested = []
+
+    def fake_hf_hub_download(*args, **kwargs):
+        filename = kwargs["filename"]
+        requested.append(filename)
+        return str(tmp_path / filename.replace("/", "_"))
+
+    def fail_snapshot_download(*args, **kwargs):
+        raise AssertionError("Full DENTEX snapshot download should not be used for this notebook")
+
+    monkeypatch.setattr("dental_agent.data.dentex.hf_hub_download", fake_hf_hub_download)
+    monkeypatch.setattr("dental_agent.data.dentex.snapshot_download", fail_snapshot_download)
+
+    result = download_dentex(repo_id="ibrahimhamamci/DENTEX", cache_dir=str(tmp_path), split_name="train")
+
+    assert result == tmp_path
+    assert "DENTEX/training_data.zip" in requested
+    assert "DENTEX/validation_data.zip" in requested
+    assert "DENTEX/validation_triple.json" in requested
 
 
 def test_convert_to_yolo_format(mock_dentex_path: Path, tmp_path: Path):
