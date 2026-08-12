@@ -28,7 +28,7 @@ from dental_agent.agent.prompts import build_agent_system_prompt
 from dental_agent.tools.registry import ToolRegistry
 from dental_agent.training.api_pool import (
     call_llm,
-    get_gemini_pool,
+    get_provider_pool,
     AllKeysExhaustedToday,
 )
 from dental_agent.utils.serialization import to_jsonable
@@ -50,43 +50,14 @@ GENERATOR_PROVIDER = os.environ.get("GENERATOR_PROVIDER", "local")
 GENERATOR_MODEL = os.environ.get("GENERATOR_MODEL", "Qwen/Qwen3-VL-8B-Thinking")
 
 # ---------------------------------------------------------------------------
-# Verifier: deliberately NOT pinned to one named model. It just needs to be a
-# different model family than the generator, to reduce correlated blind spots.
-# Set VERIFIER_PROVIDER + VERIFIER_MODEL directly in .env to pick one explicitly;
-# otherwise the first provider below with both an API key AND a *_VERIFIER_MODEL
-# set is used automatically. Resolution is lazy (inside _resolve_verifier, called
-# from verify_trace) so importing this module doesn't require any of these keys
-# to be present.
+# Verifier: The new ProviderPool handles round-robining across external APIs
+# (NVIDIA, Groq, OpenRouter, Gemini) and enforces strict 5-minute cooldowns.
 # ---------------------------------------------------------------------------
-_VERIFIER_CANDIDATES: list[tuple[str, str, str]] = [
-    ("nvidia_nim", "NVIDIA_API_KEY", "NVIDIA_VERIFIER_MODEL"),
-    ("groq", "GROQ_API_KEY", "GROQ_VERIFIER_MODEL"),
-    ("openrouter", "OPENROUTER_API_KEY", "OPENROUTER_VERIFIER_MODEL"),
-    ("anthropic", "ANTHROPIC_API_KEY", "ANTHROPIC_VERIFIER_MODEL"),
-    ("gemini", "GEMINI_API_KEY", "GEMINI_VERIFIER_MODEL"),
-]
-
 
 def _resolve_verifier() -> tuple[str, str]:
-    """Pick (provider, model) for the verifier: explicit env override, else first
-    candidate with both an API key and a model name configured."""
-    explicit_provider = os.environ.get("VERIFIER_PROVIDER")
-    explicit_model = os.environ.get("VERIFIER_MODEL")
-    if explicit_provider and explicit_model:
-        return explicit_provider, explicit_model
-
-    for provider, key_env, model_env in _VERIFIER_CANDIDATES:
-        if _is_valid_key(os.environ.get(key_env)) and os.environ.get(model_env):
-            return provider, os.environ[model_env]
-
-    raise RuntimeError(
-        "No verifier configured. Set VERIFIER_PROVIDER + VERIFIER_MODEL directly in .env, "
-        "or set one of: NVIDIA_API_KEY + NVIDIA_VERIFIER_MODEL, GROQ_API_KEY + "
-        "GROQ_VERIFIER_MODEL, OPENROUTER_API_KEY + OPENROUTER_VERIFIER_MODEL, "
-        "ANTHROPIC_API_KEY + ANTHROPIC_VERIFIER_MODEL, or GEMINI_API_KEY + "
-        "GEMINI_VERIFIER_MODEL. The verifier just needs to be a different model family "
-        "than the generator — no specific model is required by this codebase."
-    )
+    """Pick (provider, model) for the verifier.
+    Delegates to 'auto_verifier' so api_pool.py's ProviderPool handles it."""
+    return "auto_verifier", "auto_model"
 
 
 VERIFIER_SYSTEM_PROMPT = (

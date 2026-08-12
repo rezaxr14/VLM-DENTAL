@@ -35,13 +35,11 @@ from dental_agent.config import load_config, load_env
 from dental_agent.data.dentex import load_dentex_dataset
 from dental_agent.training.api_pool import (
     AllKeysExhaustedToday,
-    get_gemini_pool,
+    get_provider_pool,
 )
 from dental_agent.training.trace_generation import (
     GENERATOR_MODEL,
     GENERATOR_PROVIDER,
-    VERIFIER_MODEL,
-    VERIFIER_PROVIDER,
     build_trace_example,
 )
 from dental_agent.utils.serialization import to_jsonable
@@ -104,10 +102,10 @@ def print_banner(pool: Any, completed_count: int, total_images: int) -> None:
     print("\n" + "=" * 70, flush=True)
     print("DENTAL AGENT: AUTONOMOUS DAILY CoT TRACE GENERATOR", flush=True)
     print("=" * 70, flush=True)
-    print(f"* Active Keys in Pool : {len(pool.keys)} Gemini API keys", flush=True)
-    print(f"* Configured Models   : {pool.models}", flush=True)
+    print(f"* Active API Providers: {pool.providers}", flush=True)
+    print(f"* Provider Limits     : {pool.cooldown}s cooldown, {pool.rpd_limit} RPD cap", flush=True)
     print(f"* Primary Generator   : {GENERATOR_PROVIDER}/{GENERATOR_MODEL}", flush=True)
-    print(f"* Groundedness Judge  : {VERIFIER_PROVIDER}/{VERIFIER_MODEL}", flush=True)
+    print(f"* Groundedness Judge  : auto_verifier (round-robin)", flush=True)
     print(f"* Dataset Progress    : {completed_count} / {total_images} images completed", flush=True)
     print("=" * 70 + "\n", flush=True)
 
@@ -161,7 +159,7 @@ def main() -> None:
     args = parse_args()
 
     output_path = Path(args.output)
-    pool = get_gemini_pool()
+    pool = get_provider_pool()
 
     # Load dataset
     imgs_df, annots_df, cats_df = load_dentex_dataset(
@@ -179,10 +177,10 @@ def main() -> None:
 
     print_banner(pool, len(completed_ids), total_eligible)
 
-    # Display key pool status table
-    status_df = pool.status()
     print("--- KEY POOL CAPACITY STATUS ---")
-    print(status_df.to_string(index=False))
+    for p in pool.providers:
+        calls = pool.state.get(p, {}).get("calls_today", 0)
+        print(f"Provider: {p:<15} Used: {calls}/{pool.rpd_limit}")
     print("-" * 70 + "\n")
 
     if args.status_only:
