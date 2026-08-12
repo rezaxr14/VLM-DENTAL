@@ -12,11 +12,19 @@ class ToothGrounder:
     """Singleton wrapper for the YOLOv8 grounding model to avoid reloading weights repeatedly."""
     _instance = None
     
-    def __init__(self, model_path: str = "data/models/grounding_tool/weights/best.pt"):
+    def __init__(self, model_path: str | None = None):
         if YOLO is None:
             raise ImportError("ultralytics is not installed. Run: pip install ultralytics")
-            
-        self.model_path = Path(model_path)
+
+        # NOTE: grounding tool is YOLOv8m trained with 5-fold cross-validation (not YOLOv8x).
+        # Decision: uses a single best-performing fold's weights, not an ensemble across all 5 —
+        # simpler and cheaper at inference time, and the single-fold validation numbers
+        # (mAP50 ≈ 0.647, R ≈ 0.90, P ≈ 0.588) already clear the bar this tool needs to hit.
+        # Point GROUNDING_MODEL_PATH at that fold's best.pt.
+        self.model_path = Path(
+            model_path
+            or os.environ.get("GROUNDING_MODEL_PATH", "data/models/grounding_tool_m/weights/best.pt")
+        )
         self.model = None
         
         if self.model_path.exists():
@@ -84,26 +92,31 @@ class ToothGrounder:
             "bbox": [round(x_min, 1), round(y_min, 1), round(w, 1), round(h, 1)]
         }
 
-def tool_locate_tooth(image: Image.Image, args: Dict[str, Any]) -> Dict[str, Any]:
+def tool_locate_tooth(image: Image.Image, tooth: int | str) -> Dict[str, Any]:
     """
     Locates a specific tooth using a trained YOLOv8 model and returns its bounding box.
-    
+
     Args:
         image: The panoramic radiograph (PIL.Image)
-        args: Dictionary containing:
-            - 'tooth' (int): The FDI tooth number to locate (e.g., 38 for lower-left 3rd molar).
-            
+        tooth: The FDI tooth number to locate (e.g., 38 for lower-left 3rd molar).
+
     Returns:
         Dictionary containing the bounding box [x, y, w, h] of the tooth, or an error message.
+
+    NOTE: this signature was previously `(image, args: Dict[str, Any])`, which does not match
+    how ToolRegistry.execute(name, **kwargs) actually calls tools (it passes flat keyword
+    arguments, e.g. tool=38, not a nested `args` dict) — every other tool in this module
+    already takes flat kwargs, so this was a real bug: any real call to locate_tooth through
+    the registry raised a TypeError, silently caught and reported as "tool execution failed"
+    by the caller. Fixed to match the flat-kwargs convention used everywhere else.
     """
-    tooth = args.get("tooth")
     if tooth is None:
         return {"error": "Missing required argument 'tooth' (FDI number)."}
-        
+
     try:
         tooth = int(tooth)
-    except ValueError:
+    except (TypeError, ValueError):
         return {"error": "Argument 'tooth' must be an integer (e.g., 38)."}
-        
+
     grounder = ToothGrounder.get_instance()
     return grounder.locate_tooth(image, tooth)

@@ -23,7 +23,7 @@ This is the heart of the project containing all reusable logic. It is imported b
 - `windowing.py`: **Contrast mapping tool.** Takes an input image and a tissue preset string (e.g., "bone"), and outputs a contrast-adjusted image mimicking a CT scan.
 - `denoise.py`: **Filtering tool.** Takes an input image and a method string ("bilateral" or "median"), and outputs a smoothed image with reduced grain/noise.
 - `contralateral.py`: **Comparison tool.** Takes an input image and a jaw quadrant integer, calculates the opposite side, and outputs a cropped image of the opposing side of the jaw for symmetry comparison.
-- `grounding.py`: **AI detection tool (WIP — gated behind a detection-quality threshold, e.g. val mAP50 > 0.5, before use in the live agent loop).** Takes an input image, passes it through our trained YOLOv8m model (trained with 5-fold cross-validation), and outputs an array of bounding boxes locating teeth and pathologies.
+- `grounding.py`: **AI detection tool.** Takes an input image, passes it through our trained YOLOv8m model (5-fold cross-validation, val mAP50 ≈ 0.647 — cleared the gating bar), and outputs an array of bounding boxes locating teeth and pathologies.
 - `fdi.py`: **Dental logic helper.** Takes quadrant and tooth position integers, handles the math for FDI two-digit tooth numbering, and outputs standardized positional data.
 - `contrast.py`: **Basic contrast tool.** Takes an input image and a float alpha/beta value, and outputs a manually brightened or darkened image.
 - `synthetic.py`: **Mock tools.** Takes mock arguments, used exclusively for testing the agent loop without real models, and outputs dummy responses.

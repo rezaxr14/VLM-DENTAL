@@ -4,7 +4,15 @@ API Key Pool and Rate Limiting for Multi-Provider Vision-Language Model Inferenc
 Manages round-robin rotation, requests-per-minute (RPM), and requests-per-day (RPD)
 quotas across Google Gemini keys, with automatic multi-model fallback (e.g., primary
 gemini-2.5-flash -> fallback gemini-1.5-flash for 40 RPD/key), and cached clients
-for Anthropic and OpenAI.
+for Anthropic, OpenAI, Groq, NVIDIA NIM, OpenRouter, and a locally-served model.
+
+Groq, NVIDIA NIM, OpenRouter, and a local vLLM server are all OpenAI-compatible
+(same /chat/completions surface, just a different base_url + API key), so they share
+one client factory (APISessionPool.get_openai_compatible) and one call_llm() branch
+instead of four separate SDK integrations. The "local" provider is the trace-generation
+teacher (Qwen3-VL-8B-Thinking, served via vLLM inside the same Kaggle/Colab session);
+the other three are candidates for the cross-family verifier role — deliberately not
+pinned to one specific model here, see trace_generation.py's verifier selection.
 """
 
 from __future__ import annotations
@@ -212,6 +220,7 @@ class APISessionPool:
     def __init__(self) -> None:
         self._openai_client: Any = None
         self._anthropic_client: Any = None
+        self._compat_clients: dict[str, Any] = {}
 
     def get_openai(self) -> Any:
         if self._openai_client is None:
@@ -230,6 +239,40 @@ class APISessionPool:
                 raise ValueError("ANTHROPIC_API_KEY environment variable is not set.")
             self._anthropic_client = Anthropic(api_key=api_key)
         return self._anthropic_client
+
+    def get_openai_compatible(self, provider: str) -> Any:
+        """Cached OpenAI-compatible client for any base_url-swappable provider.
+
+        Covers Groq, NVIDIA NIM, OpenRouter, and a locally-served model (vLLM) — all four
+        expose an OpenAI-compatible /chat/completions surface, so this is one client
+        constructor parameterized by base_url + api key env var, not four separate SDKs.
+        """
+        if provider in self._compat_clients:
+            return self._compat_clients[provider]
+
+        from openai import OpenAI
+
+        configs = {
+            "groq": ("https://api.groq.com/openai/v1", "GROQ_API_KEY"),
+            "nvidia_nim": ("https://integrate.api.nvidia.com/v1", "NVIDIA_API_KEY"),
+            "openrouter": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
+            # Local vLLM server, hosting Qwen3-VL-8B-Thinking, in the same Kaggle/Colab session.
+            "local": (os.environ.get("LOCAL_VLLM_BASE_URL", "http://localhost:8000/v1"), None),
+        }
+        if provider not in configs:
+            raise ValueError(f"Unknown OpenAI-compatible provider '{provider}'.")
+
+        base_url, api_key_env = configs[provider]
+        if api_key_env:
+            api_key = os.environ.get(api_key_env)
+            if not api_key:
+                raise ValueError(f"{api_key_env} environment variable is not set.")
+        else:
+            api_key = "not-needed-for-local-vllm"  # vLLM's OpenAI server doesn't check this
+
+        client = OpenAI(base_url=base_url, api_key=api_key)
+        self._compat_clients[provider] = client
+        return client
 
 
 _POOL = APISessionPool()
@@ -327,6 +370,65 @@ def call_llm(
                     ),
                 )
                 return resp.text.strip() if resp.text else ""
+
+            elif provider in ("groq", "nvidia_nim", "openrouter", "local"):
+                client = _POOL.get_openai_compatible(provider)
+
+                built_messages: list[dict[str, Any]] = []
+                if system_prompt:
+                    built_messages.append({"role": "system", "content": system_prompt})
+
+                if isinstance(user_content, list):
+                    # Multi-turn history in the standard {role, content} format used
+                    # throughout this codebase (content may be a string or a list of
+                    # {"type": "text"/"image", ...} parts).
+                    for msg in user_content:
+                        role = msg["role"]
+                        if role == "system":
+                            built_messages.insert(0, {"role": "system", "content": msg["content"]})
+                            continue
+                        payload = msg["content"]
+                        if isinstance(payload, str):
+                            built_messages.append({"role": role, "content": payload})
+                            continue
+                        parts: list[dict[str, Any]] = []
+                        for item in payload:
+                            if item["type"] == "text":
+                                parts.append({"type": "text", "text": item["text"]})
+                            elif item["type"] == "image":
+                                b64 = _pil_to_base64_jpeg(item["image"].convert("RGB"))
+                                parts.append({
+                                    "type": "image_url",
+                                    "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
+                                })
+                        built_messages.append({"role": role, "content": parts})
+                else:
+                    # Single-turn: system_prompt + one text block + optional single image.
+                    user_parts: list[dict[str, Any]] = []
+                    if image is not None:
+                        b64 = _pil_to_base64_jpeg(image)
+                        user_parts.append({
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
+                        })
+                    user_parts.append({"type": "text", "text": user_content})
+                    built_messages.append({"role": "user", "content": user_parts})
+
+                extra_headers = None
+                if provider == "openrouter":
+                    extra_headers = {
+                        "HTTP-Referer": os.environ.get("OPENROUTER_REFERER", "https://github.com/rezaxr14/VLM-DENTAL"),
+                        "X-Title": os.environ.get("OPENROUTER_TITLE", "VLM-DENTAL"),
+                    }
+
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=built_messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    extra_headers=extra_headers,
+                )
+                return response.choices[0].message.content or ""
 
             elif provider == "anthropic":
                 client = _POOL.get_anthropic()

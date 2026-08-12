@@ -2,38 +2,43 @@
 
 Repo: https://github.com/rezaxr14/VLM-DENTAL
 
-Before doing anything, read `AGENT_HANDOVER.md`, `ARCHITECTURE.md`, `roadmap.md`, and `dentex-agentic-vlm-proposal.md` in this repo — they were just updated to reflect the decisions below and are the current source of truth. If anything in existing code comments or notebooks contradicts these docs, the docs win; the code hasn't caught up yet.
+Read `AGENT_HANDOVER.md`, `ARCHITECTURE.md`, `roadmap.md`, and `dentex-agentic-vlm-proposal.md` in this repo first — they were just updated and are the current source of truth. Most of the LangGraph migration described below has already been **implemented** (code attached / already committed to this branch), not just planned — your job is mostly to test it in the real Kaggle/Colab + vLLM environment and finish the pieces that need a live GPU to verify.
 
-## What changed (reflected in the docs, not yet in code)
+## Branching
 
-1. **Trace generation moves off the Gemini API onto a local model.** `Qwen3-VL-8B-Thinking` is now the single backbone used both as the trace-generation teacher and the trained/deployed agent — the earlier staged 2B/3B-then-8B plan is dropped. It runs via vLLM inside a Kaggle or Colab notebook session specifically, not the developer's main PC.
+Current work-in-progress branch has been renamed to `api-trace-gen` (the old Gemini/fake-tool-call implementation, preserved). All of the work below happened on a new `langgraph` branch created off it, so nothing on `api-trace-gen` was touched or lost.
 
-2. **The trace-gen loop is rebuilt on LangGraph with real tool execution.** The previous `trace_generation.py` pre-computed tool outputs for every ground-truth pathology and had the model write `<fake_tool_call>` XML tags narrating a tool use it never actually performed. That's being replaced: tool calls now execute for real (real crop, real windowing, etc.) against the source image, and the real result — not a pre-computed stand-in — is what gets appended to the trajectory.
+## What's already implemented
 
-3. **Ground-truth direction is intentionally kept, not removed.** Generation still conditions on the known ground-truth label and seeds tool coordinates from the ground-truth bounding box. This is a deliberate yield/quality decision — blind exploration on an untuned model would produce too much wrong/unusable data for the dataset being built — not something to "fix away." The only thing that changed is that the tool calls are now real.
+1. **`dental_agent/agent/langgraph_loop.py` (new file).** A real LangGraph `StateGraph` that drives ground-truth-directed generation with actual tool execution — no more `<fake_tool_call>`. The model is still told the correct diagnosis and given ground-truth bounding boxes as a hint (kept deliberately), but every tool call now runs for real against the source image.
 
-4. **Grounding tool is YOLOv8m (not YOLOv8x), trained with 5-fold cross-validation.** The CV code already exists but has not been tested yet — needs a real test pass before being trusted. `locate_tooth` stays gated out of the live agent loop until the detector clears a quality bar (suggested: val mAP50 > 0.5).
+2. **`dental_agent/training/trace_generation.py` (rewritten).** `generate_interactive_trajectory()` now delegates to the LangGraph loop above instead of the old pre-compute-then-narrate scheme (~280 lines of fake-tool-call regex-stitching logic removed). `build_trace_example()` and `run_aim1_batch()` are unchanged in structure. The verifier provider/model is now resolved generically — see `_resolve_verifier()`: no model is hardcoded, it picks the first configured candidate from NVIDIA NIM / Groq / OpenRouter / Anthropic / Gemini (whichever has both an API key and a `*_VERIFIER_MODEL` set in `.env`), or honors an explicit `VERIFIER_PROVIDER`/`VERIFIER_MODEL` override.
 
-5. **The verifier stays model-agnostic everywhere** — in docs, code, and config. Don't hardcode a specific model name as the verifier; describe/configure it as "a different model family than the generator." This should be a config value, never a hardcoded string.
+3. **`dental_agent/training/api_pool.py` (extended).** Added NVIDIA NIM, Groq, OpenRouter, and a `"local"` provider (your vLLM server) — all four are OpenAI-compatible, so this is one new `call_llm()` branch and one cached-client factory (`APISessionPool.get_openai_compatible`), not four separate SDK integrations. Verified current base URLs: Groq `https://api.groq.com/openai/v1`, NVIDIA NIM `https://integrate.api.nvidia.com/v1`, OpenRouter `https://openrouter.ai/api/v1`, local vLLM `http://localhost:8000/v1` (configurable via `LOCAL_VLLM_BASE_URL`). **Known gotcha:** there are reports of NVIDIA NIM returning 403 with some OpenAI-compatible clients even with a valid key — if you hit that, try setting a custom `User-Agent` header on the client before assuming the key is bad.
 
-## What to actually build
+4. **Two real bugs found and fixed** while reading the actual code (these were invisible before because the fake-tool-call scheme never really executed tools, so they never surfaced):
+   - `dental_agent/agent/loop.py` special-cased tool dispatch by hardcoded name (`zoom_crop`, `enhance_contrast`, `locate_abnormal_teeth`) — but `enhance_contrast` and `locate_abnormal_teeth` aren't actually registered by `ToolRegistry.create_default()`, and `window_level`/`denoise`/`contralateral_compare`/`locate_tooth` all fell into the generic branch, which did `json.dumps()` on a `PIL.Image` and crashed. Fixed to dispatch generically by the tool's actual return type — this affects **eval and ablations too**, not just trace-gen, since they also go through `loop.py`.
+   - `dental_agent/tools/grounding.py`'s `tool_locate_tooth(image, args: Dict)` didn't match how `ToolRegistry.execute(name, **kwargs)` actually calls tools (flat kwargs, not a nested dict) — every real call to `locate_tooth` would have raised a `TypeError`. Fixed to `tool_locate_tooth(image, tooth)`, matching every other tool's convention.
 
-1. Stand up local serving: vLLM (or an equivalent OpenAI-compatible server) hosting Qwen3-VL-8B-Thinking (4-bit) inside the notebook session, reachable on `localhost` — no tunneling needed since generation and serving are in the same session.
-2. Rebuild `dental_agent/agent/loop.py` as a LangGraph graph: a model node pointed at the local vLLM endpoint, plus tool nodes wired to the existing functions in `dental_agent/tools/` (`zoom_crop.py`, `windowing.py`, `denoise.py`, `contralateral.py`, `fdi.py`) via `dental_agent/tools/registry.py`. Reuse `dental_agent/agent/prompts.py` and `dental_agent/agent/parsing.py` where possible — double-check `parsing.py` correctly handles Qwen3-VL-Thinking's `<think>...</think>` output, since it was originally built against Gemini's response format.
-3. Update `dental_agent/training/api_pool.py` to route generation calls to the local vLLM endpoint, keeping the existing Gemini/Anthropic routing available only for the verifier step.
-4. Rewrite `generate_interactive_trajectory()` in `dental_agent/training/trace_generation.py`: drop the pre-computation + `<fake_tool_call>` insertion step; drive the new LangGraph loop instead, still seeded with the ground-truth label and coordinates. Keep the final-answer-vs-ground-truth rejection sampling. Keep the LLM-judge verifier pass, but consider making it a sampled check rather than running it on every trace, now that generation itself is cheap and local.
-5. Update `scripts/run_daily_trace_generator.py` and both `configs/default.yaml` / `configs/rtx4090.yaml` for the new local-serving setup (model path, vLLM port, quantization settings). Both configs should reference the same Qwen3-VL-8B-Thinking backbone — they should differ only in GRPO group size (4 vs. 8), not model size.
-6. Test the 5-fold cross-validation code for the YOLOv8m grounding tool — it's written but unverified.
-7. Check `gemini_key_state.json` at the repo root before any further commits — confirm it holds only rotation bookkeeping, not actual key material, since this repo is public.
-8. Add `langgraph` and an OpenAI-compatible client (e.g. `langchain-openai`, pointed at the local vLLM `base_url`) to `requirements.txt` / `pyproject.toml`.
+5. **Grounding tool is done, not gated.** YOLOv8m, 5-fold cross-validation, validation mAP50 ≈ 0.647 (R ≈ 0.90, P ≈ 0.588) — past the quality bar we'd set, so `locate_tooth` is live in the agent loop, not held back. `dental_agent/tools/grounding.py`'s model path is now read from `GROUNDING_MODEL_PATH` (env var) instead of hardcoded — point it at wherever your best fold's `best.pt` actually lives. **Open decision, not resolved by this pass:** whether to use a single best fold or ensemble predictions across all 5 — currently defaults to a single model path.
+
+6. **Configs and `.env.example` updated**: single `Qwen3-VL-8B-Thinking` backbone in `configs/default.yaml` (was `Qwen3-VL-2B-Instruct`); `configs/rtx4090.yaml` no longer overrides model name (was silently diverging from default.yaml — now both configs use the same backbone, differing only in GRPO group size); `requirements.txt` has `langgraph==1.2.11` added; `.env.example` has new sections for local vLLM serving and the three new verifier candidates.
+
+## What's NOT done — needs a real environment to finish
+
+1. **Actually stand up vLLM** hosting Qwen3-VL-8B-Thinking inside the Kaggle/Colab session and confirm `LOCAL_VLLM_BASE_URL` reaches it. Nothing here was tested against a live model — I don't have GPU access to verify the LangGraph loop actually round-trips correctly with real generations.
+2. **Check `dental_agent/agent/parsing.py`** handles Qwen3-VL-Thinking's `<think>...</think>` output correctly — it wasn't built with that in mind (it was built against Gemini's response format), and I didn't have a live model to test against. It's probably fine since it brace-matches for standalone JSON blocks, but verify with a real transcript.
+3. **`scripts/run_daily_trace_generator.py` and `dental_agent/cli.py`** haven't been touched — check whether they need updating for the new default provider/model.
+4. **Test the actual generation quality** — genuine tool-grounded trace yield may be lower than the old fake-tool-call scheme's, since the model now actually has to call tools correctly to see anything. Worth checking the verified-trace yield rate isn't collapsing before running this at scale.
+5. **Check `gemini_key_state.json`** at the repo root before any further commits — confirm it holds only rotation bookkeeping, not real key material, since this repo is public.
 
 ## Don't do
 
 - Don't reintroduce `<fake_tool_call>` or any pre-computed-then-narrated tool output.
 - Don't remove ground-truth conditioning from trace generation — that stays.
 - Don't hardcode a specific verifier model name anywhere in code, configs, or docs.
-- Don't wire `locate_tooth` into the live agent loop before the YOLOv8m detector clears its quality gate.
+- Don't revert `loop.py`'s generic image-tool dispatch back to the hardcoded elif chain — that reintroduces the confirmed bug.
 
 ## Not in scope for this pass
 
-SFT (`sft.py`), GRPO (`grpo.py`), and the evaluation harness (`dental_agent/evaluation/`) don't need changes yet — this pass is trace-generation only. The one thing worth flagging ahead for the GRPO stage: `rewards/components.py`'s tool-validity term should eventually check that a claimed finding was preceded by a real supporting tool call, not just that the format is valid — but that's for later, not this handover.
+SFT (`sft.py`), GRPO (`grpo.py`), and the evaluation harness (`dental_agent/evaluation/`) weren't touched — this pass is trace-generation only. Ahead for GRPO: `rewards/components.py`'s tool-validity term should eventually check that a claimed finding was preceded by a real supporting tool call, not just that the format is valid.

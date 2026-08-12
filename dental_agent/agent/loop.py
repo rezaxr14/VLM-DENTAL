@@ -128,30 +128,32 @@ def run_agent(
         turn_record["tool_name"] = tool_name
         turn_record["tool_args"] = tool_args
 
+        # NOTE: previously this branched on hardcoded tool names (zoom_crop, enhance_contrast,
+        # locate_abnormal_teeth) — but enhance_contrast and locate_abnormal_teeth aren't actually
+        # registered by ToolRegistry.create_default(), and window_level/denoise/
+        # contralateral_compare/locate_tooth all fell into the generic `else` branch, which did
+        # json.dumps(tool_out) on what these tools actually return (a PIL.Image for the first
+        # three), raising a TypeError caught by the except below and silently reported as "tool
+        # execution failed." Fixed to dispatch generically by the tool's actual return type.
+        IMAGE_INPUT_TOOLS = {"zoom_crop", "window_level", "denoise", "contralateral_compare"}
         try:
-            if tool_name == "zoom_crop":
-                tool_out = registry.execute("zoom_crop", image=current_image, **tool_args)
-                current_image = tool_out
-                observation_content = [
-                    {"type": "image", "image": tool_out},
-                    {"type": "text", "text": f"Result of zoom_crop around {tool_args.get('bbox')}:"},
-                ]
-            elif tool_name == "enhance_contrast":
-                tool_out = registry.execute("enhance_contrast", image=current_image, **tool_args)
-                current_image = tool_out
-                observation_content = [
-                    {"type": "image", "image": tool_out},
-                    {"type": "text", "text": "Result of enhance_contrast:"},
-                ]
-            elif tool_name == "locate_abnormal_teeth":
-                tool_out = registry.execute("locate_abnormal_teeth", image_id=image_id)
-                observation_content = [
-                    {"type": "text", "text": f"Found candidate abnormal teeth: {json.dumps(tool_out)}"}
-                ]
+            if tool_name in IMAGE_INPUT_TOOLS:
+                tool_out = registry.execute(tool_name, image=current_image, **tool_args)
+            elif tool_name == "locate_tooth":
+                tool_out = registry.execute(tool_name, image=base_image, **tool_args)
             else:
                 tool_out = registry.execute(tool_name, **tool_args)
+
+            if isinstance(tool_out, Image.Image):
+                current_image = tool_out
                 observation_content = [
-                    {"type": "text", "text": f"Tool output: {json.dumps(tool_out)}"}
+                    {"type": "image", "image": tool_out},
+                    {"type": "text", "text": f"Result of {tool_name}:"},
+                ]
+            else:
+                from dental_agent.utils.serialization import to_jsonable
+                observation_content = [
+                    {"type": "text", "text": f"Tool output: {json.dumps(to_jsonable(tool_out))}"}
                 ]
 
             turn_record["tool_ok"] = True

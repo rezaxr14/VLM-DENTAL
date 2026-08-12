@@ -11,11 +11,18 @@ data:
   parquet_cache: true
 
 model:
-  name: "Qwen/Qwen3-VL-2B-Instruct"
+  name: "Qwen/Qwen3-VL-8B-Thinking"
   load_in_4bit: true
   bnb_quant_type: "nf4"
   bnb_compute_dtype: "bfloat16"
   bnb_double_quant: true
+
+vllm:
+  # Local vLLM server hosting the model above, inside the same Kaggle/Colab session
+  # (no tunneling needed — trace-gen and serving run in one process/notebook).
+  base_url: "http://localhost:8000/v1"
+  port: 8000
+  quantization: "awq"  # or your preferred 4-bit quant scheme
 
 training:
   lora:
@@ -58,14 +65,18 @@ training:
   detector_lr: 5.0e-4
 
 api:
-  generator_provider: "gemini"
-  generator_model: "gemini-3.6-flash"
-  verifier_provider: "anthropic"
-  verifier_model: "claude-opus-4-1"
+  generator_provider: "local"
+  generator_model: "Qwen/Qwen3-VL-8B-Thinking"
+  # Verifier: deliberately not pinned to a specific model here — set VERIFIER_PROVIDER /
+  # VERIFIER_MODEL in .env, or set one of NVIDIA_VERIFIER_MODEL / GROQ_VERIFIER_MODEL /
+  # OPENROUTER_VERIFIER_MODEL / ANTHROPIC_VERIFIER_MODEL / GEMINI_VERIFIER_MODEL alongside
+  # its API key. See dental_agent/training/trace_generation.py::_resolve_verifier.
+  verifier_provider: ""
+  verifier_model: ""
   gemini_rpm_limit: 5
   gemini_rpd_limit: 20
   gemini_safety_margin: 0.95
-  trace_candidates_k: 3
+  trace_candidates_k: 1
   max_retries: 3
   retry_delay: 5.0
 

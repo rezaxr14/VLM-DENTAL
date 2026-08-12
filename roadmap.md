@@ -29,7 +29,7 @@ This document outlines the current state of the VLM-DENTAL project, the mileston
 ## 🟡 Currently In Progress (User Action Required)
 
 - **Dataset Trace Generation:** Running `run_daily_trace_generator.py` on Colab/Kaggle to build the synthetic dataset of expert demonstrations — now driven by a locally-hosted Qwen3-VL-8B-Thinking via a real LangGraph tool-execution loop instead of the Gemini API.
-- **YOLO Grounding Tool Training:** Running the `yolov8m.pt` training loop with 5-fold cross-validation to create the dense bounding-box tool for the VLM agent; cross-validation code is written and needs testing.
+- **YOLO Grounding Tool Training:** Done. `yolov8m.pt` trained with 5-fold cross-validation; validation mAP50 ≈ 0.647 (R ≈ 0.90, P ≈ 0.588) — past the quality bar, `locate_tooth` is now live in the agent loop rather than held back.
 
 ---
 
