@@ -48,3 +48,20 @@ def test_parse_invalid_text() -> None:
     assert parse_agent_json("This is definitely not JSON.") is None
     assert parse_agent_json("") is None
     assert parse_agent_json(None) is None
+
+
+def test_parse_think_block() -> None:
+    raw = """<think>
+This is my reasoning process. I am thinking about how to solve the problem.
+{ "tool": "this_should_be_ignored" }
+</think>
+```json
+{
+  "tool": "zoom_crop",
+  "args": {"bbox": [10, 20, 30, 40]}
+}
+```"""
+    parsed = parse_agent_json(raw)
+    assert parsed is not None
+    assert parsed.get("tool") == "zoom_crop"
+

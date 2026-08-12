@@ -22,6 +22,10 @@ def parse_agent_json(text: str) -> Optional[dict[str, Any]]:
         return None
 
     cleaned = text.strip()
+    
+    # Explicitly strip out <think> blocks (used by models like Qwen3-VL-Thinking)
+    cleaned = re.sub(r"<think>.*?</think>", "", cleaned, flags=re.IGNORECASE | re.DOTALL)
+    cleaned = cleaned.strip()
 
     # 1. Look for explicit XML tool calls, but we only care about the REAL final_answer or dynamic tool.
     # The real answer is usually at the very end. Let's try to find a standalone JSON blob that contains "tool" or "final_answer".
