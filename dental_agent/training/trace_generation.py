@@ -30,6 +30,7 @@ from dental_agent.training.api_pool import (
     call_llm,
     get_provider_pool,
     AllKeysExhaustedToday,
+    verify_local_server_health,
 )
 from dental_agent.utils.serialization import to_jsonable
 
@@ -271,6 +272,15 @@ def run_aim1_batch(
             try:
                 for attempt in range(max_retries):
                     try:
+                        if GENERATOR_PROVIDER == "local":
+                            health_retries = 0
+                            while not verify_local_server_health(timeout=5.0):
+                                health_retries += 1
+                                if health_retries > 24:
+                                    raise RuntimeError("Local vLLM server is unresponsive for > 2 minutes. Aborting batch.")
+                                print(f"Local vLLM server unresponsive. Waiting 5s... ({health_retries}/24)")
+                                time.sleep(5)
+                                
                         result = build_trace_example(
                             image_id=image_id,
                             images_df=images_df,

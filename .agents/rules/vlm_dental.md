@@ -1,0 +1,27 @@
+# VLM-DENTAL Custom Rules & Guidelines
+
+When working on the `VLM-DENTAL` repository, adhere strictly to the following rules to ensure compatibility with the existing training pipelines and verification systems.
+
+## 1. DENTEX "0-Index" Quirk (CRITICAL)
+The DENTEX JSON labels map `category_id_1` to quadrants and `category_id_2` to tooth positions using a **0-indexed system** (Quadrant: 0=Upper Right ... 3=Lower Right. Position: 0 to 7).
+
+**Rule:** The LLM and all Agent Prompts explicitly demand the use of **FDI Two-Digit Notation** (Quadrants 1-4, Positions 1-8). 
+- **DO NOT** pass 0-indexed quadrants to the Verifier or LLM. It will reject perfectly valid traces.
+- `trace_generation.py` handles the translation automatically. DO NOT remove that logic.
+
+## 2. Tool Registration & Image Arguments
+All AI diagnostic tools simulate a radiologist's workstation. 
+- **Rule:** Any new tool created must be registered in `dental_agent/tools/registry.py`.
+- **Rule:** If a tool manipulates pixels, it MUST take `image: Image.Image` as an argument.
+
+## 3. Tool Execution & LangGraph
+The LangGraph loop (`langgraph_loop.py`) runs tool calls dynamically and for real against the base image.
+- **Rule:** Do not revert to or reintroduce the `<fake_tool_call>` or pre-computed-then-narrated tool output paradigms.
+- **Rule:** Always enforce that the model uses tools (e.g., `locate_tooth`, `zoom_crop`) before issuing a final diagnosis.
+
+## 4. No Hardcoded Verifier Models
+- **Rule:** Do not hardcode a specific verifier model name anywhere in code, configs, or docs. The system dynamically resolves it based on active keys in `.env` (via `api_pool.py`).
+
+## 5. Git Commit & Push Policy
+- **Rule:** When writing or saving code, ONLY commit your changes locally to the git repository. 
+- **DO NOT** push commits to the remote GitHub repository. The user will manually review and push the changes if necessary.

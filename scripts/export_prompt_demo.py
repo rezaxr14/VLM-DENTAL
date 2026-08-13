@@ -14,6 +14,7 @@ from dental_agent.tools.windowing import tool_window_level
 from dental_agent.tools.denoise import tool_denoise
 from dental_agent.tools.zoom_crop import tool_zoom_crop
 from dental_agent.tools.contralateral import tool_contralateral_compare
+from dental_agent.tools.grounding import tool_locate_tooth
 
 def main():
     parser = argparse.ArgumentParser(description="Export a full prompt and tool execution demo for a specific DENTEX image.")
@@ -110,29 +111,31 @@ def main():
             crop_index += 1
         except Exception as e:
             print(f"Skipping contralateral for bbox {bbox}: {e}")
+            
+        # Execute locate_tooth for this finding
+        fdi_num = int(f"{fdi_quadrant}{fdi_position}")
+        try:
+            loc_result = tool_locate_tooth(base_img, fdi_num)
+            with open(os.path.join(out_dir, f'{crop_index}_locate_tooth_{fdi_num}.json'), 'w') as lf:
+                json.dump(loc_result, lf)
+            crop_index += 1
+        except Exception as e:
+            print(f"Skipping locate_tooth for {fdi_num}: {e}")
 
 
     # Create prompt text
     print("Generating exact LLM prompt...")
     sys_prompt = build_agent_system_prompt(registry.format_tool_descriptions())
     
-    directive = f"TEACHER DIRECTIVE: You are generating an expert demonstration trace for SFT.\nYou MUST eventually reach this exact diagnosis: {json.dumps(findings)}\n\nTo save API calls, I have already pre-computed ALL standard tool outputs for you:\n"
-    directive += "- window_level(preset='bone')\n- window_level(preset='enamel')\n- window_level(preset='soft_tissue')\n"
-    directive += "- denoise(method='bilateral')\n- denoise(method='median')\n"
-
-    for gt in findings:
-        quad = gt.get('quadrant')
-        bbox = gt.get('bbox')
-        directive += f"- contralateral_compare(bbox={bbox}, quadrant={quad})\n"
-        directive += f"- zoom_crop(bbox={bbox})\n"
-
-    directive += "\nCRITICAL INSTRUCTIONS:\n"
-    directive += "1. You MUST NOT provide the final answer immediately!\n"
-    directive += "2. Review the pre-computed images. You must pick the ones most useful for this diagnosis and write a fake tool call when you use them using this exact XML format:\n"
-    directive += '<fake_tool_call>{"tool": "<tool_name>", "args": {<args>}}</fake_tool_call>\n'
-    directive += "3. You must use several tools in your reasoning chain to arrive at the answer.\n"
-    directive += "4. If you need a tool that was NOT pre-computed, output a standard JSON tool call (WITHOUT XML tags) and stop. I will provide the result in the next turn.\n"
-    directive += "5. Once you have used the tools to verify the findings, output your final_answer JSON."
+    directive = (
+        "TEACHER DIRECTIVE: You are generating an expert demonstration trace for SFT.\n"
+        f"You MUST eventually reach this exact diagnosis: {json.dumps(findings)}\n\n"
+        "The ground-truth findings above tell you what's there and roughly where — use that "
+        "as your starting hint for where to look, not as something to restate without checking. "
+        "Use zoom_crop / window_level / denoise / contralateral_compare / locate_tooth for real "
+        "to inspect each region before your final answer. You MUST use at least one tool before "
+        "answering — do not output final_answer on the first turn."
+    )
     
     user_prompt = f"Analyze this panoramic X-ray. Identify any abnormal teeth and determine the diagnosis.\n\n{directive}"
 

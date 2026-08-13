@@ -228,6 +228,31 @@ def image_to_b64(img: Image.Image) -> str:
 # Universal LLM caller
 # ---------------------------------------------------------------------------
 
+import urllib.request
+import urllib.error
+
+def verify_local_server_health(timeout: float = 5.0) -> bool:
+    """
+    Pings the local vLLM server to ensure it is responsive.
+    Returns True if healthy, False otherwise.
+    """
+    base_url = os.environ.get("LOCAL_VLLM_BASE_URL", "http://localhost:8000/v1")
+    health_url = base_url.replace("/v1", "/health")
+    
+    try:
+        req = urllib.request.Request(health_url)
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            return response.getcode() == 200
+    except Exception:
+        # Fallback to checking /v1/models if /health doesn't exist or vLLM version varies
+        try:
+            models_url = f"{base_url}/models"
+            req = urllib.request.Request(models_url)
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                return response.getcode() == 200
+        except Exception:
+            return False
+
 def call_llm(
     provider: str,
     model: str,

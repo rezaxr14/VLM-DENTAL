@@ -9,15 +9,6 @@ yield of usable, correctly-labeled training data. What changed is that every too
 the model makes now executes for real against the source image; the model receives the
 actual resulting crop/window/contrast output at each turn, not a pre-computed stand-in
 paired with a narrated tool-call tag it never actually triggered.
-
-This module talks to the generator model through api_pool.call_llm(provider="local", ...),
-i.e. a vLLM OpenAI-compatible server hosting Qwen3-VL-8B-Thinking inside the same
-Kaggle/Colab session — not a direct in-process HF model/processor pair. For direct
-HF-transformers generation against an already-loaded model+processor (used for SFT/GRPO-
-model evaluation, batch_runner.py, ablations.py), see dental_agent/agent/loop.py — that's
-a different, legitimate serving mode for a different purpose and is intentionally untouched
-here beyond the tool-dispatch bugfix (image-returning tools crashing the generic
-json.dumps() branch, and locate_tooth's mismatched signature — see loop.py and grounding.py).
 """
 
 from __future__ import annotations
@@ -41,11 +32,7 @@ from dental_agent.utils.serialization import to_jsonable
 
 # Tools that take `image` and return a PIL.Image. Always executed against the base
 # image (not whatever the model most recently zoomed into) to avoid compounding crop
-# drift across turns — matching the "prevent state corruption" reasoning the old
-# trace_generation.py already documented for this same set of tools, rather than
-# loop.py's cumulative-crop behavior. Worth reconciling the two loops on this point
-# at some point; not done here to avoid changing loop.py's behavior for its existing
-# eval/ablation consumers.
+# drift across turns.
 IMAGE_INPUT_TOOLS = {"zoom_crop", "window_level", "denoise", "contralateral_compare"}
 
 
@@ -55,12 +42,14 @@ class TraceGenState(TypedDict):
     turns: list[dict[str, Any]]
     tool_calls: int
     final_answer: Any
-    status: str  # "running" | "done" | "error"
+    status: str  # "running" | "needs_tool" | "done" | "error"
     error: str | None
+    consecutive_parse_errors: int
+    pending_tool_call: dict[str, Any] | None
 
 
-def _model_node_factory(registry: ToolRegistry, provider: str, model: str, max_tool_calls: int):
-    def _model_node(state: TraceGenState) -> TraceGenState:
+def _reasoning_node_factory(provider: str, model: str, max_tool_calls: int):
+    def _reasoning_node(state: TraceGenState) -> TraceGenState:
         if state["tool_calls"] >= max_tool_calls and state["final_answer"] is None:
             state["status"] = "error"
             state["error"] = f"max_tool_calls ({max_tool_calls}) reached without a final_answer"
@@ -85,13 +74,35 @@ def _model_node_factory(registry: ToolRegistry, provider: str, model: str, max_t
         }
 
         if not parsed:
-            turn_record["status"] = "unparseable"
-            state["turns"].append(turn_record)
-            state["status"] = "error"
-            state["error"] = f"Unparseable model output on turn {turn_record['turn']}: {raw[:300]}"
+            state["consecutive_parse_errors"] += 1
+            if state["consecutive_parse_errors"] >= 3:
+                turn_record["status"] = "unparseable_fatal"
+                state["turns"].append(turn_record)
+                state["status"] = "error"
+                state["error"] = f"Unparseable model output on turn {turn_record['turn']}: {raw[:300]}"
+            else:
+                turn_record["status"] = "unparseable_retry"
+                state["turns"].append(turn_record)
+                state["messages"].append({
+                    "role": "user", 
+                    "content": "Error: Your output was not valid JSON or could not be parsed. Please correct the format and output a single JSON object."
+                })
+                state["status"] = "running"
             return state
 
+        # Successfully parsed, reset errors
+        state["consecutive_parse_errors"] = 0
+
         if "final_answer" in parsed:
+            if state["tool_calls"] == 0:
+                turn_record["status"] = "rejected_final_answer"
+                state["turns"].append(turn_record)
+                state["messages"].append(
+                    {"role": "user", "content": "Error: You MUST use at least one tool before providing a final answer."}
+                )
+                state["status"] = "running"
+                return state
+
             state["final_answer"] = parsed["final_answer"]
             turn_record["status"] = "final_answer"
             state["turns"].append(turn_record)
@@ -101,12 +112,41 @@ def _model_node_factory(registry: ToolRegistry, provider: str, model: str, max_t
         tool_name = parsed.get("tool")
         tool_args = parsed.get("args", {}) or {}
 
-        if not tool_name or not registry.get(tool_name):
+        if not tool_name:
+            turn_record["status"] = "invalid_tool_format"
+            state["turns"].append(turn_record)
+            state["messages"].append(
+                {"role": "user", "content": "Error: Missing 'tool' key in JSON output."}
+            )
+            state["status"] = "running"
+            return state
+
+        state["pending_tool_call"] = {"tool": tool_name, "args": tool_args, "turn_record": turn_record}
+        state["status"] = "needs_tool"
+        return state
+
+    return _reasoning_node
+
+
+def _tool_node_factory(registry: ToolRegistry):
+    def _tool_node(state: TraceGenState) -> TraceGenState:
+        pending = state.get("pending_tool_call")
+        if not pending:
+            state["status"] = "error"
+            state["error"] = "Tool node called but no pending tool call found."
+            return state
+
+        tool_name = pending["tool"]
+        tool_args = pending["args"]
+        turn_record = pending["turn_record"]
+
+        if not registry.get(tool_name):
             turn_record["status"] = "invalid_tool"
             state["turns"].append(turn_record)
             state["messages"].append(
                 {"role": "user", "content": f"Error: Tool '{tool_name}' is not recognized."}
             )
+            state["pending_tool_call"] = None
             state["status"] = "running"
             return state
 
@@ -141,14 +181,19 @@ def _model_node_factory(registry: ToolRegistry, provider: str, model: str, max_t
             state["messages"].append({"role": "user", "content": f"Tool execution failed: {e}"})
 
         state["turns"].append(turn_record)
+        state["pending_tool_call"] = None
         state["status"] = "running"
         return state
 
-    return _model_node
+    return _tool_node
 
 
 def _route(state: TraceGenState) -> str:
-    return "model" if state["status"] == "running" else END
+    if state["status"] == "needs_tool":
+        return "tools"
+    elif state["status"] == "running":
+        return "reasoning"
+    return END
 
 
 def build_trace_gen_graph(
@@ -159,9 +204,15 @@ def build_trace_gen_graph(
 ):
     """Build and compile the LangGraph for ground-truth-directed, real-tool-execution generation."""
     graph = StateGraph(TraceGenState)
-    graph.add_node("model", _model_node_factory(registry, provider, model, max_tool_calls))
-    graph.set_entry_point("model")
-    graph.add_conditional_edges("model", _route, {"model": "model", END: END})
+    
+    graph.add_node("reasoning", _reasoning_node_factory(provider, model, max_tool_calls))
+    graph.add_node("tools", _tool_node_factory(registry))
+    
+    graph.set_entry_point("reasoning")
+    
+    graph.add_conditional_edges("reasoning", _route, {"reasoning": "reasoning", "tools": "tools", END: END})
+    graph.add_conditional_edges("tools", _route, {"reasoning": "reasoning", END: END})
+    
     return graph.compile()
 
 
@@ -175,16 +226,8 @@ def run_trace_gen(
     max_turns: int = 5,
 ) -> tuple[dict[str, Any] | None, str | None]:
     """Ground-truth-directed trace generation with real tool execution via LangGraph.
-
-    The model is still told the correct diagnosis up front and given the ground-truth
-    bounding boxes as a hint for where to look (kept deliberately — see module docstring
-    and AGENT_HANDOVER.md §3). What's real now is that every tool call it makes actually
-    executes against the source image; nothing is pre-computed and narrated for it.
-
-    Returns (trajectory_dict, None) on success or (None, error_reason) on failure, matching
-    the return shape of the old generate_interactive_trajectory() so callers in
-    trace_generation.py (build_trace_example, verify_trace, run_aim1_batch) don't need to
-    change beyond the swap already made in generate_interactive_trajectory() itself.
+    
+    Returns (trajectory_dict, None) on success or (None, error_reason) on failure.
     """
     directive = (
         "TEACHER DIRECTIVE: You are generating an expert demonstration trace for SFT.\n"
@@ -218,11 +261,13 @@ def run_trace_gen(
         "final_answer": None,
         "status": "running",
         "error": None,
+        "consecutive_parse_errors": 0,
+        "pending_tool_call": None,
     }
 
     app = build_trace_gen_graph(registry, provider=provider, model=model, max_tool_calls=max_turns)
     final_state: TraceGenState = app.invoke(
-        initial_state, config={"recursion_limit": max_turns * 2 + 4}
+        initial_state, config={"recursion_limit": max_turns * 3 + 4}
     )
 
     if final_state["final_answer"] is None:
