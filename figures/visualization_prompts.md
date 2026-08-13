@@ -1,7 +1,5 @@
 # Visualization Prompts for VLM-DENTAL
 
-You can copy and paste these prompts one by one into an LLM (like Claude 3.5 Sonnet or ChatGPT) to generate Mermaid.js diagrams or visual descriptions of the project's subsystems for your professor.
-
 ---
 
 ## 1. High-Level System Architecture
