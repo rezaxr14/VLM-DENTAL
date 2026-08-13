@@ -16,7 +16,7 @@ from PIL import Image, ImageDraw
 from dental_agent.tools.zoom_crop import tool_zoom_crop
 from dental_agent.tools.contrast import tool_enhance_contrast
 from dental_agent.tools.fdi import tool_fdi_label, fdi_encode, fdi_decode, get_anatomical_name
-from dental_agent.tools.grounding import OracleGroundingTool
+from dental_agent.tools.grounding import tool_locate_tooth
 from dental_agent.tools.registry import ToolRegistry
 
 
@@ -54,8 +54,7 @@ def verify_on_real_images(
             sample_annotations = vdata.get("annotations", [])
             print(f"Loaded {len(sample_annotations)} real ground-truth annotations from {val_json_candidates[0]}")
 
-    oracle_tool = OracleGroundingTool(sample_annotations)
-    registry = ToolRegistry.create_default(grounding_tool=oracle_tool)
+    registry = ToolRegistry.create_default()
 
     for idx, img_path in enumerate(image_paths[:3]):
         fname = Path(img_path).stem
@@ -65,15 +64,14 @@ def verify_on_real_images(
         w, h = orig_img.size
         print(f"Image dimensions: {w} x {h} px")
 
-        # 1. Test locate_abnormal_teeth (Oracle Grounding Tool)
-        proposals = oracle_tool(image_id=idx)
-        print(f"Grounding tool returned {len(proposals)} bounding box proposals.")
+        # 1. Test locate_abnormal_teeth (Real YOLO Grounding Tool)
+        result = tool_locate_tooth(orig_img, 38) # Look for tooth 38
+        print(f"Grounding tool result: {result}")
 
-        # Pick a target bounding box (either from annotations or center tooth)
-        if proposals:
-            target_bbox = proposals[0]["bbox"]
+        if "bbox" in result:
+            target_bbox = result["bbox"]
         else:
-            # Simulated central lower molar region on real image
+            # Simulated central lower molar region on real image if not found
             target_bbox = [int(w * 0.35), int(h * 0.55), int(w * 0.1), int(h * 0.25)]
 
         print(f"Selected bounding box: {target_bbox}")

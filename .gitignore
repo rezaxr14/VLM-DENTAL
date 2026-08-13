@@ -60,3 +60,14 @@ Thumbs.db
 *.log
 run_log.jsonl
 runs/
+
+# Ignore raw CV folds and heavy models
+data/models/cv_fold_*
+data/models/fold_best_models/
+data/models/grounding_tool_heavy/
+
+# Allow best grounding tool fold
+!data/models/grounding_tool_cv_best/
+!data/models/grounding_tool_cv_best/*
+!data/models/grounding_tool_cv_best/weights/
+!data/models/grounding_tool_cv_best/weights/best.pt

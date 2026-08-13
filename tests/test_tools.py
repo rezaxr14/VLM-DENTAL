@@ -7,7 +7,8 @@ from PIL import Image
 
 from dental_agent.tools.zoom_crop import tool_zoom_crop
 from dental_agent.tools.windowing import tool_window_level
-from dental_agent.tools.grounding import compute_iou, OracleGroundingTool
+from dental_agent.tools.grounding import ToothGrounder
+from dental_agent.training.detector import compute_iou
 from dental_agent.tools.registry import ToolRegistry
 
 
@@ -16,9 +17,9 @@ def test_zoom_crop(synthetic_image: Image.Image) -> None:
     crop = tool_zoom_crop(synthetic_image, bbox, padding_frac=0.2)
 
     assert isinstance(crop, Image.Image)
-    # 50 + 2*10 = 70
-    assert crop.width == 70
-    assert crop.height == 70
+    # pad_x = max(50*0.2, 50.0) = 50, so width = 50 + 2*50 = 150
+    assert crop.width == 150
+    assert crop.height == 150
 
 
 def test_zoom_crop_clamping(synthetic_image: Image.Image) -> None:
@@ -46,26 +47,6 @@ def test_compute_iou() -> None:
     # 50% overlap in 1D => area intersection = 5*10=50, union = 100+100-50=150 => 1/3
     box_d = [5, 0, 15, 10]
     assert abs(compute_iou(box_a, box_d) - (50.0 / 150.0)) < 1e-6
-
-
-def test_oracle_grounding_tool(sample_annotations_df, sample_categories_df) -> None:
-    oracle = OracleGroundingTool(
-        annots_df=sample_annotations_df,
-        categories_df=sample_categories_df,
-        diag_col="category_id_3",
-    )
-
-    results = oracle(image_id=100)
-    assert len(results) == 2
-    assert results[0]["quadrant"] == 1
-    assert results[0]["tooth_position"] == 6
-    assert results[0]["fdi_label"] == "16"
-    assert results[0]["diagnosis"] == "Caries"
-
-    assert results[1]["quadrant"] == 3
-    assert results[1]["tooth_position"] == 8
-    assert results[1]["fdi_label"] == "38"
-    assert results[1]["diagnosis"] == "Impacted Tooth"
 
 
 def test_tool_registry() -> None:

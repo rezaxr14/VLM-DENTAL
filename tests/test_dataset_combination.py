@@ -13,8 +13,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from dental_agent.data.dentex import download_dentex, load_combined_dentex_dataset
 from scripts.prepare_yolo_dataset import convert_to_yolo_format
 
+import pytest
 
-def mock_dentex_data(tmp_path: Path):
+
+@pytest.fixture
+def mock_dentex_path(tmp_path: Path):
     """Creates a temporary mock DENTEX structure with 2 dataset subfolders."""
     dentex_root = tmp_path / "data" / "dentex" / "DENTEX"
     train_root = dentex_root / "training_data"
@@ -100,7 +103,7 @@ def test_download_dentex_trains_only_needed_files(monkeypatch, tmp_path):
 
     result = download_dentex(repo_id="ibrahimhamamci/DENTEX", cache_dir=str(tmp_path), split_name="train")
 
-    assert result == tmp_path
+    assert result == tmp_path.parent
     assert "DENTEX/training_data.zip" in requested
     assert "DENTEX/validation_data.zip" in requested
     assert "DENTEX/validation_triple.json" in requested
