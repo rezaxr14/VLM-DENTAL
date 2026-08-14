@@ -1,10 +1,9 @@
 # RTX 4090 (24 GB VRAM) overrides.
 # Merge on top of default.yaml when running on the 4090.
 #
-# Same Qwen3-VL-8B-Thinking backbone as default.yaml — this tier scales GRPO group
-# size and detector batch size, not model size. (Previously overrode model.name to
-# the 8B variant while default.yaml stayed on 2B; that split is gone now that a
-# single 8B tier runs everywhere, including free Kaggle/Colab T4s via Unsloth.)
+# Same Qwen/Qwen3.5-9B backbone as default.yaml — this tier scales GRPO group
+# size and detector batch size, not model size. (Single 9B tier runs everywhere,
+# including free Kaggle/Colab T4s via 4-bit QLoRA and Unsloth.)
 
 training:
   grpo_group_size: 8

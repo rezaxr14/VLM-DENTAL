@@ -13,7 +13,7 @@ Dental panoramic radiographs (OPGs) are complex images requiring spatial awarene
 The generation of synthetic training data is now orchestrated by a real LangGraph loop (`dental_agent/agent/langgraph_loop.py`).
 1. **Dynamic Tool Execution**: Every tool call runs for real against the source image. Tool outputs are appended dynamically. `<fake_tool_call>` is deprecated.
 2. **Strict Verifier**: Uses `api_pool.py` to route to a verifier model dynamically (NVIDIA NIM, Groq, OpenRouter, Anthropic, or Gemini) to ensure the agent's diagnostic trace matches ground truth and doesn't hallucinate.
-3. **Local Generation Server**: Generation uses `Qwen3-VL-8B-Thinking` served via a local vLLM endpoint inside the Colab session for zero-latency, free tool execution loops.
+3. **Local Generation Server**: Generation uses `Qwen/Qwen3.5-9B` served via a local vLLM endpoint inside the Colab session for zero-latency, free tool execution loops.
 
 ## Important Guidelines
 - Read `AGENT_HANDOVER.md` for in-depth explanations of the agent's reasoning loop and tool suite.

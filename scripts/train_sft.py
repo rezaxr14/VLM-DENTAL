@@ -12,9 +12,9 @@ from qwen_vl_utils import process_vision_info
 
 @dataclass
 class ScriptArguments:
-    model_id: str = field(default="Qwen/Qwen2.5-VL-3B-Instruct", metadata={"help": "The model to train."})
+    model_id: str = field(default="Qwen/Qwen3.5-9B", metadata={"help": "The model to train."})
     dataset_path: str = field(default="data/traces/train_cot_traces.jsonl", metadata={"help": "Path to the CoT traces JSONL."})
-    output_dir: str = field(default="data/models/qwen_vl_sft", metadata={"help": "Output directory for the fine-tuned model."})
+    output_dir: str = field(default="data/models/qwen3_5_9b_sft", metadata={"help": "Output directory for the fine-tuned model."})
     batch_size: int = field(default=1, metadata={"help": "Batch size per GPU."})
     gradient_accumulation_steps: int = field(default=16, metadata={"help": "Gradient accumulation steps."})
     learning_rate: float = field(default=2e-5, metadata={"help": "Learning rate."})
@@ -149,7 +149,10 @@ def main():
         bnb_4bit_compute_dtype=torch.bfloat16
     )
     
-    model = transformers.Qwen2_5_VLForConditionalGeneration.from_pretrained(
+    from dental_agent.model.backbone import get_model_classes
+    ModelClass = get_model_classes()
+
+    model = ModelClass.from_pretrained(
         script_args.model_id,
         quantization_config=bnb_config,
         device_map="auto",

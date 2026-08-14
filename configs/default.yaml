@@ -11,7 +11,7 @@ data:
   parquet_cache: true
 
 model:
-  name: "Qwen/Qwen3-VL-8B-Thinking"
+  name: "Qwen/Qwen3.5-9B"
   load_in_4bit: true
   bnb_quant_type: "nf4"
   bnb_compute_dtype: "bfloat16"
@@ -66,7 +66,7 @@ training:
 
 api:
   generator_provider: "local"
-  generator_model: "Qwen/Qwen3-VL-8B-Thinking"
+  generator_model: "Qwen/Qwen3.5-9B"
   # Verifier: deliberately not pinned to a specific model here — set VERIFIER_PROVIDER /
   # VERIFIER_MODEL in .env, or set one of NVIDIA_VERIFIER_MODEL / GROQ_VERIFIER_MODEL /
   # OPENROUTER_VERIFIER_MODEL / ANTHROPIC_VERIFIER_MODEL / GEMINI_VERIFIER_MODEL alongside

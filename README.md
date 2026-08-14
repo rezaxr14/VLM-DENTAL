@@ -1,6 +1,6 @@
 # Dental-Agent: Tool-Augmented Agentic VLM for Panoramic Dental Radiographs
 
-An Agentic, Tool-Augmented Vision-Language Model framework for panoramic dental radiograph diagnosis on the **DENTEX** benchmark. Built on the **Qwen3-VL** backbone with multi-turn tool calling and **GRPO** (Group Relative Policy Optimization) reinforcement learning.
+An Agentic, Tool-Augmented Vision-Language Model framework for panoramic dental radiograph diagnosis on the **DENTEX** benchmark. Built on the **Qwen/Qwen3.5-9B** backbone with multi-turn tool calling and **GRPO** (Group Relative Policy Optimization) reinforcement learning.
 
 See [dentex-agentic-vlm-proposal.md](dentex-agentic-vlm-proposal.md) for the full research proposal and methodology.
 
@@ -11,7 +11,7 @@ See [dentex-agentic-vlm-proposal.md](dentex-agentic-vlm-proposal.md) for the ful
 - **Agentic Multi-Turn Diagnostic Loop**: Autonomous tool usage (zoom/crop, contrast enhancement, FDI numbering, abnormal tooth locating) before delivering a structured diagnosis.
 - **Hierarchical DENTEX Grounding**: Support for FDI World Dental Federation notation (quadrants 1–4, tooth positions 1–8) and multi-class pathology classification (Caries, Deep Caries, Periapical Lesions, Impacted Teeth).
 - **Two-Stage Fine-Tuning Pipeline**:
-  - **Aim 1 / Stage 1 (SFT)**: Multi-turn expert demonstration distillation — generated locally with Qwen3-VL-8B-Thinking via a real LangGraph tool-execution loop (ground-truth-directed, Kaggle/Colab), cross-family verified (a different model family than the generator, to reduce correlated blind spots).
+  - **Aim 1 / Stage 1 (SFT)**: Multi-turn expert demonstration distillation — generated locally with Qwen/Qwen3.5-9B via a real LangGraph tool-execution loop (ground-truth-directed, Kaggle/Colab), cross-family verified (a different model family than the generator, to reduce correlated blind spots).
   - **Aim 2 / Stage 2 (GRPO)**: Direct policy gradient optimization against multi-objective rewards (FDI accuracy + pathology diagnosis + format adherence + tool efficiency).
 - **Stage 0 Detector**: Dedicated YOLOv8m tooth localization model, trained with 5-fold cross-validation, to replace oracle grounding — validation mAP50 ≈ 0.647 (R ≈ 0.90, P ≈ 0.588), past the detection-quality bar set for live use.
 - **Robust Evaluation & Ablation Harness**: H1 (tool-use vs. direct reasoning) and H2 (GRPO vs. SFT vs. zero-shot GPT-4o) evaluation suites with bootstrap confidence intervals and calibration (ECE) metrics.
@@ -28,17 +28,18 @@ VLM-DENTAL/
 │   ├── agent/                    # Orchestration loop, prompts, parsing, trajectory visualization
 │   ├── data/                     # DENTEX download, COCO parsing, preprocessing, split handling
 │   ├── evaluation/               # Metrics, baselines, ablations, sweeps, failure analysis
-│   ├── model/                    # Qwen3-VL loading, QLoRA wrapping, checkpoints, generation
+│   ├── model/                    # Qwen3.5-9B loading, QLoRA wrapping, checkpoints, generation
 │   ├── rewards/                  # Graded accuracy, format, tool validity, efficiency, LLM judge
 │   ├── tools/                    # Deterministic tools (zoom, contrast, FDI) and detectors
 │   ├── training/                 # Aim 1 trace generation, Stage 1 SFT, Stage 2 GRPO, Stage 0
 │   ├── utils/                    # Environment detection, HF persistence, reproducibility
 │   ├── cli.py                    # Unified CLI entrypoint (`dental-agent`)
 │   └── config.py                 # Dataclass-based configuration loader
+├── notebooks/                    # Dedicated Colab/Kaggle execution notebooks (TraceGen, YOLO, SFT, GRPO)
 ├── scripts/                      # Standalone execution scripts
 ├── tests/                        # Offline pytest suite
 ├── dentex-agentic-vlm-proposal.md# Research proposal & theoretical formulation
-├── dentex_agentic_vlm_starter.ipynb # Interactive exploration and demo notebook
+├── deprecated_dentex_agentic_vlm_starter.ipynb # Legacy exploration notebook (deprecated)
 ├── pyproject.toml                # Build & packaging specification
 └── requirements.txt              # Exact pinned dependencies
 ```
@@ -97,8 +98,8 @@ dental-agent evaluate --checkpoint checkpoints/grpo-final --output results/
 ## ⚙️ Configuration & Compute Tiers
 
 Configuration is managed via YAML under `configs/`:
-- `configs/default.yaml`: Base configuration for Kaggle / Colab (16GB VRAM, **Qwen3-VL-8B-Thinking**, 4-bit NF4 via Unsloth, GRPO Group Size = 4).
-- `configs/rtx4090.yaml`: High-VRAM workstation configuration (24GB VRAM, **same Qwen3-VL-8B-Thinking backbone**, GRPO Group Size = 8) — this tier scales group size and throughput, not model size.
+- `configs/default.yaml`: Base configuration for Kaggle / Colab (16GB VRAM, **Qwen/Qwen3.5-9B**, 4-bit NF4 via Unsloth/bitsandbytes, GRPO Group Size = 4).
+- `configs/rtx4090.yaml`: High-VRAM workstation configuration (24GB VRAM, **same Qwen/Qwen3.5-9B backbone**, GRPO Group Size = 8) — this tier scales group size and throughput, not model size.
 
 Override settings via CLI or by passing a custom config file:
 ```bash

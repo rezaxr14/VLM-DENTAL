@@ -14,7 +14,7 @@ Dental panoramic radiographs (OPGs) are complex images requiring spatial awarene
 ### The 6-Phase Roadmap
 The project is structured into 6 phases (documented in `ROADMAP.md`):
 1. **Agent Tooling & Architecture (Completed):** Building the Python tool registry and prompts.
-2. **Aim 1 - Synthetic Trace Generation (In Progress):** Using a locally-hosted Qwen3-VL-8B-Thinking (LangGraph agent loop, run on Kaggle/Colab) to generate high-quality diagnostic traces on the DENTEX dataset.
+2. **Aim 1 - Synthetic Trace Generation (In Progress):** Using a locally-hosted Qwen/Qwen3.5-9B (LangGraph agent loop, run on Kaggle/Colab) to generate high-quality diagnostic traces on the DENTEX dataset.
 3. **Aim 2/3 - VLM Training (Pending):** Supervised Fine-Tuning (SFT) and Group Relative Policy Optimization (GRPO) to teach an open-source VLM to mimic the Teacher LLM.
 4. **Aim 4 - Evaluation (Pending):** Benchmarking against clinical baselines.
 5. **Aim 5 - Grounding Integration (Done, feeding the VLM):** Trained YOLOv8m with 5-fold cross-validation to locate teeth. Validation mAP50 ≈ 0.647 (R ≈ 0.90, P ≈ 0.588) — past the quality bar, `locate_tooth` is live in the agent loop.
@@ -46,7 +46,7 @@ These functions simulate a radiologist's workstation.
 ---
 
 ## 🤖 3. The Teacher-Verifier Loop (`trace_generation.py`)
-To train our final VLM, we need a dataset of an expert using the tools. We synthesize this data using a locally-hosted **Qwen3-VL-8B-Thinking** (served via vLLM inside the Kaggle/Colab session — not a remote API, and not the laptop, since this needs real GPU time), orchestrated as a real agent loop in LangGraph.
+To train our final VLM, we need a dataset of an expert using the tools. We synthesize this data using a locally-hosted **Qwen/Qwen3.5-9B** (served via vLLM inside the Kaggle/Colab session — not a remote API, and not the laptop, since this needs real GPU time), orchestrated as a real agent loop in LangGraph.
 
 ### Step 1: Ground-Truth-Directed, Real Tool Execution
 `generate_interactive_trajectory()` still conditions the Teacher on the known ground-truth label and seeds crop coordinates from the ground-truth bounding box for *every ground truth pathology in the image* — we keep doing this deliberately: blind exploration on an untuned 8B model would tank the yield of usable, correctly-labeled training data. What changed is that tool calls now **execute for real** against the source image inside the LangGraph loop (`zoom_crop`, `window_level`, etc.) instead of being pre-computed and narrated via `<fake_tool_call>` tags. The model receives the actual resulting image at each turn, so its stated visual evidence is checkable against what it was really shown, not just plausible-sounding.
@@ -82,7 +82,7 @@ fdi_position = int(ann.get("category_id_2", 0)) + 1
 ---
 
 ## 🧠 5. Aim 2 & 3: Model Training Strategy
-When Trace Generation completes, you will move to Notebooks to train the VLM — **Qwen3-VL-8B-Thinking** (decided; see the proposal §5.3), the same backbone used as the trace-generation teacher.
+When Trace Generation completes, you will move to Notebooks to train the VLM — **Qwen/Qwen3.5-9B** (decided; see the proposal §5.3), the same backbone used as the trace-generation teacher.
 The system uses a highly optimized memory architecture for RLHF:
 1. **SFT Adapter:** The base model is trained on the JSONL traces using LoRA.
 2. **GRPO Adapter (Policy):** A secondary LoRA adapter is attached to the same base model for Reinforcement Learning. By keeping the SFT adapter loaded in memory as the "reference model", we can compute KL-divergence instantly by just swapping active adapters, saving massive amounts of VRAM on Kaggle/Colab environments.

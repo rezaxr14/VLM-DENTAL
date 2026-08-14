@@ -1,7 +1,7 @@
 """
 Model backbone initialization and LoRA wrapping.
 
-Loads Qwen3-VL with 4-bit NF4 quantization and QLoRA adapters.
+Loads Qwen/Qwen3.5-9B (or configured multimodal backbone) with 4-bit NF4 quantization and QLoRA adapters.
 """
 
 from __future__ import annotations
@@ -11,14 +11,17 @@ from dental_agent.config import ProjectConfig, ModelConfig
 
 
 def get_model_classes():
-    """Dynamically import Qwen3-VL classes with graceful fallback."""
+    """Dynamically import vision-language / multimodal model classes with graceful fallback."""
     try:
-        from transformers import Qwen2_5_VLForConditionalGeneration as ModelClass
+        from transformers import AutoModelForImageTextToText as ModelClass
     except ImportError:
         try:
-            from transformers import AutoModelForVision2Seq as ModelClass
+            from transformers import Qwen2_5_VLForConditionalGeneration as ModelClass
         except ImportError:
-            from transformers import AutoModelForCausalLM as ModelClass
+            try:
+                from transformers import AutoModelForVision2Seq as ModelClass
+            except ImportError:
+                from transformers import AutoModelForCausalLM as ModelClass
     return ModelClass
 
 
@@ -26,7 +29,7 @@ def load_model(
     config: ProjectConfig | ModelConfig | None = None,
     device_map: str = "auto",
 ) -> Tuple[Any, Any]:
-    """Load Qwen3-VL backbone and processor with 4-bit NF4 quantization.
+    """Load multimodal backbone and processor with 4-bit NF4 quantization.
 
     Returns (model, processor).
     """
@@ -50,10 +53,14 @@ def load_model(
             bnb_4bit_use_double_quant=model_cfg.bnb_double_quant,
         )
 
-    processor = AutoProcessor.from_pretrained(model_cfg.name)
+    processor = AutoProcessor.from_pretrained(model_cfg.name, trust_remote_code=True)
+    if hasattr(processor, "tokenizer") and processor.tokenizer is not None:
+        if processor.tokenizer.pad_token_id is None:
+            processor.tokenizer.pad_token = processor.tokenizer.eos_token
 
     model_kwargs: dict[str, Any] = {
         "device_map": device_map if torch.cuda.is_available() else None,
+        "trust_remote_code": True,
     }
     if bnb_config is not None:
         model_kwargs["quantization_config"] = bnb_config

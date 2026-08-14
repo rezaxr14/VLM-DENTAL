@@ -56,10 +56,11 @@ Thumbs.db
 *.onnx
 *.ckpt
 
-# Logs
+# Logs & state
 *.log
 run_log.jsonl
 runs/
+data/*_pool_state.json
 
 # Ignore raw CV folds and heavy models
 data/models/cv_fold_*

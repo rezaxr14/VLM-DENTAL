@@ -36,17 +36,17 @@ This is the heart of the project containing all reusable logic. It is imported b
   - **`GeneratorPool`**: Same architecture but for external-API generation when no local GPU is available. Uses separate env vars (`GENERATOR_COOLDOWN_SECONDS`, default 60s; `GENERATOR_RPD_LIMIT`, default 50). State persists to `data/generator_pool_state.json`. Bypassed entirely when `GENERATOR_PROVIDER=local`.
   - Also contains `APISessionPool` (cached OpenAI-compatible clients), `call_llm()` (universal caller supporting `auto_verifier` and `auto_generator` routing), and `verify_local_server_health()`.
 - `trace_generation.py`: **The dataset synthesizer (decoupled pipeline).** Two operational modes:
-  - **Generate**: `generate_interactive_trajectory()` → drives a locally-hosted Qwen3-VL-8B-Thinking (or external API) through a real LangGraph tool-execution loop (ground-truth-directed), outputs raw trajectory dicts to `train_cot_traces_unverified.jsonl`.
+  - **Generate**: `generate_interactive_trajectory()` → drives a locally-hosted Qwen/Qwen3.5-9B (or external API) through a real LangGraph tool-execution loop (ground-truth-directed), outputs raw trajectory dicts to `train_cot_traces_unverified.jsonl`.
   - **Verify**: `verify_pending()` → reads unverified traces, runs cross-family verification via `ProviderPool`, promotes passing traces to `train_cot_traces.jsonl`.
   - Also contains `build_trace_example()` (canonical per-image pipeline) and `run_aim1_batch()` (batch wrapper with retry).
-- `sft.py`: **The supervised trainer.** Takes the generated JSONL traces and base model architecture, formats them using a multi-modal collator, and outputs fine-tuned Qwen-VL model weights.
+- `sft.py`: **The supervised trainer.** Takes the generated JSONL traces and base model architecture, formats them using a multi-modal collator, and outputs fine-tuned Qwen model weights.
 - `grpo.py`: **The RL algorithm.** Takes the SFT model weights and new training data, implements Group Relative Policy Optimization (computing KL-divergence penalties and dual-adapter memory swapping), and outputs highly-optimized RL model weights.
 - `detector.py`: **The YOLO trainer.** Takes COCO/YOLO formatted datasets, runs the Ultralytics training loop, and outputs a trained `.pt` bounding-box model.
 - `rewards.py`: **Training feedback connector.** Takes the current policy outputs during RL training, routes them through the reward functions, and outputs the loss gradients.
 
 ### `dental_agent/model/` (VLM Backbone)
-*Loading and inferencing the base Qwen-VL model.*
-- `backbone.py`: **The model loader.** Takes model configuration settings, initializes the 3B/7B Qwen-VL model with 4-bit quantization and LoRA adapters, and outputs the PyTorch model object.
+*Loading and inferencing the base Qwen multimodal model.*
+- `backbone.py`: **The model loader.** Takes model configuration settings, initializes the Qwen/Qwen3.5-9B multimodal model with 4-bit quantization and LoRA adapters, and outputs the PyTorch model object.
 - `inference.py`: **The generation engine.** Takes tokenized inputs and image arrays, runs the PyTorch forward pass, and outputs generated text strings and token IDs.
 - `checkpoints.py`: **The save manager.** Takes trained model states in memory, and outputs saved LoRA weights to disk/Drive (or vice-versa for loading).
 
@@ -149,7 +149,7 @@ Interactive environments for Colab/Kaggle execution.
 |---|---|
 | `grounding_tool_cv_best/weights/best.pt` | Best-fold YOLOv8m weights for `locate_tooth` |
 | `vllm_cache/` | HuggingFace model cache for vLLM (`HF_HOME` override) |
-| `qwen3_vl_sft/` | SFT LoRA adapter output |
+| `qwen3_5_9b_sft/` | SFT LoRA adapter output |
 
 ### Rate-Limit State Files (`data/`)
 | File | Pool | Persists |

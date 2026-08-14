@@ -39,6 +39,11 @@ if hasattr(sys.stdout, "reconfigure"):
     except Exception:
         pass
 
+# Ensure dental_agent is importable when running standalone
+repo_root = str(Path(__file__).resolve().parent.parent)
+if repo_root not in sys.path:
+    sys.path.insert(0, repo_root)
+
 from dental_agent.config import load_config, load_env
 from dental_agent.data.dentex import load_dentex_dataset
 from dental_agent.training.api_pool import (

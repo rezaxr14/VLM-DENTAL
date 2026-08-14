@@ -4,7 +4,7 @@ Aim 1: Synthetic Expert Diagnostic Demonstration Trace Generation & Cross-Family
 Generation is ground-truth-directed (the model is told the correct diagnosis and given
 ground-truth bounding boxes as a hint for where to look — kept deliberately, see
 AGENT_HANDOVER.md §3) but now runs through a real LangGraph agent loop
-(dental_agent/agent/langgraph_loop.py) against a locally-hosted Qwen3-VL-8B-Thinking
+(dental_agent/agent/langgraph_loop.py) against a locally-hosted Qwen/Qwen3.5-9B
 (served via vLLM inside the Kaggle/Colab session). Every tool call the model makes
 executes for real against the source image — this replaces the earlier scheme where
 tool outputs were pre-computed and the model was told to narrate a fake tool call
@@ -44,14 +44,14 @@ def _is_valid_key(val: str | None) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Generator: locally-hosted Qwen3-VL-8B-Thinking via vLLM (see api_pool.py's
+# Generator: locally-hosted Qwen/Qwen3.5-9B via vLLM (see api_pool.py's
 # "local" OpenAI-compatible provider). Override via GENERATOR_PROVIDER/
 # GENERATOR_MODEL in .env if you're pointing at a different setup.
 # When GENERATOR_PROVIDER is an external API (not 'local'), the GeneratorPool
 # handles rate limiting via 'auto_generator' routing.
 # ---------------------------------------------------------------------------
 GENERATOR_PROVIDER = os.environ.get("GENERATOR_PROVIDER", "local")
-GENERATOR_MODEL = os.environ.get("GENERATOR_MODEL", "Qwen/Qwen3-VL-8B-Thinking")
+GENERATOR_MODEL = os.environ.get("GENERATOR_MODEL", "Qwen/Qwen3.5-9B")
 
 
 def _resolve_generator() -> tuple[str, str]:

@@ -34,8 +34,7 @@ class DataConfig:
 class ModelConfig:
     """VLM backbone settings."""
 
-    # Staged choice from the proposal: 3B for prototyping, 7B for final.
-    name: str = "Qwen/Qwen3-VL-2B-Instruct"
+    name: str = "Qwen/Qwen3.5-9B"
     load_in_4bit: bool = True
     bnb_quant_type: str = "nf4"
     bnb_compute_dtype: str = "bfloat16"
@@ -99,14 +98,14 @@ class TrainingConfig:
 class APIConfig:
     """LLM API settings for trace generation & verification (§5.2)."""
 
-    generator_provider: str = "gemini"
-    generator_model: str = "gemini-3.6-flash"
-    verifier_provider: str = "anthropic"
-    verifier_model: str = "claude-opus-4-1"
+    generator_provider: str = "local"
+    generator_model: str = "Qwen/Qwen3.5-9B"
+    verifier_provider: str = "auto_verifier"
+    verifier_model: str = "auto_model"
     gemini_rpm_limit: int = 5
     gemini_rpd_limit: int = 20
     gemini_safety_margin: float = 0.95
-    trace_candidates_k: int = 3
+    trace_candidates_k: int = 1
     max_retries: int = 3
     retry_delay: float = 5.0
 
@@ -167,6 +166,21 @@ class ProjectConfig:
             self.persist_dir = os.environ.get("DENTAL_AGENT_PERSIST_DIR") or _default_persist_dir(self.environment)
         if not self.hf_artifact_repo:
             self.hf_artifact_repo = os.environ.get("HF_ARTIFACT_REPO")
+        env_model = os.environ.get("MODEL_NAME") or os.environ.get("BACKBONE_MODEL")
+        if env_model:
+            self.model.name = env_model
+
+        if os.environ.get("GENERATOR_PROVIDER"):
+            self.api.generator_provider = os.environ["GENERATOR_PROVIDER"]
+        if os.environ.get("GENERATOR_MODEL"):
+            self.api.generator_model = os.environ["GENERATOR_MODEL"]
+        elif self.api.generator_provider == "gemini" and os.environ.get("GEMINI_GENERATOR_MODEL"):
+            self.api.generator_model = os.environ["GEMINI_GENERATOR_MODEL"]
+
+        if os.environ.get("VERIFIER_PROVIDER"):
+            self.api.verifier_provider = os.environ["VERIFIER_PROVIDER"]
+        if os.environ.get("VERIFIER_MODEL"):
+            self.api.verifier_model = os.environ["VERIFIER_MODEL"]
 
     @property
     def hf_cache_dir(self) -> str:

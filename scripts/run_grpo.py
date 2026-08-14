@@ -13,7 +13,7 @@ def main() -> None:
     parser.add_argument("--config", "-c", default=None, help="Path to config YAML")
     parser.add_argument("--group-size", "-g", type=int, default=4, help="GRPO group size")
     parser.add_argument("--epochs", "-e", type=int, default=2, help="Epochs per batch")
-    parser.add_argument("--sft-model-dir", type=str, default="data/models/qwen3_vl_sft", help="Path to SFT adapter for reference policy")
+    parser.add_argument("--sft-model-dir", type=str, default="data/models/qwen3_5_9b_sft", help="Path to SFT adapter for reference policy")
     args = parser.parse_args()
 
     cfg = load_config(args.config)
