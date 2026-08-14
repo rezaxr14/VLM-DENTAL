@@ -1,66 +1,178 @@
-# Visualization Prompts for VLM-DENTAL
+# Visualization Prompts & Diagrams for VLM-DENTAL
+
+This document contains publication-ready diagram definitions (Mermaid and Image Generation Prompts) for the **VLM-DENTAL** architecture, LangGraph reasoning loops, decoupled data engines, and dual-adapter reinforcement learning pipelines.
 
 ---
 
-## 1. High-Level System Architecture
-**Prompt:**
-> Please generate a highly visual Mermaid graph (flowchart TD) illustrating the high-level architecture of the VLM-DENTAL pipeline. It should show the flow of data from the raw DENTEX dataset into the Trace Generation subsystem, which interacts with a local Vision-Language Model (Qwen3-VL). The generated traces are then sent to a Strict Verifier subsystem (routed across external APIs). Traces that pass verification are collected into the final Synthetic SFT Dataset used for fine-tuning. Make the graph look clean and professional, using subgraphs where appropriate.
+## 1. High-Level End-to-End System Architecture
+
+### Diagram Specification (Mermaid)
+```mermaid
+flowchart TD
+    subgraph S0["Stage 0: Grounding Model"]
+        D0["DENTEX Dataset<br/>(BBoxes & FDI Labels)"] --> Y0["YOLOv8m Tooth Detector<br/>(5-Fold CV, mAP50=0.647)"]
+        Y0 --> GT["locate_tooth Tool<br/>(Live in Agent Loop)"]
+    end
+
+    subgraph S1["Aim 1: Decoupled Synthetic Trace Engine"]
+        OPG["Raw Panoramic Radiographs (OPG)"] --> LG["LangGraph Multi-Turn Loop<br/>(vLLM: Qwen/Qwen3.5-9B)"]
+        GT -.->|Tooth Grounding| LG
+        TR["Simulated Radiologist Tools<br/>(Zoom, Window, Denoise, Mirror)"] <-->|Dynamic Execution| LG
+        LG --> RAW["Raw Unverified Traces<br/>(train_cot_traces_unverified.jsonl)"]
+        RAW --> VP["ProviderPool Verifier<br/>(NVIDIA NIM / Groq / OpenRouter / Gemini)"]
+        VP --> VER["Canonical Verified Traces<br/>(train_cot_traces.jsonl)"]
+    end
+
+    subgraph S2["Stage 1: Supervised Fine-Tuning (SFT)"]
+        VER --> SFT_DATA["Conversational Multimodal Dataset<br/>(QwenVLDataCollator + Masked Loss)"]
+        SFT_DATA --> SFT_TRAIN["QLoRA 4-Bit SFT Training<br/>(Base: Qwen/Qwen3.5-9B)"]
+        SFT_TRAIN --> SFT_ADAPTER["SFT LoRA Adapter Weights<br/>(data/models/qwen3_5_9b_sft)"]
+    end
+
+    subgraph S3["Stage 2: GRPO Reinforcement Learning"]
+        SFT_ADAPTER --> REF["Reference Model<br/>(Frozen SFT Adapter)"]
+        SFT_ADAPTER --> POL["Active Policy<br/>(Trainable GRPO Adapter)"]
+        POL --> ROLL["Multi-Trajectory Rollouts (G=4/8)"]
+        ROLL --> REW["Composite Multi-Objective Reward<br/>(FDI + Diagnosis + Tool Validity + Format)"]
+        REF --> KL["KL-Divergence Penalty"]
+        REW & KL --> GRPO_OPT["GRPO Policy Update Step"]
+        GRPO_OPT --> FINAL["Final Clinical Dental Agent"]
+    end
+```
+
+### Image Generation Prompt (Publication Art)
+> **Prompt:** Professional scientific diagram of an AI medical vision-language model training system for dental panoramic radiography (VLM-DENTAL). Dark high-tech clinical UI theme, glowing cyan and amber accents. Left side: Panoramic X-ray feeding into a multi-turn LangGraph agent with tool icons (magnifying glass zoom, contrast windowing, bilateral symmetry mirror, AI tooth detector). Middle: 2-stage decoupled generation pipeline with a local fast GPU server feeding into an asynchronous multi-cloud verifier pool. Right side: Dual-adapter LoRA reinforcement learning engine (GRPO) optimizing diagnostic accuracy and FDI tooth notation. Clean, isometric vector illustration, crisp typography, clean medical AI schematic, 8k resolution.
 
 ---
 
-## 2. The LangGraph Agent Loop (Trace Generation)
-**Prompt:**
-> Please generate a detailed Mermaid graph (stateDiagram-v2) for the LangGraph-based Trace Generation loop in a medical AI project. 
-> The system starts with an `initial_state` containing a base X-ray image and a ground-truth hint.
-> It enters the `reasoning_node`, which calls a local vLLM (Qwen3-VL) to get the agent's next action. 
-> The output is parsed. If it's a tool call, the state transitions to the `tools_node`, where the tool is executed against a `ToolRegistry` and the visual/text result is appended to the state, before looping back to `reasoning_node`.
-> If the parsing fails, it loops back to `reasoning_node` up to 3 times for self-correction.
-> If a `final_answer` is given (and at least one tool was used), it routes to the `END` state.
-> Please highlight the recursive nature of the loop.
+## 2. The 2-Stage Decoupled Trace Generation & Verification Engine
+
+### Diagram Specification (Mermaid)
+```mermaid
+flowchart LR
+    subgraph GEN["Stage A: High-Throughput Generation (Local vLLM)"]
+        IMG["DENTEX Image + GT Target"] --> LG_NODE["LangGraph Reasoning Node<br/>(Qwen/Qwen3.5-9B via vLLM)"]
+        LG_NODE <-->|Dynamic Tool Execution| EXEC["Deterministic Tools<br/>(zoom_crop, window_level, denoise, locate_tooth)"]
+        LG_NODE --> JSONL_UNV["train_cot_traces_unverified.jsonl<br/>(Zero Rate-Limit, Full GPU Speed)"]
+    end
+
+    subgraph VER["Stage B: Asynchronous Cross-Family Verification (ProviderPool)"]
+        JSONL_UNV --> QUEUE["Verification Queue<br/>(Resumable ID Tracking)"]
+        QUEUE --> POOL["ProviderPool Load Balancer<br/>(300s Cooldown / 10 RPD Cap)"]
+        POOL --> P1["NVIDIA NIM<br/>(meta/muse-glimmer-30b)"]
+        POOL --> P2["Groq<br/>(qwen/qwen3.6-27b)"]
+        POOL --> P3["OpenRouter<br/>(google/gemma-4-31b-it)"]
+        POOL --> P4["Google Gemini<br/>(gemini-3.7-flash)"]
+        P1 & P2 & P3 & P4 --> JUDGE{"Strict Grounding<br/>Verification"}
+        JUDGE -->|PASS: Visually Grounded| CANONICAL["train_cot_traces.jsonl<br/>(Canonical SFT Dataset)"]
+        JUDGE -->|FAIL: Hallucination| DROP["Rejected / Quarantined"]
+    end
+```
+
+### Image Generation Prompt
+> **Prompt:** Detailed technical flow diagram illustrating a decoupled two-stage data synthesis pipeline for AI training. Stage 1 on the left is a high-speed local GPU engine executing LangGraph multi-turn tool loops against dental X-rays at high frame rates. In the center, unverified JSONL traces queue up. Stage 2 on the right is a multi-cloud verification gateway round-robining across four external AI APIs (NVIDIA, Groq, OpenRouter, Google) with cooling timers and strict visual grounding checks, filtering into a verified golden dataset. Clean infographic style, futuristic blueprint aesthetic, sleek gradient colors on deep slate background.
 
 ---
 
-## 3. Tool Registry & Execution Pipeline
-**Prompt:**
-> Please generate a Mermaid graph (flowchart LR) showing how the Tool Execution subsystem works. 
-> On the left, we have the `ToolRegistry`. The agent can request one of several tools:
-> - `zoom_crop` (crops the image)
-> - `window_level` (adjusts contrast for bone/enamel/soft tissue)
-> - `denoise` (applies bilateral or median filtering)
-> - `contralateral_compare` (crops the opposite side of the jaw for symmetry comparison)
-> - `locate_tooth` (runs a YOLOv8m grounding model to find the bounding box of a specific FDI tooth number)
-> All image-based tools always act on the original, uncorrupted `base_image` to prevent crop drift. 
-> The output of the tools (either a new PIL Image or text) is packed into a multimodal observation and returned to the agent. Please make it visually organized.
+## 3. LangGraph Interactive Multi-Turn Diagnostic Loop
+
+### Diagram Specification (Mermaid)
+```mermaid
+stateDiagram-v2
+    [*] --> InitialState: Load OPG Image & GT Target
+
+    InitialState --> ReasoningNode: Build Context (Prompt + Prior Observations)
+    
+    state ReasoningNode {
+        [*] --> CallVLM: Forward pass (Qwen/Qwen3.5-9B)
+        CallVLM --> ParseJSON: Custom Bracket Parser
+        ParseJSON --> DecisionTree
+        DecisionTree --> ToolSelected: Valid Action & Args
+        DecisionTree --> FinalDiagnosis: Valid final_answer Array
+        DecisionTree --> SelfCorrection: Malformed JSON (Retry <= 3)
+    }
+
+    SelfCorrection --> ReasoningNode: Inject Repair Prompt
+    ToolSelected --> ToolsNode: Route to ToolRegistry
+
+    state ToolsNode {
+        [*] --> DispatchTool
+        DispatchTool --> ZoomCrop: zoom_crop(bbox)
+        DispatchTool --> WindowLevel: window_level(preset='bone'/'enamel')
+        DispatchTool --> BilateralDenoise: denoise(method='bilateral')
+        DispatchTool --> Contralateral: contralateral_compare(bbox, quad)
+        DispatchTool --> GroundingDetector: locate_tooth(fdi_number)
+        
+        ZoomCrop --> PackObservation
+        WindowLevel --> PackObservation
+        BilateralDenoise --> PackObservation
+        Contralateral --> PackObservation
+        GroundingDetector --> PackObservation
+        PackObservation --> UpdateMessages: Append Visual / Text Result
+    }
+
+    ToolsNode --> ReasoningNode: Next Turn (Observation Context)
+    FinalDiagnosis --> VerificationStep: Output Full Diagnostic Trace
+    VerificationStep --> [*]: Passed to ProviderPool
+```
+
+### Image Generation Prompt
+> **Prompt:** Futuristic UI workflow visualization of an autonomous medical AI agent's LangGraph decision cycle. Circular agent reasoning loop showing state transitions: Observation of panoramic dental X-ray -> Multi-modal reasoning turn -> Tool selection branching into specialized medical tools (magnification loupe, bone contrast window, symmetry mirror, AI tooth detector) -> Real dynamic execution returning enhanced visual crops -> Convergence into structured FDI dental diagnostic report. Modern dark theme with cyan, violet, and emerald glowing nodes, ultra-clean UI design.
 
 ---
 
-## 4. API Pool & Verifier Subsystem
-**Prompt:**
-> Please generate a Mermaid graph (flowchart TD) mapping out the `API Pool & Verifier` subsystem.
-> The Batch Runner requests a verification of an agent's reasoning trace. 
-> The request hits the `ProviderPool`, which acts as a load balancer and rate limiter. 
-> The `ProviderPool` checks its state (daily limits and 5-minute cooldowns) and round-robins the request to the first available external API provider: `NVIDIA NIM`, `Groq`, `OpenRouter`, or `Gemini`. 
-> The chosen API runs a Strict Verifier prompt against the candidate trace and the X-ray image. 
-> If the trace hallucinates or isn't grounded in the visual evidence, it outputs `{"grounded": false}`. If it passes, it outputs `{"grounded": true}`. 
-> The architecture should emphasize the fallback routing and cooldown mechanisms that prevent rate-limit crashes.
+## 4. Simulated Radiologist Tool Suite Architecture
+
+### Diagram Specification (Mermaid)
+```mermaid
+flowchart TD
+    BASE["Base Panoramic Radiograph<br/>(Full Uncropped Image)"] --> REG["ToolRegistry<br/>(Dynamic Python Execution)"]
+    
+    REG --> T1["zoom_crop(bbox, padding=0.15)<br/>Extracts high-res pathology region"]
+    REG --> T2["window_level(preset='bone'|'enamel')<br/>Non-linear intensity windowing"]
+    REG --> T3["denoise(method='bilateral')<br/>Edge-preserving noise reduction"]
+    REG --> T4["contralateral_compare(bbox, quadrant)<br/>Anatomical bilateral symmetry mirror crop"]
+    REG --> T5["locate_tooth(fdi_number)<br/>YOLOv8m 5-Fold Grounding Model"]
+    
+    T1 --> OBS["Multimodal Observation Payload<br/>(PIL Image + FDI Coordinate Metadata)"]
+    T2 --> OBS
+    T3 --> OBS
+    T4 --> OBS
+    T5 --> OBS
+    
+    OBS --> VLM["VLM Agent Context<br/>(Next Reasoning Turn)"]
+```
 
 ---
 
-## 5. SFT (Supervised Fine-Tuning) Pipeline
-**Prompt:**
-> Please generate a Mermaid graph (flowchart LR) illustrating the SFT (Supervised Fine-Tuning) pipeline for the Vision-Language Model.
-> Start with the `Verified Traces Dataset` (the output from the Verifier subsystem).
-> Show how these traces are converted into a `Conversational SFT Format` (mapping turns, tool calls, and observations into multi-turn chat messages).
-> Then show the `Training Loop` where a base `Qwen3-VL-8B` model is fine-tuned using LoRA/QoRA on these examples to produce the `SFT Dental Agent`.
-> Highlight that this process teaches the model *how* to use the simulated radiologist tools effectively.
+## 5. Dual-Adapter GRPO Reinforcement Learning Architecture
 
----
+### Diagram Specification (Mermaid)
+```mermaid
+flowchart TD
+    subgraph MEM["Single 4-Bit Base Model in GPU VRAM (Qwen/Qwen3.5-9B)"]
+        BASE_WEIGHTS["Quantized 4-Bit Base Weights<br/>(Frozen, ~6GB VRAM)"]
+        ADAPT_REF["Adapter A: Frozen SFT Reference<br/>(LoRA: reference)"]
+        ADAPT_POL["Adapter B: Trainable GRPO Policy<br/>(LoRA: grpo_policy)"]
+    end
 
-## 6. GRPO (Generative Reward Policy Optimization) + LangGraph Pipeline
-**Prompt:**
-> Please generate a complex Mermaid graph (flowchart TD) detailing the GRPO (Generative Reward Policy Optimization) Reinforcement Learning pipeline integrated with LangGraph.
-> Show the `SFT Dental Agent` acting as the starting policy.
-> For each training step, the agent interacts with the `LangGraph Environment` (which provides the image and executes tools via the `ToolRegistry`).
-> The agent generates multiple candidate trajectories (rollouts).
-> These trajectories are evaluated by a `Reward Function` that checks two things: 1) Format correctness (valid JSON tool calls) and 2) Diagnostic accuracy (does the final answer match the ground truth?).
-> The rewards are used to compute advantages and update the model weights via GRPO, resulting in the `Final RL-Tuned Dental Agent`.
+    ENV["LangGraph Dynamic Environment<br/>(X-Ray + ToolRegistry)"] --> SAMP["Sample G=4 or G=8 Rollouts"]
+    ADAPT_POL --> SAMP
+
+    SAMP --> LOGP_POL["Log-probs Policy: π_θ(a_t | s_t)"]
+    SAMP --> TOGGLE["PEFT Toggle Adapter<br/>set_adapter('reference')"]
+    TOGGLE --> LOGP_REF["Log-probs Ref: π_ref(a_t | s_t)"]
+
+    SAMP --> R_EVAL["Multi-Objective Reward Function"]
+    R_EVAL --> R1["FDI Accuracy Reward (R_FDI)"]
+    R_EVAL --> R2["Pathology Diagnosis Reward (R_Diag)"]
+    R_EVAL --> R3["Tool Validity & Utility (R_Tool)"]
+    R_EVAL --> R4["Format & JSON Integrity (R_Format)"]
+    
+    R1 & R2 & R3 & R4 --> R_TOTAL["Unified Reward Score R_i"]
+    R_TOTAL --> ADV["Group Advantage A_i = (R_i - μ) / σ"]
+    
+    LOGP_POL & LOGP_REF & ADV --> LOSS["GRPO Loss Objective<br/>min E[ -min(r_t A_t, clip(r_t) A_t) + β KL(π_θ || π_ref) ]"]
+    LOSS --> OPT["AdamW Optimizer Update on Adapter B"]
+```
+
