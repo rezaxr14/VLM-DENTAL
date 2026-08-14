@@ -6,6 +6,7 @@ accelerate==1.14.0
 peft==0.20.0
 bitsandbytes==0.50.0
 datasets==5.0.1
+trl==1.10.0
 huggingface-hub==1.26.1
 qwen-vl-utils==0.0.14
 
