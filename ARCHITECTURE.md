@@ -11,27 +11,34 @@ This is the heart of the project containing all reusable logic. It is imported b
 
 ### `dental_agent/agent/` (Agent Loop & Parsing)
 *Logic for the autonomous agent's decision-making cycle.*
-- `loop.py`: **The main execution loop (LangGraph-orchestrated).** Takes an input X-ray image and a user prompt, loops through LLM generations and real tool executions, and outputs a complete multi-turn trajectory object.
+- `langgraph_loop.py`: **The primary execution loop (LangGraph-orchestrated).** Takes an input X-ray image, a system prompt, and a `ToolRegistry`, builds a `StateGraph` with `reasoning` → `tools` conditional edges, runs the model through real tool executions turn-by-turn, and outputs a complete multi-turn trajectory dict (`turns`, `tool_calls`, `final_answer`, `messages`).
+- `loop.py`: **Legacy/helper loop.** Contains older orchestration logic retained for backward compatibility. New code should use `langgraph_loop.py`.
 - `parsing.py`: **The JSON extractor.** Takes raw LLM text outputs (including mixed XML/Markdown/truncated text), safely isolates the JSON, and outputs a clean Python dictionary representing the chosen action or final answer.
-- `prompts.py`: **The instruction sets.** Takes a list of registered tools, dynamically formats them, and outputs the final text system prompts injected into the LLM context.
+- `prompts.py`: **The instruction sets.** Takes a list of registered tools, dynamically formats them, and outputs the final text system prompts injected into the LLM context. Also contains `NO_TOOLS_SYSTEM_PROMPT` and `ZERO_SHOT_PROMPT` for baseline evaluation.
 - `visualization.py`: **The rendering utility.** Takes trajectory data and coordinates, and outputs annotated images with bounding boxes and tool results drawn on them for visual debugging.
 
 ### `dental_agent/tools/` (Agent Capabilities)
 *The individual tools the VLM can invoke.*
-- `registry.py`: **The tool manager.** Takes a tool name string and dictionary of arguments from the agent, routes it to the correct python function below, and outputs the result back to the agent loop.
+- `registry.py`: **The tool manager.** `ToolRegistry.create_default()` registers all built-in tools. Takes a tool name string and dictionary of arguments from the agent, routes it to the correct python function below, and outputs the result back to the agent loop. Any new tool MUST be registered here.
 - `zoom_crop.py`: **Cropping tool.** Takes an input image and a bounding box coordinate array, and outputs a cropped, high-resolution image of that specific region.
 - `windowing.py`: **Contrast mapping tool.** Takes an input image and a tissue preset string (e.g., "bone"), and outputs a contrast-adjusted image mimicking a CT scan.
 - `denoise.py`: **Filtering tool.** Takes an input image and a method string ("bilateral" or "median"), and outputs a smoothed image with reduced grain/noise.
-- `contralateral.py`: **Comparison tool.** Takes an input image and a jaw quadrant integer, calculates the opposite side, and outputs a cropped image of the opposing side of the jaw for symmetry comparison.
-- `grounding.py`: **AI detection tool.** Takes an input image, passes it through our trained YOLOv8m model (5-fold cross-validation, val mAP50 ≈ 0.647 — cleared the gating bar), and outputs an array of bounding boxes locating teeth and pathologies.
+- `contralateral.py`: **Comparison tool.** Takes an input image, a bounding box, and a jaw quadrant integer, calculates the opposite side, and outputs a side-by-side composite image for symmetry comparison.
+- `grounding.py`: **AI detection tool (locate_tooth).** Takes an input image and an FDI tooth number, passes it through our trained YOLOv8m model (5-fold cross-validation, val mAP50 ≈ 0.647), and outputs bounding box coordinates locating the tooth. Requires `GROUNDING_MODEL_PATH` or auto-detects from `data/models/grounding_tool_cv_best/weights/best.pt`.
 - `fdi.py`: **Dental logic helper.** Takes quadrant and tooth position integers, handles the math for FDI two-digit tooth numbering, and outputs standardized positional data.
 - `contrast.py`: **Basic contrast tool.** Takes an input image and a float alpha/beta value, and outputs a manually brightened or darkened image.
 - `synthetic.py`: **Mock tools.** Takes mock arguments, used exclusively for testing the agent loop without real models, and outputs dummy responses.
 
 ### `dental_agent/training/` (Pipelines & RL)
 *The heavy-lifting logic for fine-tuning and reinforcement learning.*
-- `api_pool.py`: **The LLM client router.** Takes raw LLM requests and routes them to a locally-hosted Qwen3-VL-8B-Thinking vLLM endpoint (OpenAI-compatible, running inside the same Kaggle/Colab session) for trace generation, with the original Gemini/Anthropic API routing retained as a fallback/verifier path, and outputs the final LLM text responses.
-- `trace_generation.py`: **The dataset synthesizer.** Takes raw dataset images and ground-truth annotations, drives a locally-hosted Qwen3-VL-8B-Thinking through a real LangGraph tool-execution loop (ground-truth-directed, not blind) to solve them interactively, and outputs a JSONL file of verified diagnostic trajectories.
+- `api_pool.py`: **The dual-pool LLM client router.** Manages two independent pool singletons:
+  - **`ProviderPool`** (verifier): Round-robins across external APIs (NVIDIA NIM, Groq, OpenRouter, Gemini) with per-provider cooldown (`API_COOLDOWN_SECONDS`, default 300s) and daily caps (`API_RPD_LIMIT`, default 10). State persists to `data/provider_pool_state.json`.
+  - **`GeneratorPool`**: Same architecture but for external-API generation when no local GPU is available. Uses separate env vars (`GENERATOR_COOLDOWN_SECONDS`, default 60s; `GENERATOR_RPD_LIMIT`, default 50). State persists to `data/generator_pool_state.json`. Bypassed entirely when `GENERATOR_PROVIDER=local`.
+  - Also contains `APISessionPool` (cached OpenAI-compatible clients), `call_llm()` (universal caller supporting `auto_verifier` and `auto_generator` routing), and `verify_local_server_health()`.
+- `trace_generation.py`: **The dataset synthesizer (decoupled pipeline).** Two operational modes:
+  - **Generate**: `generate_interactive_trajectory()` → drives a locally-hosted Qwen3-VL-8B-Thinking (or external API) through a real LangGraph tool-execution loop (ground-truth-directed), outputs raw trajectory dicts to `train_cot_traces_unverified.jsonl`.
+  - **Verify**: `verify_pending()` → reads unverified traces, runs cross-family verification via `ProviderPool`, promotes passing traces to `train_cot_traces.jsonl`.
+  - Also contains `build_trace_example()` (canonical per-image pipeline) and `run_aim1_batch()` (batch wrapper with retry).
 - `sft.py`: **The supervised trainer.** Takes the generated JSONL traces and base model architecture, formats them using a multi-modal collator, and outputs fine-tuned Qwen-VL model weights.
 - `grpo.py`: **The RL algorithm.** Takes the SFT model weights and new training data, implements Group Relative Policy Optimization (computing KL-divergence penalties and dual-adapter memory swapping), and outputs highly-optimized RL model weights.
 - `detector.py`: **The YOLO trainer.** Takes COCO/YOLO formatted datasets, runs the Ultralytics training loop, and outputs a trained `.pt` bounding-box model.
@@ -74,30 +81,89 @@ This is the heart of the project containing all reusable logic. It is imported b
 ---
 
 ## 2. CLI Entrypoints (`scripts/`)
-These are the executable scripts you run from the terminal (e.g. `python scripts/run_grpo.py`). They wire the core package logic to command-line arguments.
+These are the executable scripts you run from the terminal. They wire the core package logic to command-line arguments.
 
-- `run_daily_trace_generator.py`: **(Phase 1)** Takes API keys and DENTEX datasets, runs the Teacher Loop, and outputs generated synthetic reasoning traces (JSONL).
-- `prepare_yolo_dataset.py`: Takes DENTEX COCO annotations, converts bounding box coordinates, and outputs YOLO-formatted text files.
-- `train_grounding_tool.py`: **(Phase 2)** Takes the YOLO dataset, triggers the YOLOv8 training loop, and outputs the trained model weights.
-- `run_sft.py` / `train_sft.py`: **(Phase 3)** Takes the generated JSONL traces and base Qwen model, runs the supervised training loop, and outputs a Supervised Fine-Tuned (SFT) LoRA adapter.
-- `run_grpo.py`: **(Phase 5)** Takes the SFT model adapter and training dataset, runs reinforcement learning, and outputs the final highly-optimized agent weights.
-- `run_eval.py`: **(Phase 4)** Takes a trained model and test set, runs the evaluation pipelines, and outputs final accuracy metrics.
-- `download_dataset.py`: Takes hardcoded URLs, automates downloading, and outputs extracted multi-GB datasets to disk.
-- `run_detector.py` & `verify_tools_on_real_data.py`: Takes local images, runs tool functions, and outputs visualized results to manually verify tools are working.
-- `export_agent.py`: Takes trained LoRA weights and the base model, merges them into a single structure, and outputs deployment-ready weights.
+### Trace Generation & Verification
+- **`run_trace_gen.py`**: **(Phase 1)** The primary trace generation script with two operational modes:
+  - `--mode generate` (default): Runs the LangGraph loop for each DENTEX image, writes raw traces to `data/traces/train_cot_traces_unverified.jsonl`. No rate limit when `GENERATOR_PROVIDER=local`; uses `GeneratorPool` for external APIs.
+  - `--mode verify`: Reads unverified traces, verifies each via `ProviderPool` (external API round-robin with rate limits), promotes passing traces to `data/traces/train_cot_traces.jsonl`.
+  - `--status-only`: Prints pool capacity and dataset progress without generating.
+  - `--split train|validation`: DENTEX split to process.
+  - `--max-images N`: Cap for the session.
+  - `--pacing-delay 1.5`: Inter-request delay (seconds).
+  - `--k 1`: Candidate traces per image.
+  - `--output PATH`: Override output file path.
+- **`test_langgraph_loop.py`**: Quick smoke test — runs a single image through the LangGraph loop to verify tool calling works.
+  - `--image PATH`: Path to test image.
+  - `--model MODEL`: Model name for vLLM.
+- **`test_aim1_trace.py`**: Integration test for the full Aim 1 pipeline (generate + verify) on a single example.
+
+### Dataset & Model Training
+- **`download_dataset.py`**: Takes hardcoded URLs, automates downloading, and outputs extracted multi-GB datasets to disk.
+- **`prepare_yolo_dataset.py`**: Takes DENTEX COCO annotations, converts bounding box coordinates, and outputs YOLO-formatted text files for Ultralytics training.
+- **`train_grounding_tool.py`**: **(Phase 2)** Takes the YOLO dataset, triggers 5-fold cross-validation YOLOv8m training, and outputs the trained model weights to `data/models/grounding_tool_cv_best/`.
+- **`train_sft.py`** / **`run_sft.py`**: **(Phase 3)** Takes the verified JSONL traces (`train_cot_traces.jsonl`) and base Qwen model, runs the supervised training loop with `QwenVLDataCollator`, and outputs a fine-tuned LoRA adapter.
+  - `--dataset_path PATH`: Path to traces JSONL (default: `data/traces/train_cot_traces.jsonl`).
+  - `--output_dir PATH`: Where to save weights.
+  - `--batch_size N`, `--epochs N`: Training hyperparameters.
+- **`run_grpo.py`**: **(Phase 5)** Takes the SFT model adapter and training dataset, runs GRPO reinforcement learning, and outputs the final optimized agent weights.
+- **`run_eval.py`**: **(Phase 4)** Takes a trained model and test set, runs the evaluation pipelines, and outputs final accuracy metrics.
+
+### Utilities
+- **`run_detector.py`** & **`verify_tools_on_real_data.py`**: Takes local images, runs tool functions, and outputs visualized results to manually verify tools are working.
+- **`export_agent.py`**: Takes trained LoRA weights and the base model, merges them into a single structure, and outputs deployment-ready weights.
+- **`export_prompt_demo.py`**: Generates example prompt formatting demonstrations for documentation.
 
 ---
 
 ## 3. Workspaces (`notebooks/`)
 Interactive environments for Colab/Kaggle execution.
 
-- `VLM_Dental_Colab_Master.ipynb`: **The Data Engine.** Handles dataset downloading, YOLO training, and Trace Generation.
-- `VLM_Dental_Colab_SFT.ipynb`: **The Teacher.** Isolated environment specifically for Phase 3 (SFT).
-- `VLM_Dental_Colab_GRPO.ipynb`: **The Optimizer.** Isolated environment specifically for Phase 5 (RL).
+- **`VLM_Dental_Colab_TraceGen.ipynb`**: **The Data Engine.** Handles vLLM server startup, model caching, and the decoupled generate/verify trace pipeline. Sections:
+  - §1 Mount & Clone (+ rename legacy traces to `.old`)
+  - §2 Install dependencies
+  - §3 Credentials (Colab Secrets tab)
+  - §4 Model cache setup (`HF_HOME` → `data/models/vllm_cache/`)
+  - §5 vLLM server startup (health-check polling)
+  - §6a Generate traces (`--mode generate`)
+  - §6b Verify traces (`--mode verify`)
+  - §7 Status dashboard
+  - §8 Download verified traces
+- **`VLM_Dental_Colab_YOLO.ipynb`**: **The Grounding Trainer.** Handles YOLO dataset preparation, 5-fold cross-validation training, and optional trace syncing.
+- **`VLM_Dental_Colab_SFT.ipynb`**: **The Teacher.** Isolated environment specifically for Phase 3 (SFT) using `train_cot_traces.jsonl`.
+- **`VLM_Dental_Colab_GRPO.ipynb`**: **The Optimizer.** Isolated environment specifically for Phase 5 (RL/GRPO).
 
 ---
 
-## 4. Configuration & Setup (Root Files)
-- `setup.py` / `pyproject.toml` (or `dental_agent.egg-info/`): **Package Installers.** Tells pip how to install the `dental_agent` package so it can be imported anywhere.
-- `tests/`: Contains `conftest.py` and `test_*.py` files which use `pytest` to automatically verify code isn't broken during development.
-- `.env`: Stores private API keys (never pushed to GitHub).
+## 4. Data Files & Conventions (`data/`)
+
+### Trace Files (`data/traces/`)
+| File | Purpose | Written by |
+|---|---|---|
+| `train_cot_traces_unverified.jsonl` | Raw LangGraph-generated traces (not yet verified) | `run_trace_gen.py --mode generate` |
+| `train_cot_traces.jsonl` | **Canonical** verified traces used by SFT/GRPO | `run_trace_gen.py --mode verify` |
+| `train_cot_traces.jsonl.old` | Backup of legacy traces (built with external API keys) | One-time rename at setup |
+
+### Model Artifacts (`data/models/`)
+| Directory | Contents |
+|---|---|
+| `grounding_tool_cv_best/weights/best.pt` | Best-fold YOLOv8m weights for `locate_tooth` |
+| `vllm_cache/` | HuggingFace model cache for vLLM (`HF_HOME` override) |
+| `qwen3_vl_sft/` | SFT LoRA adapter output |
+
+### Rate-Limit State Files (`data/`)
+| File | Pool | Persists |
+|---|---|---|
+| `provider_pool_state.json` | `ProviderPool` (verifier) | Daily call counts + cooldown timestamps |
+| `generator_pool_state.json` | `GeneratorPool` (external API gen) | Daily call counts + cooldown timestamps |
+
+---
+
+## 5. Configuration & Setup (Root Files)
+- `pyproject.toml` / `dental_agent.egg-info/`: **Package Installers.** Tells pip how to install the `dental_agent` package so it can be imported anywhere.
+- `requirements.txt`: Pinned dependencies including `langgraph`, `vllm` (Colab-only), and API clients.
+- `configs/`: YAML config files for `ProjectConfig` (loaded by `dental_agent/config.py`).
+- `.env`: Private API keys and rate-limit settings (git-ignored). See `.env.example` for documentation.
+- `.env.example`: Template with all env vars, default model names, and explanatory comments.
+- `tests/`: Contains `conftest.py` and `test_*.py` files which use `pytest` to automatically verify code.
+- `download_and_cleanup.py`: Root-level dataset download helper (also callable from notebooks).

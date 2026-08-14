@@ -29,6 +29,7 @@ from dental_agent.tools.registry import ToolRegistry
 from dental_agent.training.api_pool import (
     call_llm,
     get_provider_pool,
+    get_generator_pool,
     AllKeysExhaustedToday,
     verify_local_server_health,
 )
@@ -46,12 +47,26 @@ def _is_valid_key(val: str | None) -> bool:
 # Generator: locally-hosted Qwen3-VL-8B-Thinking via vLLM (see api_pool.py's
 # "local" OpenAI-compatible provider). Override via GENERATOR_PROVIDER/
 # GENERATOR_MODEL in .env if you're pointing at a different setup.
+# When GENERATOR_PROVIDER is an external API (not 'local'), the GeneratorPool
+# handles rate limiting via 'auto_generator' routing.
 # ---------------------------------------------------------------------------
 GENERATOR_PROVIDER = os.environ.get("GENERATOR_PROVIDER", "local")
 GENERATOR_MODEL = os.environ.get("GENERATOR_MODEL", "Qwen/Qwen3-VL-8B-Thinking")
 
+
+def _resolve_generator() -> tuple[str, str]:
+    """Pick (provider, model) for the generator.
+    
+    When local, returns ('local', model_name) — no rate limiting.
+    When external, returns ('auto_generator', 'auto_model') — GeneratorPool handles it.
+    """
+    if GENERATOR_PROVIDER == "local":
+        return "local", GENERATOR_MODEL
+    return "auto_generator", "auto_model"
+
+
 # ---------------------------------------------------------------------------
-# Verifier: The new ProviderPool handles round-robining across external APIs
+# Verifier: The ProviderPool handles round-robining across external APIs
 # (NVIDIA, Groq, OpenRouter, Gemini) and enforces strict 5-minute cooldowns.
 # ---------------------------------------------------------------------------
 
@@ -111,14 +126,15 @@ def generate_interactive_trajectory(
     testing, patch dental_agent.training.api_pool.call_llm instead of passing call_llm_fn
     here (tests/ should do this via monkeypatch, not this parameter).
     """
+    gen_provider, gen_model = _resolve_generator()
     system_prompt = build_agent_system_prompt(registry.format_tool_descriptions())
     return run_trace_gen(
         image=image,
         ground_truth=ground_truth,
         registry=registry,
         system_prompt=system_prompt,
-        provider=provider,
-        model=model,
+        provider=gen_provider,
+        model=gen_model,
         max_turns=max_turns,
     )
 
@@ -229,6 +245,167 @@ def build_trace_example(
         "n_verified": len(verified),
         "verified_traces": verified,
         "failure_reasons": failure_reasons,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Decoupled pipeline: generate_only / verify_pending
+# ---------------------------------------------------------------------------
+
+def generate_only(
+    image_id: int,
+    images_df: pd.DataFrame,
+    annots_df: pd.DataFrame,
+    categories_df: pd.DataFrame | None = None,
+    diag_col: str = "category_id_3",
+) -> dict[str, Any] | None:
+    """Generate a raw (unverified) trace for a single image.
+    
+    Does NOT call the verifier. Returns the raw trajectory dict to be
+    written to ``train_cot_traces_unverified.jsonl``.
+    """
+    matches = images_df[images_df["id"] == image_id]
+    if matches.empty:
+        return None
+    row = matches.iloc[0]
+    image_path = row.get("local_path")
+    if not image_path or not os.path.exists(str(image_path)):
+        return None
+
+    image = Image.open(image_path).convert("RGB")
+    anns = annots_df[annots_df["image_id"] == image_id]
+    if anns.empty:
+        return None
+
+    cat_lookup = (
+        dict(zip(categories_df["id"], categories_df["name"]))
+        if categories_df is not None and len(categories_df)
+        else {}
+    )
+
+    ground_truth = _format_ground_truth(anns, cat_lookup, diag_col)
+    registry = ToolRegistry.create_default()
+
+    traj, fail_reason = generate_interactive_trajectory(image, ground_truth, registry)
+    if traj is None:
+        return {
+            "image_id": image_id,
+            "image_path": str(image_path),
+            "ground_truth": ground_truth,
+            "status": "generation_failed",
+            "failure_reason": fail_reason,
+        }
+
+    return {
+        "image_id": image_id,
+        "image_path": str(image_path),
+        "ground_truth": ground_truth,
+        "status": "unverified",
+        "trajectory": to_jsonable(traj),
+    }
+
+
+def verify_pending(
+    unverified_path: str | Path,
+    verified_path: str | Path,
+    images_df: pd.DataFrame | None = None,
+    call_llm_fn: Callable[..., str] = call_llm,
+) -> dict[str, int]:
+    """Read unverified traces, verify each, and append passing traces to the verified file.
+    
+    Tracks already-verified image IDs from ``verified_path`` so it can resume.
+    Returns a summary dict with counts.
+    """
+    unverified_path = Path(unverified_path)
+    verified_path = Path(verified_path)
+
+    if not unverified_path.exists():
+        print(f"No unverified trace file found at {unverified_path}")
+        return {"pending": 0, "verified": 0, "rejected": 0}
+
+    # Load already-verified IDs
+    verified_ids: set[int] = set()
+    if verified_path.exists():
+        with open(verified_path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                    if "image_id" in record:
+                        verified_ids.add(int(record["image_id"]))
+                except Exception:
+                    pass
+
+    # Load unverified traces
+    pending = []
+    with open(unverified_path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+                img_id = int(record.get("image_id", -1))
+                status = record.get("status", "")
+                if img_id not in verified_ids and status == "unverified":
+                    pending.append(record)
+            except Exception:
+                pass
+
+    print(f"Verification: {len(pending)} pending, {len(verified_ids)} already verified")
+
+    n_verified = 0
+    n_rejected = 0
+
+    for idx, record in enumerate(pending, start=1):
+        image_id = int(record["image_id"])
+        image_path = record.get("image_path", "")
+        ground_truth = record.get("ground_truth", [])
+        trajectory = record.get("trajectory", {})
+
+        if not trajectory or not os.path.exists(str(image_path)):
+            print(f"  [{idx}/{len(pending)}] Image ID {image_id}: skipping (no trajectory or image)")
+            continue
+
+        print(f"  [{idx}/{len(pending)}] Verifying Image ID {image_id}...", end=" ", flush=True)
+
+        try:
+            image = Image.open(image_path).convert("RGB")
+            v_result = verify_trace(
+                image, ground_truth, trajectory, call_llm_fn=call_llm_fn
+            )
+
+            if v_result.get("grounded"):
+                # Promote to verified file
+                trajectory["verifier_reason"] = v_result.get("reason")
+                trajectory["image_id"] = image_id
+                trajectory["image_path"] = image_path
+                trajectory["ground_truth"] = ground_truth
+
+                verified_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(verified_path, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(to_jsonable(trajectory)) + "\n")
+
+                n_verified += 1
+                print(f"PASSED ({v_result.get('reason', '')[:60]})", flush=True)
+            else:
+                n_rejected += 1
+                print(f"REJECTED ({v_result.get('reason', '')[:60]})", flush=True)
+
+        except AllKeysExhaustedToday as e:
+            print(f"\n[DAILY LIMIT] {e}")
+            print(f"Verified {n_verified} traces this session. Resume later to continue.")
+            break
+        except Exception as e:
+            print(f"ERROR ({e})")
+            n_rejected += 1
+
+    return {
+        "pending": len(pending),
+        "verified": n_verified,
+        "rejected": n_rejected,
     }
 
 

@@ -19,9 +19,25 @@ The LangGraph loop (`langgraph_loop.py`) runs tool calls dynamically and for rea
 - **Rule:** Do not revert to or reintroduce the `<fake_tool_call>` or pre-computed-then-narrated tool output paradigms.
 - **Rule:** Always enforce that the model uses tools (e.g., `locate_tooth`, `zoom_crop`) before issuing a final diagnosis.
 
-## 4. No Hardcoded Verifier Models
-- **Rule:** Do not hardcode a specific verifier model name anywhere in code, configs, or docs. The system dynamically resolves it based on active keys in `.env` (via `api_pool.py`).
+## 4. No Hardcoded Verifier/Generator Models
+- **Rule:** Do not hardcode a specific verifier or generator model name anywhere in Python code. All model defaults MUST be defined in `.env` and `.env.example` so they are discoverable and changeable without reading the codebase.
+- **Rule:** The `GeneratorPool` and `ProviderPool` (verifier) are independent singletons with separate rate-limit state files, cooldown timers, and RPD caps. They must NEVER share state.
+- **Rule:** `api_pool.py` reads model names from env vars (e.g. `NVIDIA_VERIFIER_MODEL`, `GROQ_GENERATOR_MODEL`). The `.env.example` file documents the sensible defaults.
 
 ## 5. Git Commit & Push Policy
 - **Rule:** When writing or saving code, ONLY commit your changes locally to the git repository. 
 - **DO NOT** push commits to the remote GitHub repository. The user will manually review and push the changes if necessary.
+
+## 6. Trace File Naming Convention (CRITICAL)
+- **Rule:** `data/traces/train_cot_traces.jsonl` is the CANONICAL verified trace file used by all downstream pipelines (SFT, GRPO, YOLO notebooks).
+- The legacy version (built with external API keys in earlier project versions) has been renamed to `train_cot_traces.jsonl.old` and must not be deleted — it serves as a backup.
+- Raw/unverified traces from the LangGraph generator are written to `data/traces/train_cot_traces_unverified.jsonl`.
+- The verification pass reads from `_unverified.jsonl` and promotes passing traces to `train_cot_traces.jsonl`.
+- **DO NOT** rename or create alternative output filenames (e.g. `cot_traces_aim1.jsonl`). All notebooks expect `train_cot_traces.jsonl`.
+
+## 7. Decoupled Generation & Verification Pipeline
+- **Rule:** Trace generation and verification are two independent phases that run at different speeds.
+  - **Generation** writes raw traces to `train_cot_traces_unverified.jsonl` as fast as hardware allows (no rate limit when using local vLLM).
+  - **Verification** reads the unverified file, verifies via external APIs (rate-limited by `ProviderPool`), and promotes passing traces to `train_cot_traces.jsonl`.
+- **Rule:** Both phases must support resume — tracking processed image IDs so they can be interrupted and restarted without data loss.
+- **Rule:** When `GENERATOR_PROVIDER=local`, the generator must NOT be stalled by verifier rate limits.

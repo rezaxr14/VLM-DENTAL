@@ -41,13 +41,40 @@ class AllKeysExhaustedToday(Exception):
 # Provider Pool (Round-Robin with Cooling & Daily Caps)
 # ---------------------------------------------------------------------------
 
-class ProviderPool:
-    """Round-robins calls across configured providers (nvidia_nim, groq, openrouter, gemini),
-    respecting each provider's cooldown (API_COOLDOWN_SECONDS) and daily cap (API_RPD_LIMIT).
-    
-    Daily-usage state persists to disk so it survives session restarts and resets
-    automatically on new calendar days.
+# ---------------------------------------------------------------------------
+# Model env-var mapping helpers
+# ---------------------------------------------------------------------------
+
+def _provider_to_api_key_env(provider: str) -> str:
+    """Map provider name to its API key env var."""
+    return f"{provider.upper().replace('_NIM', '')}_API_KEY"
+
+
+def _provider_to_model_env(provider: str, role: str = "VERIFIER") -> str:
+    """Map provider name + role to its model env var."""
+    return f"{provider.upper().replace('_NIM', '')}_{role}_MODEL"
+
+
+def _is_valid_env(val: str | None) -> bool:
+    """Return True if an env var value is set and not a placeholder."""
+    if not val:
+        return False
+    v = val.strip().lower()
+    return bool(v and not v.startswith("your_") and not v.startswith("placeholder") and v != "none")
+
+
+# ---------------------------------------------------------------------------
+# Base Pool (shared logic for ProviderPool and GeneratorPool)
+# ---------------------------------------------------------------------------
+
+class _BasePool:
+    """Shared round-robin + cooldown + daily-cap logic.
+
+    Subclasses set ``_role`` ("VERIFIER" or "GENERATOR") and optionally
+    override ``_default_candidates``.
     """
+
+    _role: str = "VERIFIER"  # overridden by subclass
 
     def __init__(
         self,
@@ -56,14 +83,16 @@ class ProviderPool:
         rpd_limit: int = 10,
         state_path: str | None = None,
     ) -> None:
-        # Default active verifier providers (only those with an API key set)
         if providers is None:
             candidates = ["nvidia_nim", "groq", "openrouter", "gemini"]
             active = []
             for p in candidates:
-                env_key = f"{p.upper().replace('_NIM', '')}_API_KEY"
-                val = os.environ.get(env_key, "").strip()
-                if val and not val.startswith("your_") and not val.startswith("placeholder"):
+                key_env = _provider_to_api_key_env(p)
+                model_env = _provider_to_model_env(p, self._role)
+                key_val = os.environ.get(key_env, "").strip()
+                model_val = os.environ.get(model_env, "").strip()
+                # Activate only if BOTH the API key and the model are set
+                if _is_valid_env(key_val) and _is_valid_env(model_val):
                     active.append(p)
             self.providers = active
         else:
@@ -72,11 +101,14 @@ class ProviderPool:
         self.cooldown = cooldown_seconds
         self.rpd_limit = rpd_limit
         self.state_path = state_path or os.path.join(
-            os.environ.get("DENTAL_AGENT_DATA_DIR", "data"), "provider_pool_state.json"
+            os.environ.get("DENTAL_AGENT_DATA_DIR", "data"),
+            f"{self._role.lower()}_pool_state.json",
         )
         self.state: dict[str, Any] = self._load()
         self._next_idx = 0
         self._reset_if_new_day()
+
+    # -- persistence ---------------------------------------------------------
 
     def _load(self) -> dict[str, Any]:
         if os.path.exists(self.state_path):
@@ -107,66 +139,121 @@ class ProviderPool:
         if changed:
             self._save()
 
+    # -- acquire -------------------------------------------------------------
+
     def acquire(self) -> tuple[str, str]:
-        """Finds the next available provider. Blocks if all are on cooldown, returns (provider, model_env)."""
+        """Finds the next available provider. Blocks if all are on cooldown.
+
+        Returns ``(provider, model)``.
+        """
         if not self.providers:
-            raise ValueError("No providers have API keys set in .env!")
-        
+            raise ValueError(
+                f"No providers have both an API key and a {self._role}_MODEL set in .env!"
+            )
+
         self._reset_if_new_day()
 
-        # Check if they are all exhausted for the day first
-        if all(self.state.get(p, {}).get("calls_today", 0) >= self.rpd_limit for p in self.providers):
-            raise AllKeysExhaustedToday(f"All {len(self.providers)} providers have reached their {self.rpd_limit} RPD limit.")
+        # All exhausted for the day?
+        if all(
+            self.state.get(p, {}).get("calls_today", 0) >= self.rpd_limit
+            for p in self.providers
+        ):
+            raise AllKeysExhaustedToday(
+                f"All {len(self.providers)} {self._role.lower()} providers have "
+                f"reached their {self.rpd_limit} RPD limit."
+            )
 
-        # Loop until we find one that is off cooldown (or block until the closest one is)
         while True:
-            closest_wait = float('inf')
-            
-            # Try to find an immediately available provider (round robin)
+            closest_wait = float("inf")
+
             for _ in range(len(self.providers)):
                 idx = self._next_idx % len(self.providers)
                 self._next_idx += 1
                 p = self.providers[idx]
                 entry = self.state[p]
-                
+
                 if entry["calls_today"] >= self.rpd_limit:
                     continue
-                
+
                 elapsed = time.time() - entry.get("last_call_ts", 0.0)
                 if elapsed >= self.cooldown:
-                    # Found one! Claim it.
                     entry["last_call_ts"] = time.time()
                     entry["calls_today"] += 1
                     self._save()
-                    
-                    # Fetch the model from env
-                    model_env = f"{p.upper().replace('_NIM', '')}_VERIFIER_MODEL"
-                    model = os.environ.get(model_env)
+
+                    model_env = _provider_to_model_env(p, self._role)
+                    model = os.environ.get(model_env, "").strip()
                     if not model:
-                        raise ValueError(f"Provider '{p}' was selected but {model_env} is not set in .env")
-                        
+                        raise ValueError(
+                            f"Provider '{p}' was selected but {model_env} is not set in .env"
+                        )
                     return p, model
                 else:
-                    # Track the shortest wait time in case all are on cooldown
                     wait = self.cooldown - elapsed
                     if wait < closest_wait:
                         closest_wait = wait
 
-            # If we got here, all non-exhausted providers are on cooldown. Sleep until the closest one is ready.
-            print(f"All providers on cooling down. Sleeping for {closest_wait:.1f} seconds...")
+            print(
+                f"All {self._role.lower()} providers on cooldown. "
+                f"Sleeping for {closest_wait:.1f} seconds..."
+            )
             time.sleep(closest_wait + 0.1)
 
 
-# Global pool singleton
+# ---------------------------------------------------------------------------
+# Concrete Pools
+# ---------------------------------------------------------------------------
+
+class ProviderPool(_BasePool):
+    """Round-robins **verifier** calls across configured providers.
+
+    Reads ``API_COOLDOWN_SECONDS`` and ``API_RPD_LIMIT`` from the environment.
+    State persists to ``data/verifier_pool_state.json``.
+    """
+
+    _role = "VERIFIER"
+
+
+class GeneratorPool(_BasePool):
+    """Round-robins **generator** calls across configured providers.
+
+    Only used when ``GENERATOR_PROVIDER`` is NOT ``local``.
+    Reads ``GENERATOR_COOLDOWN_SECONDS`` and ``GENERATOR_RPD_LIMIT``.
+    State persists to ``data/generator_pool_state.json``.
+    """
+
+    _role = "GENERATOR"
+
+
+# ---------------------------------------------------------------------------
+# Global pool singletons
+# ---------------------------------------------------------------------------
+
 _provider_pool: ProviderPool | None = None
+_generator_pool: GeneratorPool | None = None
+
 
 def get_provider_pool() -> ProviderPool:
+    """Return the global verifier ProviderPool singleton."""
     global _provider_pool
     if _provider_pool is None:
         cooldown = float(os.environ.get("API_COOLDOWN_SECONDS", "300"))
         rpd = int(os.environ.get("API_RPD_LIMIT", "10"))
         _provider_pool = ProviderPool(cooldown_seconds=cooldown, rpd_limit=rpd)
     return _provider_pool
+
+
+def get_generator_pool() -> GeneratorPool:
+    """Return the global GeneratorPool singleton.
+
+    Only meaningful when ``GENERATOR_PROVIDER`` is an external API.
+    """
+    global _generator_pool
+    if _generator_pool is None:
+        cooldown = float(os.environ.get("GENERATOR_COOLDOWN_SECONDS", "60"))
+        rpd = int(os.environ.get("GENERATOR_RPD_LIMIT", "50"))
+        _generator_pool = GeneratorPool(cooldown_seconds=cooldown, rpd_limit=rpd)
+    return _generator_pool
 
 
 # ---------------------------------------------------------------------------
@@ -265,13 +352,19 @@ def call_llm(
     retry_delay: float = 2.0,
     response_mime_type: Optional[str] = None,
 ) -> str:
-    """Universal API caller for vision-language models with ProviderPool fallback routing."""
+    """Universal API caller for vision-language models with pool-based fallback routing."""
     
-    # If using the unified verifier pool
+    # Auto-route through the verifier pool
     if provider == "auto_verifier":
         pool = get_provider_pool()
         provider, model = pool.acquire()
         print(f"  [call_llm] Auto-routed to verifier provider '{provider}' (model: {model})")
+
+    # Auto-route through the generator pool (external API generation)
+    elif provider == "auto_generator":
+        pool = get_generator_pool()
+        provider, model = pool.acquire()
+        print(f"  [call_llm] Auto-routed to generator provider '{provider}' (model: {model})")
 
     last_error: Exception | None = None
 

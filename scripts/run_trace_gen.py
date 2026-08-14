@@ -1,16 +1,24 @@
 #!/usr/bin/env python3
 """
-Autonomous Daily CoT Trace Generator for DENTEX dataset.
+Autonomous CoT Trace Generator & Verifier for DENTEX dataset.
 
-Designed to be run independently throughout the day from any machine.
-Safely rotates across the configured multi-model Gemini key pool,
-respects rate limits (5 RPM / key, 40 RPD / key), appends traces
-line-by-line in JSONL format, resumes automatically from where it left off,
-and provides Git synchronization instructions for multi-machine workflows.
+Operates in two independent modes:
+
+  --mode generate   Runs the LangGraph loop for each image, writing raw traces
+                    to ``train_cot_traces_unverified.jsonl`` as fast as hardware
+                    allows (no rate limit when GENERATOR_PROVIDER=local).
+
+  --mode verify     Reads unverified traces, verifies each via the ProviderPool
+                    (external API round-robin with rate limits), and promotes
+                    passing traces to ``train_cot_traces.jsonl``.
+
+Both modes support resume — they track processed image IDs so they can be
+interrupted and restarted without data loss.
 
 Usage:
-    python scripts/run_trace_gen.py
-    python scripts/run_trace_gen.py --max-images 10
+    python scripts/run_trace_gen.py --mode generate
+    python scripts/run_trace_gen.py --mode verify
+    python scripts/run_trace_gen.py --mode generate --max-images 10
     python scripts/run_trace_gen.py --status-only
 """
 
@@ -36,14 +44,29 @@ from dental_agent.data.dentex import load_dentex_dataset
 from dental_agent.training.api_pool import (
     AllKeysExhaustedToday,
     get_provider_pool,
+    get_generator_pool,
+    verify_local_server_health,
 )
 from dental_agent.training.trace_generation import (
     GENERATOR_MODEL,
     GENERATOR_PROVIDER,
-    build_trace_example,
+    generate_only,
+    verify_pending,
 )
 from dental_agent.utils.serialization import to_jsonable
 
+
+# ---------------------------------------------------------------------------
+# Output path defaults
+# ---------------------------------------------------------------------------
+
+DEFAULT_UNVERIFIED = "data/traces/train_cot_traces_unverified.jsonl"
+DEFAULT_VERIFIED = "data/traces/train_cot_traces.jsonl"
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def load_completed_ids(output_path: Path) -> set[int]:
     """Read existing output file and extract all processed image IDs."""
@@ -51,28 +74,17 @@ def load_completed_ids(output_path: Path) -> set[int]:
     if not output_path.exists():
         return completed
 
-    if output_path.suffix == ".jsonl":
-        with open(output_path, "r", encoding="utf-8", errors="replace") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    record = json.loads(line)
-                    if "image_id" in record:
-                        completed.add(int(record["image_id"]))
-                except Exception:
-                    pass
-    elif output_path.suffix == ".json":
-        try:
-            with open(output_path, "r", encoding="utf-8", errors="replace") as f:
-                data = json.load(f)
-                if isinstance(data, list):
-                    for item in data:
-                        if isinstance(item, dict) and "image_id" in item:
-                            completed.add(int(item["image_id"]))
-        except Exception:
-            pass
+    with open(output_path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+                if "image_id" in record:
+                    completed.add(int(record["image_id"]))
+            except Exception:
+                pass
 
     return completed
 
@@ -81,45 +93,227 @@ def append_trace(output_path: Path, trace_record: dict[str, Any]) -> None:
     """Atomically append a single generated trace to output file."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
     serializable = to_jsonable(trace_record)
-
-    if output_path.suffix == ".jsonl":
-        with open(output_path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(serializable) + "\n")
-    elif output_path.suffix == ".json":
-        data = []
-        if output_path.exists():
-            try:
-                with open(output_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-            except Exception:
-                data = []
-        data.append(serializable)
-        with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
+    with open(output_path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(serializable) + "\n")
 
 
-def print_banner(pool: Any, completed_count: int, total_images: int) -> None:
+def print_banner(mode: str, pool: Any | None, completed_count: int, total_images: int) -> None:
     print("\n" + "=" * 70, flush=True)
-    print("DENTAL AGENT: AUTONOMOUS DAILY CoT TRACE GENERATOR", flush=True)
+    print(f"DENTAL AGENT: AUTONOMOUS CoT TRACE {'GENERATOR' if mode == 'generate' else 'VERIFIER'}", flush=True)
     print("=" * 70, flush=True)
-    print(f"* Active API Providers: {pool.providers}", flush=True)
-    print(f"* Provider Limits     : {pool.cooldown}s cooldown, {pool.rpd_limit} RPD cap", flush=True)
-    print(f"* Primary Generator   : {GENERATOR_PROVIDER}/{GENERATOR_MODEL}", flush=True)
-    print(f"* Groundedness Judge  : auto_verifier (round-robin)", flush=True)
-    print(f"* Dataset Progress    : {completed_count} / {total_images} images completed", flush=True)
+
+    if mode == "generate":
+        if GENERATOR_PROVIDER == "local":
+            print(f"* Generator          : LOCAL vLLM ({GENERATOR_MODEL}) — no rate limit", flush=True)
+        else:
+            gen_pool = get_generator_pool()
+            print(f"* Generator Providers: {gen_pool.providers}", flush=True)
+            print(f"* Generator Limits   : {gen_pool.cooldown}s cooldown, {gen_pool.rpd_limit} RPD cap", flush=True)
+        print(f"* Output             : {DEFAULT_UNVERIFIED}", flush=True)
+    else:
+        if pool:
+            print(f"* Verifier Providers : {pool.providers}", flush=True)
+            print(f"* Verifier Limits    : {pool.cooldown}s cooldown, {pool.rpd_limit} RPD cap", flush=True)
+        print(f"* Input              : {DEFAULT_UNVERIFIED}", flush=True)
+        print(f"* Output             : {DEFAULT_VERIFIED}", flush=True)
+
+    print(f"* Dataset Progress   : {completed_count} / {total_images} images", flush=True)
     print("=" * 70 + "\n", flush=True)
 
 
+# ---------------------------------------------------------------------------
+# Generate mode
+# ---------------------------------------------------------------------------
+
+def run_generate(args: argparse.Namespace, cfg: Any) -> None:
+    """Run the LangGraph generation loop, writing unverified traces."""
+    output_path = Path(args.output or DEFAULT_UNVERIFIED)
+
+    # Load dataset
+    imgs_df, annots_df, cats_df = load_dentex_dataset(
+        data_dir=cfg.data_dir, split_name=args.split
+    )
+
+    valid_imgs = imgs_df[imgs_df["local_path"].notna()]
+    annotated_ids = set(annots_df["image_id"].unique())
+    eligible_imgs = valid_imgs[valid_imgs["id"].isin(annotated_ids)]
+
+    total_eligible = len(eligible_imgs)
+    completed_ids = load_completed_ids(output_path)
+    remaining_imgs = eligible_imgs[~eligible_imgs["id"].isin(completed_ids)]
+
+    print_banner("generate", None, len(completed_ids), total_eligible)
+
+    if args.status_only:
+        print("Status check complete. Run without --status-only to begin generation.")
+        return
+
+    if remaining_imgs.empty:
+        print(f"[DONE] All {total_eligible} images in split '{args.split}' have already been generated!")
+        print(f"Unverified traces: {output_path}")
+        return
+
+    todo_images = remaining_imgs.to_dict(orient="records")
+    if args.max_images is not None:
+        todo_images = todo_images[: args.max_images]
+
+    print(f"Starting generation: {len(todo_images)} image(s) (Pacing delay: {args.pacing_delay}s)...")
+    print(f"Output: {output_path}\n")
+
+    generated_in_session = 0
+    failed_in_session = 0
+    session_start_time = time.time()
+
+    for idx, img_record in enumerate(todo_images, start=1):
+        image_id = int(img_record["id"])
+        image_file = os.path.basename(str(img_record.get("local_path", "")))
+
+        print(f"[{idx}/{len(todo_images)}] Generating Image ID {image_id} ({image_file})...", flush=True)
+
+        try:
+            # Health check for local vLLM
+            if GENERATOR_PROVIDER == "local":
+                health_retries = 0
+                while not verify_local_server_health(timeout=5.0):
+                    health_retries += 1
+                    if health_retries > 24:
+                        raise RuntimeError("Local vLLM server is unresponsive for > 2 minutes. Aborting.")
+                    print(f"  vLLM unresponsive. Waiting 5s... ({health_retries}/24)")
+                    time.sleep(5)
+
+            t0 = time.time()
+            result = generate_only(
+                image_id=image_id,
+                images_df=imgs_df,
+                annots_df=annots_df,
+                categories_df=cats_df,
+            )
+            elapsed = time.time() - t0
+
+            if result is None:
+                print(f"  [SKIP] No valid image/annotations for ID {image_id}", flush=True)
+                continue
+
+            append_trace(output_path, result)
+            status = result.get("status", "unknown")
+
+            if status == "unverified":
+                generated_in_session += 1
+                print(f"  [OK] Generated in {elapsed:.1f}s (Total: {len(completed_ids) + generated_in_session})", flush=True)
+            else:
+                failed_in_session += 1
+                reason = result.get("failure_reason", "unknown")
+                print(f"  [FAIL] {reason} ({elapsed:.1f}s)", flush=True)
+
+            if idx < len(todo_images) and args.pacing_delay > 0:
+                time.sleep(args.pacing_delay)
+
+        except AllKeysExhaustedToday as e:
+            print(f"\n\n[DAILY LIMIT REACHED] {e}")
+            print("Generator API keys exhausted. Progress saved; resume later.")
+            break
+        except KeyboardInterrupt:
+            print("\n\n[PAUSED] Session paused by user.")
+            break
+        except Exception as e:
+            print(f"  [ERROR] Error on Image ID {image_id}: {e}")
+            failed_in_session += 1
+            time.sleep(2.0)
+
+    # Session Summary
+    total_time = time.time() - session_start_time
+    total_generated = len(load_completed_ids(output_path))
+
+    print("\n" + "=" * 70)
+    print("GENERATION SESSION SUMMARY")
+    print("=" * 70)
+    print(f"* Generated this session  : {generated_in_session}")
+    print(f"* Failed this session     : {failed_in_session}")
+    print(f"* Total in unverified file: {total_generated} / {total_eligible} images")
+    print(f"* Session Duration        : {total_time / 60:.1f} minutes")
+    print(f"* Output File             : {output_path}")
+    print("=" * 70 + "\n")
+
+    print("NEXT STEP: Run verification to promote traces:")
+    print(f"  python scripts/run_trace_gen.py --mode verify --split {args.split}")
+    print("=" * 70 + "\n")
+
+
+# ---------------------------------------------------------------------------
+# Verify mode
+# ---------------------------------------------------------------------------
+
+def run_verify(args: argparse.Namespace, cfg: Any) -> None:
+    """Read unverified traces and verify them via external API verifiers."""
+    unverified_path = Path(args.output or DEFAULT_UNVERIFIED)
+    verified_path = Path(DEFAULT_VERIFIED)
+
+    pool = get_provider_pool()
+
+    # Count totals for banner
+    unverified_ids = load_completed_ids(unverified_path)
+    verified_ids = load_completed_ids(verified_path)
+
+    print_banner("verify", pool, len(verified_ids), len(unverified_ids))
+
+    print("--- VERIFIER POOL CAPACITY STATUS ---")
+    for p in pool.providers:
+        calls = pool.state.get(p, {}).get("calls_today", 0)
+        print(f"Provider: {p:<15} Used: {calls}/{pool.rpd_limit}")
+    print("-" * 70 + "\n")
+
+    if args.status_only:
+        pending = len(unverified_ids - verified_ids)
+        print(f"Pending verification: {pending} trace(s)")
+        print("Run without --status-only to begin verification.")
+        return
+
+    print(f"Starting verification pass...")
+    print(f"Input:  {unverified_path}")
+    print(f"Output: {verified_path}\n")
+
+    session_start = time.time()
+    result = verify_pending(
+        unverified_path=unverified_path,
+        verified_path=verified_path,
+    )
+
+    total_time = time.time() - session_start
+    total_verified = len(load_completed_ids(verified_path))
+
+    print("\n" + "=" * 70)
+    print("VERIFICATION SESSION SUMMARY")
+    print("=" * 70)
+    print(f"* Pending at start   : {result['pending']}")
+    print(f"* Verified this run  : {result['verified']}")
+    print(f"* Rejected this run  : {result['rejected']}")
+    print(f"* Total verified     : {total_verified}")
+    print(f"* Session Duration   : {total_time / 60:.1f} minutes")
+    print(f"* Verified File      : {verified_path}")
+    print("=" * 70 + "\n")
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Autonomous Daily Synthetic CoT Trace Generator"
+        description="Autonomous CoT Trace Generator & Verifier"
+    )
+    parser.add_argument(
+        "--mode",
+        type=str,
+        default="generate",
+        choices=["generate", "verify"],
+        help="Operational mode: 'generate' (LangGraph traces) or 'verify' (cross-family verification). Default: generate",
     )
     parser.add_argument(
         "--output",
         "-o",
         type=str,
-        default="data/traces/cot_traces_aim1.jsonl",
-        help="Path to output JSONL file (default: data/traces/cot_traces_aim1.jsonl)",
+        default=None,
+        help="Override output file path. Defaults based on mode: generate → train_cot_traces_unverified.jsonl, verify → reads from unverified",
     )
     parser.add_argument(
         "--split",
@@ -148,7 +342,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--status-only",
         action="store_true",
-        help="Only display current key pool status and dataset progress without generating traces",
+        help="Only display current pool status and progress without processing",
     )
     return parser.parse_args()
 
@@ -158,131 +352,10 @@ def main() -> None:
     cfg = load_config()
     args = parse_args()
 
-    output_path = Path(args.output)
-    pool = get_provider_pool()
-
-    # Load dataset
-    imgs_df, annots_df, cats_df = load_dentex_dataset(
-        data_dir=cfg.data_dir, split_name=args.split
-    )
-
-    # Filter to images with valid local paths and annotations
-    valid_imgs = imgs_df[imgs_df["local_path"].notna()]
-    annotated_ids = set(annots_df["image_id"].unique())
-    eligible_imgs = valid_imgs[valid_imgs["id"].isin(annotated_ids)]
-
-    total_eligible = len(eligible_imgs)
-    completed_ids = load_completed_ids(output_path)
-    remaining_imgs = eligible_imgs[~eligible_imgs["id"].isin(completed_ids)]
-
-    print_banner(pool, len(completed_ids), total_eligible)
-
-    print("--- KEY POOL CAPACITY STATUS ---")
-    for p in pool.providers:
-        calls = pool.state.get(p, {}).get("calls_today", 0)
-        print(f"Provider: {p:<15} Used: {calls}/{pool.rpd_limit}")
-    print("-" * 70 + "\n")
-
-    if args.status_only:
-        print("Status check complete. Run without --status-only to begin trace generation.")
-        return
-
-    if remaining_imgs.empty:
-        print(f"[DONE] All {total_eligible} images in split '{args.split}' have already been processed!")
-        print(f"Traces are saved in: {output_path}")
-        return
-
-    todo_images = remaining_imgs.to_dict(orient="records")
-    if args.max_images is not None:
-        todo_images = todo_images[: args.max_images]
-
-    print(f"Starting session: Processing {len(todo_images)} image(s) (Pacing delay: {args.pacing_delay}s)...")
-    print(f"Output destination: {output_path}\n")
-
-    generated_in_session = 0
-    verified_in_session = 0
-    generator_failures = 0
-    verifier_rejections = 0
-    failure_counts: dict[str, int] = {}
-    session_start_time = time.time()
-
-    for idx, img_record in enumerate(todo_images, start=1):
-        image_id = int(img_record["id"])
-        image_file = os.path.basename(str(img_record.get("local_path", "")))
-
-        print(f"[{idx}/{len(todo_images)}] Processing Image ID {image_id} ({image_file})...", flush=True)
-
-        try:
-            t0 = time.time()
-            example = build_trace_example(
-                image_id=image_id,
-                images_df=imgs_df,
-                annots_df=annots_df,
-                categories_df=cats_df,
-                k=args.k,
-            )
-            elapsed = time.time() - t0
-
-            n_v = example.get("n_verified", 0)
-            append_trace(output_path, example)
-
-            generated_in_session += 1
-            verified_in_session += n_v
-            
-            # Tabulate failures
-            for reason in example.get("failure_reasons", []):
-                if reason.startswith("Generator:"):
-                    generator_failures += 1
-                elif reason.startswith("Verifier:"):
-                    verifier_rejections += 1
-                failure_counts[reason] = failure_counts.get(reason, 0) + 1
-
-            status_str = f"[OK] Verified ({n_v} trace)" if n_v > 0 else "[WARN] Unverified"
-            print(f"{status_str} in {elapsed:.1f}s (Total saved: {len(completed_ids) + verified_in_session})", flush=True)
-
-            # Respect safe inter-request pacing
-            if idx < len(todo_images) and args.pacing_delay > 0:
-                time.sleep(args.pacing_delay)
-
-        except AllKeysExhaustedToday as e:
-            print(f"\n\n[DAILY LIMIT REACHED] {e}")
-            print("All configured Gemini API keys have exhausted their daily quotas for today.")
-            print("The script has saved all progress cleanly and will resume automatically on the next run.")
-            break
-        except KeyboardInterrupt:
-            print("\n\n[PAUSED] Session paused by user.")
-            break
-        except Exception as e:
-            print(f"[ERROR] Error on Image ID {image_id}: {e}")
-            time.sleep(2.0)
-
-    # Session Summary
-    total_time = time.time() - session_start_time
-    total_saved = len(load_completed_ids(output_path))
-
-    print("\n" + "=" * 70)
-    print("SESSION SUMMARY")
-    print("=" * 70)
-    print(f"* Images Processed this session : {generated_in_session}")
-    print(f"* Grounded Traces Generated    : {verified_in_session}")
-    print(f"* Generator Failures           : {generator_failures}")
-    print(f"* Verifier Rejections          : {verifier_rejections}")
-    print(f"* Total Saved Dataset Size     : {total_saved} / {total_eligible} images")
-    print(f"* Session Duration             : {total_time / 60:.1f} minutes")
-    print(f"* Output File                  : {output_path}")
-    
-    if failure_counts:
-        print("\nTOP FAILURE REASONS:")
-        sorted_failures = sorted(failure_counts.items(), key=lambda x: x[1], reverse=True)
-        for reason, count in sorted_failures[:5]:
-            print(f"  {count}x : {reason[:100]}...")
-            
-    print("=" * 70)
-
-    print("\nGIT SYNC INSTRUCTIONS:")
-    print("  Before starting on another machine : git pull")
-    print(f"  To synchronize this session's data : git add {output_path} && git commit -m \"Add {generated_in_session} synthetic CoT traces\" && git push")
-    print("=" * 70 + "\n")
+    if args.mode == "generate":
+        run_generate(args, cfg)
+    elif args.mode == "verify":
+        run_verify(args, cfg)
 
 
 if __name__ == "__main__":
