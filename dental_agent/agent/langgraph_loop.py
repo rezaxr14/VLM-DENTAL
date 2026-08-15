@@ -48,7 +48,7 @@ class TraceGenState(TypedDict):
     pending_tool_call: dict[str, Any] | None
 
 
-def _reasoning_node_factory(provider: str, model: str, max_tool_calls: int):
+def _reasoning_node_factory(provider: str, model: str, max_tool_calls: int, max_tokens: int = 8192):
     def _reasoning_node(state: TraceGenState) -> TraceGenState:
         if state["tool_calls"] >= max_tool_calls and state["final_answer"] is None:
             state["status"] = "error"
@@ -62,7 +62,7 @@ def _reasoning_node_factory(provider: str, model: str, max_tool_calls: int):
             user_content=state["messages"],
             image=None,
             temperature=0.7,
-            max_tokens=2048,
+            max_tokens=max_tokens,
         )
         parsed = parse_agent_json(raw)
         state["messages"].append({"role": "assistant", "content": raw})
@@ -75,18 +75,52 @@ def _reasoning_node_factory(provider: str, model: str, max_tool_calls: int):
 
         if not parsed:
             state["consecutive_parse_errors"] += 1
+
+            # Second consecutive failure: instead of repeating the same open-ended
+            # retry (which just fails the same way again if the model's thinking is
+            # what's overrunning the budget), spend one dedicated recovery turn
+            # explicitly telling it to stop reasoning and emit the JSON now. This is
+            # a materially different prompt, not just another try of the same thing.
+            if state["consecutive_parse_errors"] == 2:
+                turn_record["status"] = "unparseable_recovery_attempt"
+                state["turns"].append(turn_record)
+                state["messages"].append({
+                    "role": "user",
+                    "content": (
+                        "Your last two responses were cut off before producing valid JSON "
+                        "(your reasoning ran too long). Stop reasoning now. Based on "
+                        "everything you've seen so far, output ONLY one JSON object: "
+                        "either {\"tool\": \"...\", \"args\": {...}} for your next tool call, "
+                        "or {\"final_answer\": {...}} if you already have enough to diagnose. "
+                        "No <think> block, no other text — the JSON object only."
+                    ),
+                })
+                state["status"] = "running"
+                return state
+
             if state["consecutive_parse_errors"] >= 3:
                 turn_record["status"] = "unparseable_fatal"
                 state["turns"].append(turn_record)
                 state["status"] = "error"
                 state["error"] = f"Unparseable model output on turn {turn_record['turn']}: {raw[:300]}"
             else:
+                # First failure: a response with no '{' at all almost always means
+                # it was truncated mid-thought rather than genuinely malformed, so
+                # the corrective hint should ask for brevity, not "fix your JSON".
+                if "{" not in raw:
+                    hint = (
+                        "Error: Your response was cut off before reaching a JSON action "
+                        "(too much reasoning). Be more concise — briefly note your next "
+                        "step, then immediately output the JSON tool call or final_answer."
+                    )
+                else:
+                    hint = (
+                        "Error: Your output was not valid JSON or could not be parsed. "
+                        "Please correct the format and output a single JSON object."
+                    )
                 turn_record["status"] = "unparseable_retry"
                 state["turns"].append(turn_record)
-                state["messages"].append({
-                    "role": "user", 
-                    "content": "Error: Your output was not valid JSON or could not be parsed. Please correct the format and output a single JSON object."
-                })
+                state["messages"].append({"role": "user", "content": hint})
                 state["status"] = "running"
             return state
 
@@ -199,13 +233,14 @@ def _route(state: TraceGenState) -> str:
 def build_trace_gen_graph(
     registry: ToolRegistry,
     provider: str = "local",
-    model: str = "Qwen/Qwen3-VL-8B-Thinking",
-    max_tool_calls: int = 5,
+    model: str = "Qwen/Qwen3.5-9B",
+    max_tool_calls: int = 8,
+    max_tokens: int = 4096,
 ):
     """Build and compile the LangGraph for ground-truth-directed, real-tool-execution generation."""
     graph = StateGraph(TraceGenState)
     
-    graph.add_node("reasoning", _reasoning_node_factory(provider, model, max_tool_calls))
+    graph.add_node("reasoning", _reasoning_node_factory(provider, model, max_tool_calls, max_tokens=max_tokens))
     graph.add_node("tools", _tool_node_factory(registry))
     
     graph.set_entry_point("reasoning")
@@ -222,8 +257,9 @@ def run_trace_gen(
     registry: ToolRegistry,
     system_prompt: str,
     provider: str = "local",
-    model: str = "Qwen/Qwen3-VL-8B-Thinking",
-    max_turns: int = 5,
+    model: str = "Qwen/Qwen3.5-9B",
+    max_turns: int = 8,
+    max_tokens_per_turn: int = 4096,
 ) -> tuple[dict[str, Any] | None, str | None]:
     """Ground-truth-directed trace generation with real tool execution via LangGraph.
     
@@ -265,13 +301,33 @@ def run_trace_gen(
         "pending_tool_call": None,
     }
 
-    app = build_trace_gen_graph(registry, provider=provider, model=model, max_tool_calls=max_turns)
+    app = build_trace_gen_graph(
+        registry, provider=provider, model=model, max_tool_calls=max_turns, max_tokens=max_tokens_per_turn
+    )
+    # Each logical turn can now cost up to ~4 reasoning-node visits (2 retries + 1
+    # recovery attempt + 1 success) plus 1 tool-node visit, so budget generously —
+    # this is just a runaway-loop safety valve, not the real cost control (that's
+    # max_tool_calls / consecutive_parse_errors above).
     final_state: TraceGenState = app.invoke(
-        initial_state, config={"recursion_limit": max_turns * 3 + 4}
+        initial_state, config={"recursion_limit": max_turns * 6 + 10}
     )
 
+    error = final_state.get("error")
+
     if final_state["final_answer"] is None:
-        return None, final_state.get("error") or "No final_answer produced"
+        # Preserve whatever partial progress exists (successful tool calls, partial
+        # reasoning turns) instead of discarding it — a failed image still returns
+        # its turns/tool_calls so the caller can persist them for inspection or
+        # future reuse, rather than losing that generation work entirely.
+        if final_state["turns"]:
+            return {
+                "turns": final_state["turns"],
+                "tool_calls": final_state["tool_calls"],
+                "final_answer": None,
+                "messages": final_state["messages"],
+                "format_ok": False,
+            }, error or "No final_answer produced"
+        return None, error or "No final_answer produced"
 
     return {
         "turns": final_state["turns"],

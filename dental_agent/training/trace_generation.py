@@ -113,7 +113,8 @@ def generate_interactive_trajectory(
     image: Image.Image,
     ground_truth: list[dict[str, Any]],
     registry: ToolRegistry,
-    max_turns: int = 5,
+    max_turns: int = 8,
+    max_tokens_per_turn: int = 8192,
     provider: str = GENERATOR_PROVIDER,
     model: str = GENERATOR_MODEL,
     call_llm_fn: Callable[..., str] | None = None,
@@ -136,6 +137,7 @@ def generate_interactive_trajectory(
         provider=gen_provider,
         model=gen_model,
         max_turns=max_turns,
+        max_tokens_per_turn=max_tokens_per_turn,
     )
 
 
@@ -215,7 +217,7 @@ def build_trace_example(
     failure_reasons = []
     for _ in range(k):
         traj, fail_reason = generate_interactive_trajectory(image, ground_truth, registry)
-        if traj:
+        if traj and traj.get("final_answer") is not None:
             candidates.append(traj)
         else:
             failure_reasons.append(f"Generator: {fail_reason}")
@@ -258,6 +260,8 @@ def generate_only(
     annots_df: pd.DataFrame,
     categories_df: pd.DataFrame | None = None,
     diag_col: str = "category_id_3",
+    max_turns: int = 8,
+    max_tokens_per_turn: int = 4096,
 ) -> dict[str, Any] | None:
     """Generate a raw (unverified) trace for a single image.
     
@@ -286,14 +290,19 @@ def generate_only(
     ground_truth = _format_ground_truth(anns, cat_lookup, diag_col)
     registry = ToolRegistry.create_default()
 
-    traj, fail_reason = generate_interactive_trajectory(image, ground_truth, registry)
-    if traj is None:
+    traj, fail_reason = generate_interactive_trajectory(
+        image, ground_truth, registry, max_turns=max_turns, max_tokens_per_turn=max_tokens_per_turn
+    )
+    if traj is None or traj.get("final_answer") is None:
         return {
             "image_id": image_id,
             "image_path": str(image_path),
             "ground_truth": ground_truth,
             "status": "generation_failed",
             "failure_reason": fail_reason,
+            # Preserve whatever the model actually did before failing (successful
+            # tool calls, partial reasoning turns) rather than losing it outright.
+            "partial_trajectory": to_jsonable(traj) if traj else None,
         }
 
     return {

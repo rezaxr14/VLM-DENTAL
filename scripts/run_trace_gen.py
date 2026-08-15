@@ -73,8 +73,16 @@ DEFAULT_VERIFIED = "data/traces/train_cot_traces.jsonl"
 # Helpers
 # ---------------------------------------------------------------------------
 
-def load_completed_ids(output_path: Path) -> set[int]:
-    """Read existing output file and extract all processed image IDs."""
+def load_completed_ids(output_path: Path, only_successful: bool = False) -> set[int]:
+    """Read existing output file and extract processed image IDs.
+
+    By default (only_successful=False) counts every record with an image_id,
+    which is what verify_pending wants (it filters by status itself). Pass
+    only_successful=True for the generation resume check specifically —
+    otherwise an image that failed once (e.g. hit a transient truncation
+    error) gets marked "completed" and is silently skipped forever, even
+    after a fix that would let it succeed on retry.
+    """
     completed: set[int] = set()
     if not output_path.exists():
         return completed
@@ -86,8 +94,11 @@ def load_completed_ids(output_path: Path) -> set[int]:
                 continue
             try:
                 record = json.loads(line)
-                if "image_id" in record:
-                    completed.add(int(record["image_id"]))
+                if "image_id" not in record:
+                    continue
+                if only_successful and record.get("status") != "unverified":
+                    continue
+                completed.add(int(record["image_id"]))
             except Exception:
                 pass
 
@@ -144,7 +155,7 @@ def run_generate(args: argparse.Namespace, cfg: Any) -> None:
     eligible_imgs = valid_imgs[valid_imgs["id"].isin(annotated_ids)]
 
     total_eligible = len(eligible_imgs)
-    completed_ids = load_completed_ids(output_path)
+    completed_ids = load_completed_ids(output_path, only_successful=True)
     remaining_imgs = eligible_imgs[~eligible_imgs["id"].isin(completed_ids)]
 
     print_banner("generate", None, len(completed_ids), total_eligible)
@@ -192,6 +203,8 @@ def run_generate(args: argparse.Namespace, cfg: Any) -> None:
                 images_df=imgs_df,
                 annots_df=annots_df,
                 categories_df=cats_df,
+                max_turns=args.max_turns,
+                max_tokens_per_turn=args.max_tokens,
             )
             elapsed = time.time() - t0
 
@@ -227,7 +240,7 @@ def run_generate(args: argparse.Namespace, cfg: Any) -> None:
 
     # Session Summary
     total_time = time.time() - session_start_time
-    total_generated = len(load_completed_ids(output_path))
+    total_generated = len(load_completed_ids(output_path, only_successful=True))
 
     print("\n" + "=" * 70)
     print("GENERATION SESSION SUMMARY")
@@ -343,6 +356,20 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=1.5,
         help="Safe delay (seconds) between successive trace calls (default: 1.5s)",
+    )
+    parser.add_argument(
+        "--max-turns",
+        type=int,
+        default=8,
+        help="Max tool calls allowed before a trace is abandoned (generate mode only, default: 8)",
+    )
+    parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=4096,
+        help="Max tokens per generator turn (generate mode only, default: 4096). Raise this if "
+             "you still see 'Unparseable model output' failures with no JSON at all in the raw "
+             "output -- that's the model's thinking getting cut off, not a formatting mistake.",
     )
     parser.add_argument(
         "--status-only",
