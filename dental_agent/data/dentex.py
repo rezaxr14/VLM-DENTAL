@@ -379,6 +379,19 @@ def find_local_dentex_dir(data_dir: str | Path | None = None, split_name: str = 
         Path("data/dentex"),
         Path("data"),
     ])
+    
+    # Google Drive paths (auto-detect when Drive is mounted in Colab)
+    if Path("/content/drive/MyDrive").exists():
+        candidates.extend([
+            Path("/content/drive/MyDrive/VLM-DENTAL/data/dentex/DENTEX"),
+            Path("/content/drive/MyDrive/VLM-DENTAL/data/dentex"),
+            Path("/content/drive/MyDrive/VLM-DENTAL/data"),
+            Path("/content/drive/MyDrive/vlmdental/data/dentex/DENTEX"),
+            Path("/content/drive/MyDrive/vlmdental/data/dentex"),
+            Path("/content/drive/MyDrive/vlmdental/data"),
+            Path("/content/drive/MyDrive/dental_agent/data"),
+            Path("/content/drive/MyDrive/DENTEX"),
+        ])
     for c in candidates:
         if c.exists() and c.is_dir():
             # Check for split-specific files
