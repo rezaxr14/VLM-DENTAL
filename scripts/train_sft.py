@@ -10,9 +10,15 @@ from trl import SFTTrainer
 from datasets import Dataset
 from qwen_vl_utils import process_vision_info
 
+from dotenv import load_dotenv
+load_dotenv()
+
 @dataclass
 class ScriptArguments:
-    model_id: str = field(default="Qwen/Qwen3.5-9B", metadata={"help": "The model to train."})
+    model_id: str = field(
+        default=os.environ.get("MODEL_NAME", "Qwen/Qwen3.5-9B"),
+        metadata={"help": "The model to train."}
+    )
     dataset_path: str = field(default="data/traces/train_cot_traces.jsonl", metadata={"help": "Path to the CoT traces JSONL."})
     output_dir: str = field(default="data/models/qwen3_5_9b_sft", metadata={"help": "Output directory for the fine-tuned model."})
     batch_size: int = field(default=1, metadata={"help": "Batch size per GPU."})
