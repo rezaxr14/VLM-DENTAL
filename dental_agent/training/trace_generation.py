@@ -51,7 +51,7 @@ def _is_valid_key(val: str | None) -> bool:
 # handles rate limiting via 'auto_generator' routing.
 # ---------------------------------------------------------------------------
 GENERATOR_PROVIDER = os.environ.get("GENERATOR_PROVIDER", "local")
-GENERATOR_MODEL = os.environ.get("GENERATOR_MODEL", "Qwen/Qwen3.5-9B")
+GENERATOR_MODEL = os.environ.get("GENERATOR_MODEL", "QuantTrio/Qwen3.5-9B-AWQ")
 
 
 def _resolve_generator() -> tuple[str, str]:
