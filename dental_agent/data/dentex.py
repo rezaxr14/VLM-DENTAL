@@ -421,9 +421,11 @@ def load_combined_dentex_dataset(
     """
     local_dir = find_local_dentex_dir(data_dir, split_name)
     if local_dir is not None:
+        print(f"✅ Found existing DENTEX dataset for '{split_name}' split at: {local_dir}")
         dentex_path = local_dir
     else:
-        print(f"Dataset for split '{split_name}' not found locally. Triggering download...")
+        print(f"⚠️ WARNING: Dataset for split '{split_name}' NOT found in any local or Colab Drive paths!")
+        print(f"⬇️ Initiating HuggingFace download... (Press STOP in Colab now if you want to cancel)")
         dentex_path = download_dentex(
             cache_dir=str(data_dir) if data_dir else None,
             split_name=split_name,
