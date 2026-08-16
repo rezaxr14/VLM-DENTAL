@@ -3,6 +3,8 @@ import os
 import sys
 import time
 from pathlib import Path
+import tempfile
+import shutil
 
 # Ensure dental_agent is importable
 repo_root = str(Path(__file__).resolve().parent.parent)
@@ -46,47 +48,44 @@ def main():
 
     print(f"Found {len(eligible_imgs)} valid annotated images to upload.")
 
-    # Upload annotation JSON
-    # Which subfolder does the data come from?
-    # Actually, the annotations dataframe was loaded from the JSON.
-    # It's better to find the original JSON file and upload it.
-    # dentex.py uses: json_path = data_dir / "DENTEX" / "training_data" / "quadrant_enumeration_disease" / "train.json"
-    json_path = Path(cfg.data_dir) / "DENTEX" / "training_data" / "quadrant_enumeration_disease" / "train.json"
-    if json_path.exists():
-        print(f"Uploading annotations JSON...")
-        api.upload_file(
-            path_or_fileobj=str(json_path),
-            path_in_repo="train.json",
-            repo_id=args.repo_id,
-            repo_type="dataset"
-        )
-    else:
-        print(f"WARNING: Annotation JSON not found at {json_path}")
+    # Prepare a temporary directory to bundle all files into a single commit
+    print(f"Preparing {len(eligible_imgs)} images for bulk upload...")
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_dir_path = Path(temp_dir)
+        images_dir = temp_dir_path / "images"
+        images_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 1. Copy annotation JSON
+        # dentex.py uses: json_path = data_dir / "DENTEX" / "training_data" / "quadrant_enumeration_disease" / "train.json"
+        json_path = Path(cfg.data_dir) / "DENTEX" / "training_data" / "quadrant_enumeration_disease" / "train.json"
+        if json_path.exists():
+            print(f"Copying annotations JSON to temp folder...")
+            shutil.copy2(json_path, temp_dir_path / "train.json")
+        else:
+            print(f"WARNING: Annotation JSON not found at {json_path}")
 
-    # Upload images
-    for idx, row in eligible_imgs.iterrows():
-        img_id = int(row["id"])
-        local_path = str(row["local_path"])
-        path_in_repo = f"images/{img_id}.png"
-        
-        print(f"[{idx+1}/{len(eligible_imgs)}] Uploading {local_path} -> {path_in_repo} ...")
-        
-        retries = 3
-        while retries > 0:
+        # 2. Copy images
+        for idx, row in eligible_imgs.iterrows():
+            img_id = int(row["id"])
+            local_path = str(row["local_path"])
+            dest_path = images_dir / f"{img_id}.png"
+            
+            # Use os.link if possible for speed, fallback to shutil.copy2
             try:
-                api.upload_file(
-                    path_or_fileobj=local_path,
-                    path_in_repo=path_in_repo,
-                    repo_id=args.repo_id,
-                    repo_type="dataset"
-                )
-                break
-            except Exception as e:
-                retries -= 1
-                print(f"  Upload failed: {e}. Retrying... ({retries} left)")
-                time.sleep(2)
-        if retries == 0:
-            print(f"  FAILED to upload image {img_id}. Skipping.")
+                os.link(local_path, dest_path)
+            except Exception:
+                shutil.copy2(local_path, dest_path)
+                
+            if (idx + 1) % 100 == 0:
+                print(f"  Prepared {idx + 1}/{len(eligible_imgs)} images...")
+
+        # 3. Upload the entire folder at once
+        print(f"Uploading bundled dataset to {args.repo_id}...")
+        api.upload_folder(
+            folder_path=str(temp_dir_path),
+            repo_id=args.repo_id,
+            repo_type="dataset",
+        )
 
     print("Upload complete.")
 
