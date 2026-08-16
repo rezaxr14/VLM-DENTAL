@@ -154,10 +154,32 @@ def run_generate(args: argparse.Namespace, cfg: Any) -> None:
     annotated_ids = set(annots_df["image_id"].unique())
     eligible_imgs = valid_imgs[valid_imgs["id"].isin(annotated_ids)]
 
+    if args.total_slices > 1:
+        from dental_agent.data.slicing import get_slice_ids
+        slice_ids = get_slice_ids(eligible_imgs["id"].tolist(), args.total_slices, args.slice_index, args.slice_seed)
+        eligible_imgs = eligible_imgs[eligible_imgs["id"].isin(slice_ids)]
+
+    repo_id = os.environ.get("DENTEX_IMAGES_REPO")
+    if repo_id:
+        print(f"Fetching targeted images from {repo_id}...")
+        from dental_agent.data.dentex import download_dentex_slice
+        local_paths_map = download_dentex_slice(eligible_imgs["id"].tolist(), repo_id=repo_id, cache_dir=cfg.data_dir)
+        def _update_path(row):
+            pid = row["id"]
+            if pid in local_paths_map and local_paths_map[pid] is not None:
+                return str(local_paths_map[pid])
+            return row["local_path"]
+        # Use .copy() to avoid SettingWithCopyWarning
+        eligible_imgs = eligible_imgs.copy()
+        eligible_imgs["local_path"] = eligible_imgs.apply(_update_path, axis=1)
+        eligible_imgs = eligible_imgs[eligible_imgs["local_path"].notna() & (eligible_imgs["local_path"] != "None")]
+
     total_eligible = len(eligible_imgs)
     completed_ids = load_completed_ids(output_path, only_successful=True)
     remaining_imgs = eligible_imgs[~eligible_imgs["id"].isin(completed_ids)]
 
+    slice_info = f" (Slice {args.slice_index}/{args.total_slices})" if args.total_slices > 1 else ""
+    print(f"Targeting{slice_info}: {len(eligible_imgs)} eligible images.")
     print_banner("generate", None, len(completed_ids), total_eligible)
 
     if args.status_only:
@@ -230,6 +252,15 @@ def run_generate(args: argparse.Namespace, cfg: Any) -> None:
             print(f"\n\n[DAILY LIMIT REACHED] {e}")
             print("Generator API keys exhausted. Progress saved; resume later.")
             break
+        except RuntimeError as e:
+            if "Failed to call" in str(e):
+                print(f"\n\n[API EXHAUSTED] {e}")
+                print("Generator hit rate limit and exhausted all retries.")
+                print("Consider using another provider or waiting. Progress saved; resume later.")
+                break
+            print(f"  [ERROR] Error on Image ID {image_id}: {e}")
+            failed_in_session += 1
+            time.sleep(2.0)
         except KeyboardInterrupt:
             print("\n\n[PAUSED] Session paused by user.")
             break
@@ -271,6 +302,11 @@ def run_verify(args: argparse.Namespace, cfg: Any) -> None:
     # Count totals for banner
     unverified_ids = load_completed_ids(unverified_path)
     verified_ids = load_completed_ids(verified_path)
+
+    if args.total_slices > 1:
+        from dental_agent.data.slicing import get_slice_ids
+        slice_ids = get_slice_ids(list(unverified_ids), args.total_slices, args.slice_index, args.slice_seed)
+        unverified_ids = unverified_ids & set(slice_ids)
 
     print_banner("verify", pool, len(verified_ids), len(unverified_ids))
 
@@ -319,6 +355,20 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Autonomous CoT Trace Generator & Verifier"
     )
+    parser.add_argument("--total-slices", type=int, default=1,
+        help="Split the dataset into this many equal, randomized chunks (default: 1, i.e. no slicing).")
+    parser.add_argument("--slice-index", type=int, default=1,
+        help="Which slice (1-indexed) this run processes. Must be between 1 and --total-slices.")
+    parser.add_argument("--slice-seed", type=int, default=42,
+        help="Seed for the random slice partition. Keep identical across all parallel Colab instances.")
+    parser.add_argument("--generator-provider", type=str, default=None,
+        help="Override the GENERATOR_PROVIDER from .env (e.g. 'groq', 'nvidia', 'local')")
+    parser.add_argument("--generator-model", type=str, default=None,
+        help="Override the GENERATOR_MODEL from .env (e.g. 'qwen/qwen3.6-27b')")
+    parser.add_argument("--verifier-provider", type=str, default=None,
+        help="Override the VERIFIER_PROVIDER from .env (e.g. 'groq', 'nvidia', 'openrouter', 'gemini')")
+    parser.add_argument("--verifier-model", type=str, default=None,
+        help="Override the VERIFIER_MODEL from .env (e.g. 'meta/muse-glimmer-30b')")
     parser.add_argument(
         "--mode",
         type=str,
@@ -376,13 +426,36 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Only display current pool status and progress without processing",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.total_slices > 1 and not (1 <= args.slice_index <= args.total_slices):
+        parser.error('slice_index must be >= 1 and <= total_slices')
+    return args
 
 
 def main() -> None:
     load_env()
     cfg = load_config()
     args = parse_args()
+
+    if args.generator_provider:
+        import os
+        os.environ["GENERATOR_PROVIDER"] = args.generator_provider
+        import dental_agent.training.trace_generation as tg
+        tg.GENERATOR_PROVIDER = args.generator_provider
+        
+    if args.generator_model:
+        import os
+        os.environ["GENERATOR_MODEL"] = args.generator_model
+        import dental_agent.training.trace_generation as tg
+        tg.GENERATOR_MODEL = args.generator_model
+        
+    if args.verifier_provider:
+        import os
+        os.environ["VERIFIER_PROVIDER"] = args.verifier_provider
+        
+    if args.verifier_model:
+        import os
+        os.environ["VERIFIER_MODEL"] = args.verifier_model
 
     if args.mode == "generate":
         run_generate(args, cfg)

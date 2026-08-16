@@ -48,22 +48,83 @@ class TraceGenState(TypedDict):
     pending_tool_call: dict[str, Any] | None
 
 
-def _reasoning_node_factory(provider: str, model: str, max_tool_calls: int, max_tokens: int = 8192):
+
+def _reasoning_node_factory(provider: str, model: str, max_tool_calls: int, max_tokens: int = 8192, context_trim_threshold: int = 11468):
     def _reasoning_node(state: TraceGenState) -> TraceGenState:
         if state["tool_calls"] >= max_tool_calls and state["final_answer"] is None:
             state["status"] = "error"
             state["error"] = f"max_tool_calls ({max_tool_calls}) reached without a final_answer"
             return state
 
-        raw = call_llm(
-            provider=provider,
-            model=model,
-            system_prompt="",
-            user_content=state["messages"],
-            image=None,
-            temperature=0.7,
-            max_tokens=max_tokens,
-        )
+        # 4b. Sliding-window context trimming
+        est_tokens = sum(len(str(m)) for m in state["messages"]) // 4
+        image_count = 0
+        for m in state["messages"]:
+            if isinstance(m.get("content"), list):
+                for block in m["content"]:
+                    if isinstance(block, dict) and block.get("type") == "image":
+                        image_count += 1
+        est_tokens += image_count * 600
+
+        def _trim_images(keep_last_n: int):
+            # Find all image blocks in tool responses (skip the first user turn which has the original X-ray)
+            img_blocks = []
+            for m in state["messages"][1:]:
+                if isinstance(m.get("content"), list):
+                    for block in m["content"]:
+                        if isinstance(block, dict) and block.get("type") == "image":
+                            img_blocks.append(block)
+            
+            # Trim the oldest ones
+            if len(img_blocks) > keep_last_n:
+                to_trim = img_blocks[:-keep_last_n] if keep_last_n > 0 else img_blocks
+                for m in state["messages"][1:]:
+                    if isinstance(m.get("content"), list):
+                        new_content = []
+                        for block in m["content"]:
+                            if block in to_trim:
+                                new_content.append({"type": "text", "text": "[Earlier tool result omitted to save context — already reasoned about above]"})
+                            else:
+                                new_content.append(block)
+                        m["content"] = new_content
+
+        if est_tokens > context_trim_threshold:
+            _trim_images(keep_last_n=2)
+
+        try:
+            raw = call_llm(
+                provider=provider,
+                model=model,
+                system_prompt="",
+                user_content=state["messages"],
+                image=None,
+                temperature=0.7,
+                max_tokens=max_tokens,
+                stream=True,
+                label=f"turn {len(state['turns'])}",
+            )
+        except Exception as e:
+            error_str = str(e).lower()
+            if "maximum context length" in error_str or "context_length_exceeded" in error_str:
+                # 4c. Aggressive trim and retry once
+                _trim_images(keep_last_n=0)
+                try:
+                    raw = call_llm(
+                        provider=provider,
+                        model=model,
+                        system_prompt="",
+                        user_content=state["messages"],
+                        image=None,
+                        temperature=0.7,
+                        max_tokens=max_tokens,
+                        stream=True,
+                        label=f"turn {len(state['turns'])} (retry)",
+                    )
+                except Exception as retry_e:
+                    raise retry_e
+            else:
+                raise e
+
         parsed = parse_agent_json(raw)
         state["messages"].append({"role": "assistant", "content": raw})
 
@@ -76,11 +137,6 @@ def _reasoning_node_factory(provider: str, model: str, max_tool_calls: int, max_
         if not parsed:
             state["consecutive_parse_errors"] += 1
 
-            # Second consecutive failure: instead of repeating the same open-ended
-            # retry (which just fails the same way again if the model's thinking is
-            # what's overrunning the budget), spend one dedicated recovery turn
-            # explicitly telling it to stop reasoning and emit the JSON now. This is
-            # a materially different prompt, not just another try of the same thing.
             if state["consecutive_parse_errors"] == 2:
                 turn_record["status"] = "unparseable_recovery_attempt"
                 state["turns"].append(turn_record)
@@ -104,9 +160,6 @@ def _reasoning_node_factory(provider: str, model: str, max_tool_calls: int, max_
                 state["status"] = "error"
                 state["error"] = f"Unparseable model output on turn {turn_record['turn']}: {raw[:300]}"
             else:
-                # First failure: a response with no '{' at all almost always means
-                # it was truncated mid-thought rather than genuinely malformed, so
-                # the corrective hint should ask for brevity, not "fix your JSON".
                 if "{" not in raw:
                     hint = (
                         "Error: Your response was cut off before reaching a JSON action "
@@ -124,7 +177,6 @@ def _reasoning_node_factory(provider: str, model: str, max_tool_calls: int, max_
                 state["status"] = "running"
             return state
 
-        # Successfully parsed, reset errors
         state["consecutive_parse_errors"] = 0
 
         if "final_answer" in parsed:

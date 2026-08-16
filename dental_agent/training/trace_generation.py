@@ -148,35 +148,73 @@ def verify_trace(
     provider: str | None = None,
     model: str | None = None,
     call_llm_fn: Callable[..., str] = call_llm,
+    max_repairs: int = 1,
+    current_repair_attempt: int = 0,
 ) -> dict[str, Any]:
-    """Verify trace using an independent verifier model (different family than the generator)."""
+    """Verify trace using an independent verifier model. Includes LLM-based repair on rejection."""
     if provider is None or model is None:
         provider, model = _resolve_verifier()
 
-    # Extract the assistant's reasoning from the SFT messages array
+    # Extract the assistant's reasoning
     messages = trajectory.get("messages", [])
     assistant_msgs = [m["content"] for m in messages if m["role"] == "assistant"]
     trace_text = "\n\n".join(assistant_msgs)
 
     user_content = f"Ground Truth: {json.dumps(ground_truth)}\n\nCandidate Trace:\n{trace_text}"
 
-    raw = call_llm_fn(provider, model, VERIFIER_SYSTEM_PROMPT, user_content, image=image, temperature=0.0, max_tokens=2048, response_mime_type="application/json")
+    # Section 8: stream=True
+    raw = call_llm_fn(provider, model, VERIFIER_SYSTEM_PROMPT, user_content, image=image, temperature=0.0, max_tokens=2048, response_mime_type="application/json", stream=True, label="verify_trace")
     parsed = parse_agent_json(raw)
-
-    if parsed and "grounded" in parsed:
-        return parsed
-
-    # Fallback for truncated JSON responses — try to extract the reason too
+    
+    extracted_reason = None
     reason_match = re.search(r'"reason"\s*:\s*"([^"]+)"', raw)
-    extracted_reason = reason_match.group(1) if reason_match else None
+    if reason_match:
+        extracted_reason = reason_match.group(1)
 
-    if '"grounded": true' in raw.lower() or '"grounded":true' in raw.lower():
-        return {"grounded": True, "reason": extracted_reason or "Verified (partial JSON recovery)"}
-    if '"grounded": false' in raw.lower() or '"grounded":false' in raw.lower():
-        return {"grounded": False, "reason": extracted_reason or "Rejected (partial JSON recovery)"}
+    grounded = False
+    if parsed and "grounded" in parsed:
+        grounded = parsed["grounded"]
+        extracted_reason = parsed.get("reason", extracted_reason)
+    elif '"grounded": true' in raw.lower() or '"grounded":true' in raw.lower():
+        grounded = True
+        extracted_reason = extracted_reason or "Verified (partial JSON recovery)"
+    elif '"grounded": false' in raw.lower() or '"grounded":false' in raw.lower():
+        grounded = False
+        extracted_reason = extracted_reason or "Rejected (partial JSON recovery)"
+    else:
+        print(f"DEBUG Verifier Raw Output: {raw[:500]}")
+        extracted_reason = "verifier output unparseable"
+        grounded = False
 
-    print(f"DEBUG Verifier Raw Output: {raw[:500]}")
-    return {"grounded": False, "reason": "verifier output unparseable"}
+    result = {"grounded": grounded, "reason": extracted_reason}
+
+    # Section 7: LLM-Based Repair
+    if not grounded and current_repair_attempt < max_repairs:
+        print(f"  [verify_trace] Trace rejected: {extracted_reason}. Attempting repair {current_repair_attempt + 1}/{max_repairs}...")
+        gen_provider, gen_model = _resolve_generator()
+        repair_sys_prompt = "You are a medical AI assistant. Fix the provided diagnostic trace based on the verifier's feedback. Ensure the final diagnosis remains unchanged, but correct any visual claims that were rejected."
+        repair_user_content = f"The verifier rejected this trace because: {extracted_reason}\n\nOriginal Trace:\n{trace_text}\n\nRewrite the trace to fix the issue. Output the complete revised reasoning."
+        
+        try:
+            repaired_raw = call_llm_fn(gen_provider, gen_model, repair_sys_prompt, repair_user_content, image=image, temperature=0.3, max_tokens=4096, stream=True, label="repair_trace")
+            # Replace the last assistant message with the repaired raw
+            repaired_trajectory = dict(trajectory)
+            repaired_messages = list(trajectory.get("messages", []))
+            for i in range(len(repaired_messages)-1, -1, -1):
+                if repaired_messages[i]["role"] == "assistant":
+                    repaired_messages[i]["content"] = repaired_raw
+                    break
+            repaired_trajectory["messages"] = repaired_messages
+            
+            # Re-verify the repaired trace
+            return verify_trace(
+                image, ground_truth, repaired_trajectory, provider, model, call_llm_fn, max_repairs, current_repair_attempt + 1
+            )
+        except Exception as e:
+            print(f"  [verify_trace] Repair attempt failed: {e}")
+            return result
+
+    return result
 
 
 def build_trace_example(
@@ -314,17 +352,16 @@ def generate_only(
     }
 
 
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 def verify_pending(
     unverified_path: str | Path,
     verified_path: str | Path,
     images_df: pd.DataFrame | None = None,
     call_llm_fn: Callable[..., str] = call_llm,
 ) -> dict[str, int]:
-    """Read unverified traces, verify each, and append passing traces to the verified file.
-    
-    Tracks already-verified image IDs from ``verified_path`` so it can resume.
-    Returns a summary dict with counts.
-    """
+    """Read unverified traces, verify each concurrently, and append passing traces to the verified file."""
     unverified_path = Path(unverified_path)
     verified_path = Path(verified_path)
 
@@ -332,7 +369,6 @@ def verify_pending(
         print(f"No unverified trace file found at {unverified_path}")
         return {"pending": 0, "verified": 0, "rejected": 0}
 
-    # Load already-verified IDs
     verified_ids: set[int] = set()
     if verified_path.exists():
         with open(verified_path, "r", encoding="utf-8", errors="replace") as f:
@@ -347,7 +383,6 @@ def verify_pending(
                 except Exception:
                     pass
 
-    # Load unverified traces
     pending = []
     with open(unverified_path, "r", encoding="utf-8", errors="replace") as f:
         for line in f:
@@ -367,49 +402,72 @@ def verify_pending(
 
     n_verified = 0
     n_rejected = 0
+    file_lock = threading.Lock()
+    
+    # Section 6: Concurrent Dispatch
+    pool = get_provider_pool()
+    max_workers = min(10, len(pool.providers) * 2) if pool.providers else 1
+    print(f"Starting ThreadPoolExecutor with {max_workers} workers.")
 
-    for idx, record in enumerate(pending, start=1):
+    def process_record(record, idx):
         image_id = int(record["image_id"])
         image_path = record.get("image_path", "")
         ground_truth = record.get("ground_truth", [])
         trajectory = record.get("trajectory", {})
 
         if not trajectory or not os.path.exists(str(image_path)):
-            print(f"  [{idx}/{len(pending)}] Image ID {image_id}: skipping (no trajectory or image)")
-            continue
-
-        print(f"  [{idx}/{len(pending)}] Verifying Image ID {image_id}...", end=" ", flush=True)
+            return False, image_id, "Skipped (no trajectory or image)"
 
         try:
             image = Image.open(image_path).convert("RGB")
-            v_result = verify_trace(
-                image, ground_truth, trajectory, call_llm_fn=call_llm_fn
-            )
-
+            v_result = verify_trace(image, ground_truth, trajectory, call_llm_fn=call_llm_fn)
+            
             if v_result.get("grounded"):
-                # Promote to verified file
                 trajectory["verifier_reason"] = v_result.get("reason")
                 trajectory["image_id"] = image_id
                 trajectory["image_path"] = image_path
                 trajectory["ground_truth"] = ground_truth
-
-                verified_path.parent.mkdir(parents=True, exist_ok=True)
-                with open(verified_path, "a", encoding="utf-8") as f:
-                    f.write(json.dumps(to_jsonable(trajectory)) + "\n")
-
-                n_verified += 1
-                print(f"PASSED ({v_result.get('reason', '')[:60]})", flush=True)
+                
+                with file_lock:
+                    verified_path.parent.mkdir(parents=True, exist_ok=True)
+                    with open(verified_path, "a", encoding="utf-8") as f:
+                        f.write(json.dumps(to_jsonable(trajectory)) + "\n")
+                
+                return True, image_id, v_result.get("reason", "")
             else:
-                n_rejected += 1
-                print(f"REJECTED ({v_result.get('reason', '')[:60]})", flush=True)
-
+                return False, image_id, v_result.get("reason", "")
+                
         except AllKeysExhaustedToday as e:
-            print(f"\n[DAILY LIMIT] {e}")
-            print(f"Verified {n_verified} traces this session. Resume later to continue.")
-            break
+            raise e
         except Exception as e:
-            print(f"ERROR ({e})")
-            n_rejected += 1
+            return False, image_id, f"ERROR ({e})"
+
+    try:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(process_record, r, i): (r, i) for i, r in enumerate(pending, start=1)}
+            
+            for future in as_completed(futures):
+                record, idx = futures[future]
+                try:
+                    passed, img_id, reason = future.result()
+                    if passed:
+                        n_verified += 1
+                        print(f"  [Img {img_id}] PASSED ({reason[:60]})", flush=True)
+                    else:
+                        n_rejected += 1
+                        print(f"  [Img {img_id}] REJECTED ({reason[:60]})", flush=True)
+                except AllKeysExhaustedToday as e:
+                    print(f"\n[DAILY LIMIT] {e}")
+                    print(f"Verified {n_verified} traces this session. Resume later to continue.")
+                    # Cancel remaining
+                    for f in futures:
+                        f.cancel()
+                    break
+                except Exception as e:
+                    n_rejected += 1
+                    print(f"  [Img {record['image_id']}] ERROR ({e})", flush=True)
+    except KeyboardInterrupt:
+        print("\nVerification interrupted.")
 
     return {
         "pending": len(pending),

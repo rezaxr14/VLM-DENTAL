@@ -110,6 +110,36 @@ def download_dentex(
     return val_zip.parent.parent
 
 
+def download_dentex_slice(
+    image_ids: list[int],
+    repo_id: str | None = None,
+    cache_dir: str | None = None,
+) -> dict[int, Path | None]:
+    """Download only the given image_ids from the lightweight per-image HF repo.
+    Returns {image_id: local_path}. Falls back to None entries if fetch fails.
+    """
+    if repo_id is None:
+        repo_id = os.environ.get("DENTEX_IMAGES_REPO")
+    if not repo_id:
+        return {}
+
+    local_paths = {}
+    for img_id in image_ids:
+        filename = f"images/{img_id}.png"
+        try:
+            local_path = hf_hub_download(
+                repo_id=repo_id,
+                filename=filename,
+                repo_type="dataset",
+                cache_dir=cache_dir,
+            )
+            local_paths[img_id] = Path(local_path)
+        except Exception as e:
+            print(f"Warning: Failed to download targeted slice image {img_id}: {e}")
+            local_paths[img_id] = None
+    return local_paths
+
+
 def extract_dentex_zips(root_dir: str | Path, remove_zips: bool = True) -> None:
     """Extract any downloaded .zip archives (validation_data.zip, training_data.zip, etc.) in place
     and remove the .zip files after successful extraction to save disk space."""
@@ -424,12 +454,20 @@ def load_combined_dentex_dataset(
         print(f"✅ Found existing DENTEX dataset for '{split_name}' split at: {local_dir}")
         dentex_path = local_dir
     else:
-        print(f"⚠️ WARNING: Dataset for split '{split_name}' NOT found in any local or Colab Drive paths!")
-        print(f"⬇️ Initiating HuggingFace download... (Press STOP in Colab now if you want to cancel)")
-        dentex_path = download_dentex(
-            cache_dir=str(data_dir) if data_dir else None,
-            split_name=split_name,
-        )
+        repo_id = os.environ.get("DENTEX_IMAGES_REPO")
+        if repo_id:
+            print(f"Dataset not found locally, but DENTEX_IMAGES_REPO={repo_id} is set.")
+            print(f"⬇️ Downloading annotation JSON directly from {repo_id}...")
+            json_name = f"{split_name}.json" if split_name in ("train", "training") else "validation_triple.json"
+            local_json = hf_hub_download(repo_id=repo_id, filename="train.json", repo_type="dataset", cache_dir=str(data_dir) if data_dir else None)
+            dentex_path = Path(local_json).parent
+        else:
+            print(f"⚠️ WARNING: Dataset for split '{split_name}' NOT found in any local or Colab Drive paths!")
+            print(f"⬇️ Initiating HuggingFace download... (Press STOP in Colab now if you want to cancel)")
+            dentex_path = download_dentex(
+                cache_dir=str(data_dir) if data_dir else None,
+                split_name=split_name,
+            )
 
     extract_dentex_zips(dentex_path)
     all_coco = discover_annotation_files(dentex_path)
@@ -521,11 +559,18 @@ def load_dentex_dataset(
     if local_dir is not None:
         dentex_path = local_dir
     else:
-        print(f"Dataset for split '{split_name}' not found locally. Triggering download...")
-        dentex_path = download_dentex(
-            cache_dir=str(data_dir) if data_dir else None,
-            split_name=split_name,
-        )
+        repo_id = os.environ.get("DENTEX_IMAGES_REPO")
+        if repo_id:
+            print(f"Dataset not found locally, but DENTEX_IMAGES_REPO={repo_id} is set.")
+            print(f"⬇️ Downloading annotation JSON directly from {repo_id}...")
+            local_json = hf_hub_download(repo_id=repo_id, filename="train.json", repo_type="dataset", cache_dir=str(data_dir) if data_dir else None)
+            dentex_path = Path(local_json).parent
+        else:
+            print(f"Dataset for split '{split_name}' not found locally. Triggering download...")
+            dentex_path = download_dentex(
+                cache_dir=str(data_dir) if data_dir else None,
+                split_name=split_name,
+            )
 
     extract_dentex_zips(dentex_path)
     all_coco = discover_annotation_files(dentex_path)

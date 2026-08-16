@@ -51,3 +51,6 @@ The LangGraph loop (`langgraph_loop.py`) runs tool calls dynamically and for rea
 - **Rule:** The verifier is ALWAYS a dynamic pool (`ProviderPool`), never a single pinned provider or model.
 - **Rule:** The pool automatically activates all providers configured in `.env` (NVIDIA NIM, Groq, OpenRouter, Gemini) and enforces independent 300s cooldowns and daily RPD quotas.
 - **Rule:** `APIConfig` and `trace_generation.py` must always use `verifier_provider = "auto_verifier"` and `verifier_model = "auto_model"`. Never single out or hardcode a single provider (like Gemini alone).
+
+## 9. No Retries on API Errors (CRITICAL)
+- **Rule:** If the generator or verifier hits a 429 Rate Limit, or ANY API error, we DO NOT retry. We stop immediately and exit. Retrying on 429s risks getting our API keys banned. `call_llm` must fail fast on these errors.

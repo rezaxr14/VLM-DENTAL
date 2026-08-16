@@ -237,9 +237,12 @@ def get_provider_pool() -> ProviderPool:
     """Return the global verifier ProviderPool singleton."""
     global _provider_pool
     if _provider_pool is None:
+        explicit_provider = os.environ.get("VERIFIER_PROVIDER", "").strip()
+        providers = [explicit_provider] if explicit_provider and explicit_provider != "auto_verifier" else None
+        
         cooldown = float(os.environ.get("API_COOLDOWN_SECONDS", "300"))
         rpd = int(os.environ.get("API_RPD_LIMIT", "10"))
-        _provider_pool = ProviderPool(cooldown_seconds=cooldown, rpd_limit=rpd)
+        _provider_pool = ProviderPool(providers=providers, cooldown_seconds=cooldown, rpd_limit=rpd)
     return _provider_pool
 
 
@@ -488,10 +491,14 @@ def call_llm(
         except AllKeysExhaustedToday:
             raise
         except Exception as e:
-            last_error = e
+            # Rule 9: No Retries on API Errors
             err_str = str(e).lower()
+            if "429" in err_str or "rate limit" in err_str or "api" in err_str or "400" in err_str or "401" in err_str or "403" in err_str or "500" in err_str or "503" in err_str:
+                raise RuntimeError(f"API Error ({e}): Hard stop on API errors per rule. No retries allowed. Exiting.")
+            
+            last_error = e
             if attempt < max_retries:
-                backoff = (retry_delay * 2 ** (attempt - 1)) if "503" not in err_str else (retry_delay + attempt * 2)
+                backoff = (retry_delay * 2 ** (attempt - 1))
                 time.sleep(backoff)
 
     raise RuntimeError(
