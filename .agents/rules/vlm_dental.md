@@ -49,3 +49,6 @@ The LangGraph loop (`langgraph_loop.py`) runs tool calls dynamically and for rea
 
 ## 8. No Retries on API Errors (CRITICAL)
 - **Rule:** If the generator or verifier hits a 429 Rate Limit, or ANY API error, we DO NOT retry. We stop immediately and exit. Retrying on 429s risks getting our API keys banned. `call_llm` must fail fast on these errors.
+
+## 9. Version Control Etiquette (CRITICAL)
+- **Rule:** NEVER automatically `git commit` or `git push` changes unless the user explicitly commands it. Always assume the user wants to review the code locally or in an implementation plan first before writing commits to the repository's history.
