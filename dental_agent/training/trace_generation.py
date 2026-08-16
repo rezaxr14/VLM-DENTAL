@@ -405,8 +405,7 @@ def verify_pending(
     file_lock = threading.Lock()
     
     # Section 6: Concurrent Dispatch
-    pool = get_provider_pool()
-    max_workers = min(10, len(pool.providers) * 2) if pool.providers else 1
+    max_workers = 4
     print(f"Starting ThreadPoolExecutor with {max_workers} workers.")
 
     def process_record(record, idx):
