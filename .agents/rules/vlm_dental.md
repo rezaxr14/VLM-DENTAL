@@ -52,3 +52,6 @@ The LangGraph loop (`langgraph_loop.py`) runs tool calls dynamically and for rea
 
 ## 9. Version Control Etiquette (CRITICAL)
 - **Rule:** NEVER automatically `git commit` or `git push` changes unless the user explicitly commands it. Always assume the user wants to review the code locally or in an implementation plan first before writing commits to the repository's history.
+
+## 10. No API Calls for Testing (CRITICAL)
+- **Rule:** NEVER waste the user's API call budget for testing or verification under ANY circumstances. If you need to verify a script or pipeline, you MUST use mock API calls, fake stubs, or local inference. Do not execute real calls to Groq, NVIDIA NIM, OpenRouter, or Gemini just to "see if it works."

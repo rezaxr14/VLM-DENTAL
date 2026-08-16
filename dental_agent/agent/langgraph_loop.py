@@ -317,9 +317,14 @@ def run_trace_gen(
     
     Returns (trajectory_dict, None) on success or (None, error_reason) on failure.
     """
+    if provider.lower() == "groq" and len(ground_truth) > 4:
+        gt_str = f"[{len(ground_truth)} findings total. Use tools to locate and confirm each one.]"
+    else:
+        gt_str = json.dumps(ground_truth)
+
     directive = (
         "TEACHER DIRECTIVE: You are generating an expert demonstration trace for SFT.\n"
-        f"You MUST eventually reach this exact diagnosis: {json.dumps(ground_truth)}\n\n"
+        f"You MUST eventually reach this exact diagnosis: {gt_str}\n\n"
         "The ground-truth findings above tell you what's there and roughly where — use that "
         "as your starting hint for where to look, not as something to restate without checking. "
         "Use zoom_crop / window_level / denoise / contralateral_compare / locate_tooth for real "

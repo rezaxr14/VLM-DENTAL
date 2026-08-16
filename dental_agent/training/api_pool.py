@@ -279,7 +279,10 @@ def call_llm(
                         if item["type"] == "text":
                             parts.append({"type": "text", "text": item["text"]})
                         elif item["type"] == "image":
-                            b64 = _pil_to_base64_jpeg(item["image"].convert("RGB"))
+                            scaled_img = item["image"].copy()
+                            if provider.lower() == "groq":
+                                scaled_img.thumbnail((768, 768), Image.Resampling.LANCZOS)
+                            b64 = _pil_to_base64_jpeg(scaled_img)
                             parts.append({
                                 "type": "image_url",
                                 "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
@@ -288,7 +291,10 @@ def call_llm(
             else:
                 user_parts: list[dict[str, Any]] = []
                 if image is not None:
-                    b64 = _pil_to_base64_jpeg(image)
+                    scaled_img = image.copy()
+                    if provider.lower() == "groq":
+                        scaled_img.thumbnail((768, 768), Image.Resampling.LANCZOS)
+                    b64 = _pil_to_base64_jpeg(scaled_img)
                     user_parts.append({
                         "type": "image_url",
                         "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
@@ -303,14 +309,27 @@ def call_llm(
                     "X-Title": os.environ.get("OPENROUTER_TITLE", "VLM-DENTAL"),
                 }
 
+            stream_requested = kwargs.get("stream", False)
             response = client.chat.completions.create(
                 model=model,
                 messages=built_messages,
                 max_tokens=max_tokens,
                 temperature=temperature,
                 extra_headers=extra_headers,
+                stream=stream_requested,
             )
-            return response.choices[0].message.content or ""
+            
+            if stream_requested:
+                collected = []
+                for chunk in response:
+                    if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
+                        text = chunk.choices[0].delta.content
+                        print(text, end="", flush=True)
+                        collected.append(text)
+                print() # newline
+                return "".join(collected)
+            else:
+                return response.choices[0].message.content or ""
 
         else:
             raise ValueError(f"Unknown provider '{provider}'")

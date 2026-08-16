@@ -125,6 +125,10 @@ def generate_interactive_trajectory(
     """
     gen_provider, gen_model = _resolve_generator()
     system_prompt = build_agent_system_prompt(registry.format_tool_descriptions())
+    
+    # Scale max_turns based on number of findings
+    dynamic_max_turns = max(max_turns, len(ground_truth) + 3)
+    
     return run_trace_gen(
         image=image,
         ground_truth=ground_truth,
@@ -132,7 +136,7 @@ def generate_interactive_trajectory(
         system_prompt=system_prompt,
         provider=gen_provider,
         model=gen_model,
-        max_turns=max_turns,
+        max_turns=dynamic_max_turns,
         max_tokens_per_turn=max_tokens_per_turn,
     )
 

@@ -23,7 +23,7 @@ class ToothGrounder:
         # Point GROUNDING_MODEL_PATH at that fold's best.pt.
         self.model_path = Path(
             model_path
-            or os.environ.get("GROUNDING_MODEL_PATH", "data/models/grounding_tool_m/weights/best.pt")
+            or os.environ.get("GROUNDING_MODEL_PATH", "data/models/grounding_tool_cv_best/weights/best.pt")
         )
         self.model = None
         

@@ -39,12 +39,12 @@ def main():
         sys.exit(1)
         
     # Dummy ground truth for testing
-    ground_truth = {
+    ground_truth = [{
         "quadrant": 3,
         "tooth_position": 6,
         "diagnosis": "Caries",
         "bbox": [100, 100, 200, 200]
-    }
+    }]
     
     print(f"\n--- Testing LangGraph Loop against {args.model} ---")
     print("This will execute real tool functions and pass results back to the model.")
