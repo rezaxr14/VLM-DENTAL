@@ -404,9 +404,9 @@ def verify_pending(
     n_rejected = 0
     file_lock = threading.Lock()
     
-    # Section 6: Concurrent Dispatch
-    max_workers = 4
-    print(f"Starting ThreadPoolExecutor with {max_workers} workers.")
+    # Section 6: Concurrent Dispatch (Serialized to protect API keys)
+    max_workers = 1
+    print(f"Starting ThreadPoolExecutor with {max_workers} workers to prevent rate-limit bans.")
 
     def process_record(record, idx):
         image_id = int(record["image_id"])
