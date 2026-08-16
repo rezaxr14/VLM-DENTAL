@@ -47,14 +47,11 @@ if repo_root not in sys.path:
 from dental_agent.config import load_config, load_env
 from dental_agent.data.dentex import load_dentex_dataset
 from dental_agent.training.api_pool import (
-    AllKeysExhaustedToday,
-    get_provider_pool,
-    get_generator_pool,
     verify_local_server_health,
+    RPDLimitExhausted,
 )
+import dental_agent.training.trace_generation as tg
 from dental_agent.training.trace_generation import (
-    GENERATOR_MODEL,
-    GENERATOR_PROVIDER,
     generate_only,
     verify_pending,
 )
@@ -113,23 +110,29 @@ def append_trace(output_path: Path, trace_record: dict[str, Any]) -> None:
         f.write(json.dumps(serializable) + "\n")
 
 
-def print_banner(mode: str, pool: Any | None, completed_count: int, total_images: int) -> None:
+def print_banner(mode: str, completed_count: int, total_images: int) -> None:
     print("\n" + "=" * 70, flush=True)
     print(f"DENTAL AGENT: AUTONOMOUS CoT TRACE {'GENERATOR' if mode == 'generate' else 'VERIFIER'}", flush=True)
     print("=" * 70, flush=True)
 
     if mode == "generate":
-        if GENERATOR_PROVIDER == "local":
-            print(f"* Generator          : LOCAL vLLM ({GENERATOR_MODEL}) — no rate limit", flush=True)
+        if tg.GENERATOR_PROVIDER == "local":
+            print(f"* Generator          : LOCAL vLLM ({tg.GENERATOR_MODEL}) — no rate limit", flush=True)
         else:
-            gen_pool = get_generator_pool()
-            print(f"* Generator Providers: {gen_pool.providers}", flush=True)
-            print(f"* Generator Limits   : {gen_pool.cooldown}s cooldown, {gen_pool.rpd_limit} RPD cap", flush=True)
+            import os
+            prefix = tg.GENERATOR_PROVIDER.upper().replace('_NIM', '')
+            cd = os.environ.get(f"{prefix}_COOLDOWN_SECONDS", "None")
+            rpd = os.environ.get(f"{prefix}_RPD_LIMIT", "None")
+            print(f"* Generator Provider : {tg.GENERATOR_PROVIDER.upper()} ({tg.GENERATOR_MODEL})", flush=True)
+            print(f"* Generator Limits   : {cd}s cooldown, {rpd} RPD cap", flush=True)
         print(f"* Output             : {DEFAULT_UNVERIFIED}", flush=True)
     else:
-        if pool:
-            print(f"* Verifier Providers : {pool.providers}", flush=True)
-            print(f"* Verifier Limits    : {pool.cooldown}s cooldown, {pool.rpd_limit} RPD cap", flush=True)
+        import os
+        prefix = tg.VERIFIER_PROVIDER.upper().replace('_NIM', '')
+        cd = os.environ.get(f"{prefix}_COOLDOWN_SECONDS", "None")
+        rpd = os.environ.get(f"{prefix}_RPD_LIMIT", "None")
+        print(f"* Verifier Provider  : {tg.VERIFIER_PROVIDER.upper()} ({tg.VERIFIER_MODEL})", flush=True)
+        print(f"* Verifier Limits    : {cd}s cooldown, {rpd} RPD cap", flush=True)
         print(f"* Input              : {DEFAULT_UNVERIFIED}", flush=True)
         print(f"* Output             : {DEFAULT_VERIFIED}", flush=True)
 
@@ -150,9 +153,8 @@ def run_generate(args: argparse.Namespace, cfg: Any) -> None:
         data_dir=cfg.data_dir, split_name=args.split
     )
 
-    valid_imgs = imgs_df[imgs_df["local_path"].notna()]
     annotated_ids = set(annots_df["image_id"].unique())
-    eligible_imgs = valid_imgs[valid_imgs["id"].isin(annotated_ids)]
+    eligible_imgs = imgs_df[imgs_df["id"].isin(annotated_ids)]
 
     if args.total_slices > 1:
         from dental_agent.data.slicing import get_slice_ids
@@ -172,7 +174,8 @@ def run_generate(args: argparse.Namespace, cfg: Any) -> None:
         # Use .copy() to avoid SettingWithCopyWarning
         eligible_imgs = eligible_imgs.copy()
         eligible_imgs["local_path"] = eligible_imgs.apply(_update_path, axis=1)
-        eligible_imgs = eligible_imgs[eligible_imgs["local_path"].notna() & (eligible_imgs["local_path"] != "None")]
+        
+    eligible_imgs = eligible_imgs[eligible_imgs["local_path"].notna() & (eligible_imgs["local_path"] != "None")]
 
     total_eligible = len(eligible_imgs)
     completed_ids = load_completed_ids(output_path, only_successful=True)
@@ -180,7 +183,7 @@ def run_generate(args: argparse.Namespace, cfg: Any) -> None:
 
     slice_info = f" (Slice {args.slice_index}/{args.total_slices})" if args.total_slices > 1 else ""
     print(f"Targeting{slice_info}: {len(eligible_imgs)} eligible images.")
-    print_banner("generate", None, len(completed_ids), total_eligible)
+    print_banner("generate", len(completed_ids), total_eligible)
 
     if args.status_only:
         print("Status check complete. Run without --status-only to begin generation.")
@@ -210,7 +213,7 @@ def run_generate(args: argparse.Namespace, cfg: Any) -> None:
 
         try:
             # Health check for local vLLM
-            if GENERATOR_PROVIDER == "local":
+            if tg.GENERATOR_PROVIDER == "local":
                 health_retries = 0
                 while not verify_local_server_health(timeout=5.0):
                     health_retries += 1
@@ -248,15 +251,16 @@ def run_generate(args: argparse.Namespace, cfg: Any) -> None:
             if idx < len(todo_images) and args.pacing_delay > 0:
                 time.sleep(args.pacing_delay)
 
-        except AllKeysExhaustedToday as e:
+
+        except RPDLimitExhausted as e:
             print(f"\n\n[DAILY LIMIT REACHED] {e}")
-            print("Generator API keys exhausted. Progress saved; resume later.")
+            print("Generator API usage limit reached. Progress saved; resume later.")
             break
         except RuntimeError as e:
-            if "Failed to call" in str(e):
-                print(f"\n\n[API EXHAUSTED] {e}")
-                print("Generator hit rate limit and exhausted all retries.")
-                print("Consider using another provider or waiting. Progress saved; resume later.")
+            if "Hard stop" in str(e):
+                print(f"\n\n[API ERROR] {e}")
+                print("Generator hit an API error and stopped per No Retries rule.")
+                print("Progress saved; resume later.")
                 break
             print(f"  [ERROR] Error on Image ID {image_id}: {e}")
             failed_in_session += 1
@@ -273,12 +277,16 @@ def run_generate(args: argparse.Namespace, cfg: Any) -> None:
     total_time = time.time() - session_start_time
     total_generated = len(load_completed_ids(output_path, only_successful=True))
 
+    from dental_agent.training.api_pool import _TRACKER
+    generator_provider = os.environ.get("GENERATOR_PROVIDER", "local")
+
     print("\n" + "=" * 70)
     print("GENERATION SESSION SUMMARY")
     print("=" * 70)
     print(f"* Generated this session  : {generated_in_session}")
     print(f"* Failed this session     : {failed_in_session}")
     print(f"* Total in unverified file: {total_generated} / {total_eligible} images")
+    print(f"* API State               : {_TRACKER.get_stats(generator_provider)}")
     print(f"* Session Duration        : {total_time / 60:.1f} minutes")
     print(f"* Output File             : {output_path}")
     print("=" * 70 + "\n")
@@ -297,8 +305,6 @@ def run_verify(args: argparse.Namespace, cfg: Any) -> None:
     unverified_path = Path(args.output or DEFAULT_UNVERIFIED)
     verified_path = Path(DEFAULT_VERIFIED)
 
-    pool = get_provider_pool()
-
     # Count totals for banner
     unverified_ids = load_completed_ids(unverified_path)
     verified_ids = load_completed_ids(verified_path)
@@ -308,13 +314,7 @@ def run_verify(args: argparse.Namespace, cfg: Any) -> None:
         slice_ids = get_slice_ids(list(unverified_ids), args.total_slices, args.slice_index, args.slice_seed)
         unverified_ids = unverified_ids & set(slice_ids)
 
-    print_banner("verify", pool, len(verified_ids), len(unverified_ids))
-
-    print("--- VERIFIER POOL CAPACITY STATUS ---")
-    for p in pool.providers:
-        calls = pool.state.get(p, {}).get("calls_today", 0)
-        print(f"Provider: {p:<15} Used: {calls}/{pool.rpd_limit}")
-    print("-" * 70 + "\n")
+    print_banner("verify", len(verified_ids), len(unverified_ids))
 
     if args.status_only:
         pending = len(unverified_ids - verified_ids)
@@ -334,6 +334,9 @@ def run_verify(args: argparse.Namespace, cfg: Any) -> None:
 
     total_time = time.time() - session_start
     total_verified = len(load_completed_ids(verified_path))
+    
+    from dental_agent.training.api_pool import _TRACKER
+    verifier_provider = os.environ.get("VERIFIER_PROVIDER", "local")
 
     print("\n" + "=" * 70)
     print("VERIFICATION SESSION SUMMARY")
@@ -342,6 +345,7 @@ def run_verify(args: argparse.Namespace, cfg: Any) -> None:
     print(f"* Verified this run  : {result['verified']}")
     print(f"* Rejected this run  : {result['rejected']}")
     print(f"* Total verified     : {total_verified}")
+    print(f"* API State          : {_TRACKER.get_stats(verifier_provider)}")
     print(f"* Session Duration   : {total_time / 60:.1f} minutes")
     print(f"* Verified File      : {verified_path}")
     print("=" * 70 + "\n")
@@ -431,31 +435,53 @@ def parse_args() -> argparse.Namespace:
         parser.error('slice_index must be >= 1 and <= total_slices')
     return args
 
+def interactive_prompt(role: str) -> str:
+    print(f"\n[?] Missing {role.upper()} provider. Select from list:")
+    choices = ["local", "groq", "nvidia_nim", "openrouter", "gemini"]
+    for i, p in enumerate(choices, 1):
+        print(f"  {i}. {p}")
+    
+    while True:
+        try:
+            val = input(f"Enter number (1-{len(choices)}): ").strip()
+            idx = int(val) - 1
+            if 0 <= idx < len(choices):
+                return choices[idx]
+            print("Invalid choice. Try again.")
+        except (ValueError, EOFError):
+            print("Invalid input. Try again.")
 
 def main() -> None:
     load_env()
     cfg = load_config()
     args = parse_args()
+    
+    import os
+    import dental_agent.training.trace_generation as tg
 
     if args.generator_provider:
-        import os
         os.environ["GENERATOR_PROVIDER"] = args.generator_provider
-        import dental_agent.training.trace_generation as tg
-        tg.GENERATOR_PROVIDER = args.generator_provider
+    elif args.mode == "generate" and not os.environ.get("GENERATOR_PROVIDER"):
+        os.environ["GENERATOR_PROVIDER"] = interactive_prompt("generator")
+        
+    tg.GENERATOR_PROVIDER = os.environ.get("GENERATOR_PROVIDER", "local")
         
     if args.generator_model:
-        import os
         os.environ["GENERATOR_MODEL"] = args.generator_model
-        import dental_agent.training.trace_generation as tg
-        tg.GENERATOR_MODEL = args.generator_model
+    if "GENERATOR_MODEL" in os.environ:
+        tg.GENERATOR_MODEL = os.environ["GENERATOR_MODEL"]
         
     if args.verifier_provider:
-        import os
         os.environ["VERIFIER_PROVIDER"] = args.verifier_provider
+    elif args.mode == "verify" and not os.environ.get("VERIFIER_PROVIDER"):
+        os.environ["VERIFIER_PROVIDER"] = interactive_prompt("verifier")
+        
+    tg.VERIFIER_PROVIDER = os.environ.get("VERIFIER_PROVIDER", "local")
         
     if args.verifier_model:
-        import os
         os.environ["VERIFIER_MODEL"] = args.verifier_model
+    if "VERIFIER_MODEL" in os.environ:
+        tg.VERIFIER_MODEL = os.environ["VERIFIER_MODEL"]
 
     if args.mode == "generate":
         run_generate(args, cfg)

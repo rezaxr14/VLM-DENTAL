@@ -72,3 +72,5 @@ data/models/grounding_tool_heavy/
 !data/models/grounding_tool_cv_best/*
 !data/models/grounding_tool_cv_best/weights/
 !data/models/grounding_tool_cv_best/weights/best.pt
+
+data/api_usage_state.json

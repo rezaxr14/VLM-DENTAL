@@ -6,9 +6,6 @@ Stage 1 SFT, Stage 2 GRPO, and Stage 0 Faster R-CNN detector.
 from dental_agent.training.api_pool import (
     call_llm,
     APISessionPool,
-    ProviderPool,
-    AllKeysExhaustedToday,
-    get_provider_pool,
     image_to_b64,
 )
 from dental_agent.training.trace_generation import (
@@ -51,9 +48,6 @@ from dental_agent.training.detector import (
 __all__ = [
     "call_llm",
     "APISessionPool",
-    "ProviderPool",
-    "AllKeysExhaustedToday",
-    "get_provider_pool",
     "image_to_b64",
     "generate_interactive_trajectory",
     "verify_trace",

@@ -28,9 +28,6 @@ from dental_agent.agent.prompts import build_agent_system_prompt
 from dental_agent.tools.registry import ToolRegistry
 from dental_agent.training.api_pool import (
     call_llm,
-    get_provider_pool,
-    get_generator_pool,
-    AllKeysExhaustedToday,
     verify_local_server_health,
 )
 from dental_agent.utils.serialization import to_jsonable
@@ -57,12 +54,9 @@ GENERATOR_MODEL = os.environ.get("GENERATOR_MODEL", "QuantTrio/Qwen3.5-9B-AWQ")
 def _resolve_generator() -> tuple[str, str]:
     """Pick (provider, model) for the generator.
     
-    When local, returns ('local', model_name) — no rate limiting.
-    When external, returns ('auto_generator', 'auto_model') — GeneratorPool handles it.
+    Returns the explicit provider (e.g., 'local', 'groq') or 'auto_generator' if pooling is desired.
     """
-    if GENERATOR_PROVIDER == "local":
-        return "local", GENERATOR_MODEL
-    return "auto_generator", "auto_model"
+    return GENERATOR_PROVIDER, GENERATOR_MODEL
 
 
 # ---------------------------------------------------------------------------
@@ -70,10 +64,12 @@ def _resolve_generator() -> tuple[str, str]:
 # (NVIDIA, Groq, OpenRouter, Gemini) and enforces strict 5-minute cooldowns.
 # ---------------------------------------------------------------------------
 
+VERIFIER_PROVIDER = os.environ.get("VERIFIER_PROVIDER", "local")
+VERIFIER_MODEL = os.environ.get("VERIFIER_MODEL", "QuantTrio/Qwen3.5-9B-AWQ")
+
 def _resolve_verifier() -> tuple[str, str]:
-    """Pick (provider, model) for the verifier.
-    Delegates to 'auto_verifier' so api_pool.py's ProviderPool handles it."""
-    return "auto_verifier", "auto_model"
+    """Pick (provider, model) for the verifier."""
+    return VERIFIER_PROVIDER, VERIFIER_MODEL
 
 
 VERIFIER_SYSTEM_PROMPT = (
@@ -437,9 +433,10 @@ def verify_pending(
             else:
                 return False, image_id, v_result.get("reason", "")
                 
-        except AllKeysExhaustedToday as e:
-            raise e
         except Exception as e:
+            from dental_agent.training.api_pool import RPDLimitExhausted
+            if isinstance(e, RPDLimitExhausted):
+                raise
             return False, image_id, f"ERROR ({e})"
 
     try:
@@ -456,10 +453,13 @@ def verify_pending(
                     else:
                         n_rejected += 1
                         print(f"  [Img {img_id}] REJECTED ({reason[:60]})", flush=True)
-                except AllKeysExhaustedToday as e:
-                    print(f"\n[DAILY LIMIT] {e}")
-                    print(f"Verified {n_verified} traces this session. Resume later to continue.")
-                    # Cancel remaining
+                except Exception as e:
+                    from dental_agent.training.api_pool import RPDLimitExhausted
+                    if isinstance(e, RPDLimitExhausted):
+                        print(f"\n[DAILY LIMIT REACHED] {e}")
+                        print("Verifier API usage limit reached. Progress saved; resume later.")
+                    else:
+                        print(f"\n[ERROR] {e}")
                     for f in futures:
                         f.cancel()
                     break
@@ -514,35 +514,24 @@ def run_aim1_batch(
         for idx, image_id in enumerate(todo):
             result = None
             try:
-                for attempt in range(max_retries):
-                    try:
-                        if GENERATOR_PROVIDER == "local":
-                            health_retries = 0
-                            while not verify_local_server_health(timeout=5.0):
-                                health_retries += 1
-                                if health_retries > 24:
-                                    raise RuntimeError("Local vLLM server is unresponsive for > 2 minutes. Aborting batch.")
-                                print(f"Local vLLM server unresponsive. Waiting 5s... ({health_retries}/24)")
-                                time.sleep(5)
+                if GENERATOR_PROVIDER == "local":
+                    health_retries = 0
+                    while not verify_local_server_health(timeout=5.0):
+                        health_retries += 1
+                        if health_retries > 24:
+                            raise RuntimeError("Local vLLM server is unresponsive for > 2 minutes. Aborting batch.")
+                        print(f"Local vLLM server unresponsive. Waiting 5s... ({health_retries}/24)")
+                        time.sleep(5)
                                 
-                        result = build_trace_example(
-                            image_id=image_id,
-                            images_df=images_df,
-                            annots_df=annots_df,
-                            categories_df=categories_df,
-                            k=k,
-                            diag_col=diag_col,
-                        )
-                        break
-                    except AllKeysExhaustedToday:
-                        raise
-                    except Exception as e:
-                        wait = retry_delay * (2 ** attempt)
-                        print(f"  image_id={image_id}: attempt {attempt + 1}/{max_retries} failed ({e}); retrying in {wait:.0f}s")
-                        time.sleep(wait)
-                else:
-                    print(f"  image_id={image_id}: giving up after {max_retries} attempts, skipping")
-            except AllKeysExhaustedToday as e:
+                result = build_trace_example(
+                    image_id=image_id,
+                    images_df=images_df,
+                    annots_df=annots_df,
+                    categories_df=categories_df,
+                    k=k,
+                    diag_col=diag_col,
+                )
+            except RuntimeError as e:
                 print(f"\n{e}")
                 print(f"Stopped after {idx}/{len(todo)} image(s) from this run.")
                 break
