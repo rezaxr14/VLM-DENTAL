@@ -9,8 +9,8 @@ def test_parse_clean_json() -> None:
     raw = '{"tool": "zoom_crop", "args": {"bbox": [100, 200, 50, 50]}}'
     parsed = parse_agent_json(raw)
     assert parsed is not None
-    assert parsed.get("tool") == "zoom_crop"
-    assert parsed["args"]["bbox"] == [100, 200, 50, 50]
+    assert parsed["tool_calls"][0]["tool"] == "zoom_crop"
+    assert parsed["tool_calls"][0]["args"]["bbox"] == [100, 200, 50, 50]
 
 
 def test_parse_markdown_code_block() -> None:
@@ -25,7 +25,7 @@ def test_parse_markdown_code_block() -> None:
 """
     parsed = parse_agent_json(raw)
     assert parsed is not None
-    assert parsed.get("tool") == "zoom_crop"
+    assert parsed["tool_calls"][0]["tool"] == "zoom_crop"
     assert "thought" in parsed
 
 
@@ -63,5 +63,5 @@ This is my reasoning process. I am thinking about how to solve the problem.
 ```"""
     parsed = parse_agent_json(raw)
     assert parsed is not None
-    assert parsed.get("tool") == "zoom_crop"
+    assert parsed["tool_calls"][0]["tool"] == "zoom_crop"
 

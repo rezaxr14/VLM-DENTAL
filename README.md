@@ -81,7 +81,7 @@ dental-agent info
 dental-agent test
 
 # Run Aim 1 Synthetic Trace Generation
-dental-agent generate-traces --n-samples 20 --output data/synthetic_traces.jsonl
+python scripts/run_trace_gen.py --mode generate --max-images 20
 
 # Run Stage 1 SFT Training
 dental-agent train-sft --data data/synthetic_traces.jsonl --epochs 3
@@ -100,6 +100,8 @@ dental-agent evaluate --checkpoint checkpoints/grpo-final --output results/
 Configuration is managed via YAML under `configs/`:
 - `configs/default.yaml`: Base configuration for Kaggle / Colab (16GB VRAM, **Qwen/Qwen3.5-9B**, 4-bit NF4 via Unsloth/bitsandbytes, GRPO Group Size = 4).
 - `configs/rtx4090.yaml`: High-VRAM workstation configuration (24GB VRAM, **same Qwen/Qwen3.5-9B backbone**, GRPO Group Size = 8) — this tier scales group size and throughput, not model size.
+
+> **Note on Configuration Precedence:** For all pipeline scripts (like `run_trace_gen.py`), parameters follow a strict priority order: **CLI Arguments > `.env` variables > Provider Defaults**. This allows you to set safe fallbacks in `.env` (like `MAX_TOKENS`) but seamlessly scale up runs dynamically via the command line (e.g. `--max-tokens 16384`) without changing configuration files.
 
 Override settings via CLI or by passing a custom config file:
 ```bash

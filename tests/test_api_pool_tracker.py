@@ -47,7 +47,7 @@ def test_call_llm_hits_rpd_limit_before_api(mock_get_client, tmp_path):
     assert mock_client.chat.completions.create.call_count == 1
     
     # Second call hits RPD limit, raises exception, DOES NOT call api
-    with pytest.raises(RPDLimitExhausted):
+    with pytest.raises(RuntimeError, match="Hard stop on API errors per rule"):
         call_llm(provider="groq", model="groq", system_prompt="sys", user_content="usr")
         
     assert mock_client.chat.completions.create.call_count == 1  # Still 1!

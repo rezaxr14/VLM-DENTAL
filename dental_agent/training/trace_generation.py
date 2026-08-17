@@ -60,7 +60,7 @@ def _resolve_generator() -> tuple[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# Verifier: The ProviderPool handles round-robining across external APIs
+# Verifier: The trace_generation handles dispatching to external APIs
 # (NVIDIA, Groq, OpenRouter, Gemini) and enforces strict 5-minute cooldowns.
 # ---------------------------------------------------------------------------
 
@@ -110,7 +110,7 @@ def generate_interactive_trajectory(
     ground_truth: list[dict[str, Any]],
     registry: ToolRegistry,
     max_turns: int = 8,
-    max_tokens_per_turn: int = 8192,
+    max_tokens_per_turn: int | None = None,
     provider: str = GENERATOR_PROVIDER,
     model: str = GENERATOR_MODEL,
     call_llm_fn: Callable[..., str] | None = None,
@@ -163,7 +163,7 @@ def verify_trace(
     user_content = f"Ground Truth: {json.dumps(ground_truth)}\n\nCandidate Trace:\n{trace_text}"
 
     # Section 8: stream=True
-    raw = call_llm_fn(provider, model, VERIFIER_SYSTEM_PROMPT, user_content, image=image, temperature=0.0, max_tokens=2048, response_mime_type="application/json", stream=True, label="verify_trace")
+    raw = call_llm_fn(provider, model, VERIFIER_SYSTEM_PROMPT, user_content, image=image, temperature=0.0, max_tokens=2048, response_mime_type="application/json", stream=True, label="verify_trace", role="verifier")
     parsed = parse_agent_json(raw)
     
     extracted_reason = None
@@ -196,7 +196,7 @@ def verify_trace(
         repair_user_content = f"The verifier rejected this trace because: {extracted_reason}\n\nOriginal Trace:\n{trace_text}\n\nRewrite the trace to fix the issue. Output the complete revised reasoning."
         
         try:
-            repaired_raw = call_llm_fn(gen_provider, gen_model, repair_sys_prompt, repair_user_content, image=image, temperature=0.3, max_tokens=4096, stream=True, label="repair_trace")
+            repaired_raw = call_llm_fn(gen_provider, gen_model, repair_sys_prompt, repair_user_content, image=image, temperature=0.3, max_tokens=4096, stream=True, label="repair_trace", role="verifier")
             # Replace the last assistant message with the repaired raw
             repaired_trajectory = dict(trajectory)
             repaired_messages = list(trajectory.get("messages", []))
@@ -298,8 +298,10 @@ def generate_only(
     annots_df: pd.DataFrame,
     categories_df: pd.DataFrame | None = None,
     diag_col: str = "category_id_3",
-    max_turns: int = 8,
-    max_tokens_per_turn: int = 4096,
+    max_turns: int = 25,
+    max_tokens_per_turn: int | None = None,
+    min_turns: int = 15,
+    turns_per_finding_buffer: int = 5,
 ) -> dict[str, Any] | None:
     """Generate a raw (unverified) trace for a single image.
     
@@ -328,8 +330,17 @@ def generate_only(
     ground_truth = _format_ground_truth(anns, cat_lookup, diag_col)
     registry = ToolRegistry.create_default()
 
+    # Dynamic per-image turn budget: max(min_turns, n_findings + buffer), capped at
+    # max_turns. A flat budget can't serve both a 1-finding image and a 14-finding
+    # image well -- this scales the room a trace gets to match how much investigation
+    # it actually needs, rather than either starving complex cases or teaching
+    # wandering into simple ones via an inflated global default.
+    n_findings = len(ground_truth)
+    turns_budget = min(max_turns, max(min_turns, n_findings + turns_per_finding_buffer))
+    print(f"  (findings={n_findings}, turn budget={turns_budget})", flush=True)
+
     traj, fail_reason = generate_interactive_trajectory(
-        image, ground_truth, registry, max_turns=max_turns, max_tokens_per_turn=max_tokens_per_turn
+        image, ground_truth, registry, max_turns=turns_budget, max_tokens_per_turn=max_tokens_per_turn
     )
     if traj is None or traj.get("final_answer") is None:
         return {

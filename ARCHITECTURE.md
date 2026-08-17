@@ -32,7 +32,7 @@ This is the heart of the project containing all reusable logic. It is imported b
 ### `dental_agent/training/` (Pipelines & RL)
 *The heavy-lifting logic for fine-tuning and reinforcement learning.*
 - `api_pool.py`: **The dual-pool LLM client router.** Manages two independent pool singletons:
-  - **`ProviderPool`** (verifier): Round-robins across external APIs (NVIDIA NIM, Groq, OpenRouter, Gemini) with per-provider cooldown (`API_COOLDOWN_SECONDS`, default 300s) and daily caps (`API_RPD_LIMIT`, default 10). State persists to `data/provider_pool_state.json`.
+  - **`APIUsageTracker`** (verifier): Paces external APIs (NVIDIA NIM, Groq, OpenRouter, Gemini) with per-provider cooldowns and daily caps. Fails fast on exhaustion. State persists to `data/provider_pool_state.json`.
   - **`GeneratorPool`**: Same architecture but for external-API generation when no local GPU is available. Uses separate env vars (`GENERATOR_COOLDOWN_SECONDS`, default 60s; `GENERATOR_RPD_LIMIT`, default 50). State persists to `data/generator_pool_state.json`. Bypassed entirely when `GENERATOR_PROVIDER=local`.
   - Also contains `APISessionPool` (cached OpenAI-compatible clients), `call_llm()` (universal caller supporting `auto_verifier` and `auto_generator` routing), and `verify_local_server_health()`.
 - `trace_generation.py`: **The dataset synthesizer (decoupled pipeline).** Two operational modes:
@@ -86,12 +86,16 @@ These are the executable scripts you run from the terminal. They wire the core p
 ### Trace Generation & Verification
 - **`run_trace_gen.py`**: **(Phase 1)** The primary trace generation script with two operational modes:
   - `--mode generate` (default): Runs the LangGraph loop for each DENTEX image, writes raw traces to `data/traces/train_cot_traces_unverified.jsonl`. No rate limit when `GENERATOR_PROVIDER=local`; uses `GeneratorPool` for external APIs.
-  - `--mode verify`: Reads unverified traces, verifies each via `ProviderPool` (external API round-robin with rate limits), promotes passing traces to `data/traces/train_cot_traces.jsonl`.
+  - `--mode verify`: Reads unverified traces, verifies each via `api_pool.py` (external API with strict pacing limits), promotes passing traces to `data/traces/train_cot_traces.jsonl`.
   - `--status-only`: Prints pool capacity and dataset progress without generating.
   - `--split train|validation`: DENTEX split to process.
   - `--max-images N`: Cap for the session.
   - `--pacing-delay 1.5`: Inter-request delay (seconds).
   - `--k 1`: Candidate traces per image.
+  - `--max-tokens N`: Tokens per generator turn (CLI argument takes strict precedence over `.env`).
+  - `--min-turns N`: Floor on the turn budget.
+  - `--turns-per-finding-buffer N`: Buffer added per finding.
+  - `--total-slices N` and `--slice-index N`: Distributed generation controls.
   - `--output PATH`: Override output file path.
 - **`test_langgraph_loop.py`**: Quick smoke test — runs a single image through the LangGraph loop to verify tool calling works.
   - `--image PATH`: Path to test image.

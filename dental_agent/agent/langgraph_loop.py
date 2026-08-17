@@ -45,18 +45,54 @@ class TraceGenState(TypedDict):
     status: str  # "running" | "needs_tool" | "done" | "error"
     error: str | None
     consecutive_parse_errors: int
-    pending_tool_call: dict[str, Any] | None
+    pending_tool_calls: list[dict[str, Any]] | None
+    tools_used: set[str]
+    located_teeth: set[int]
 
 
 
-def _reasoning_node_factory(provider: str, model: str, max_tool_calls: int, max_tokens: int = 8192, context_trim_threshold: int = 11468):
+import os
+
+# Per-provider defaults for context-trim threshold (roughly 70% of that provider's
+# real TPM/context ceiling) and max output tokens. Both are .env-overridable per
+# provider; these are just the fallback if no env var is set. Groq's numbers are
+# confirmed from the console (8,000 TPM) for qwen/qwen3.6-27b -- the others are
+# generous since neither NVIDIA nor Gemini has shown an actual ceiling.
+_PROVIDER_TRIM_THRESHOLD_DEFAULTS = {
+    "groq": 5600, "nvidia_nim": 30000, "openrouter": 12000, "gemini": 100000, "local": 11468,
+}
+_PROVIDER_MAX_TOKENS_DEFAULTS = {
+    "groq": 1024, "openrouter": 1536, "nvidia_nim": 16384, "gemini": 16384, "local": 8192,
+}
+
+
+def _provider_env(provider: str, suffix: str, code_default: int) -> int:
+    prefix = provider.upper().replace("_NIM", "")
+    val = os.environ.get(f"{prefix}_{suffix}")
+    return int(val) if val else code_default
+
+
+def _reasoning_node_factory(provider: str, model: str, max_tool_calls: int, max_tokens: int | None = None, context_trim_threshold: int | None = None):
+    if max_tokens is not None:
+        resolved_max_tokens = max_tokens
+    else:
+        resolved_max_tokens = _provider_env(provider, "MAX_TOKENS", _PROVIDER_MAX_TOKENS_DEFAULTS.get(provider, 8192))
+        
+    resolved_trim_threshold = context_trim_threshold or _provider_env(
+        provider, "CONTEXT_TRIM_THRESHOLD", _PROVIDER_TRIM_THRESHOLD_DEFAULTS.get(provider, 11468)
+    )
+
     def _reasoning_node(state: TraceGenState) -> TraceGenState:
         if state["tool_calls"] >= max_tool_calls and state["final_answer"] is None:
             state["status"] = "error"
             state["error"] = f"max_tool_calls ({max_tool_calls}) reached without a final_answer"
             return state
 
-        # 4b. Sliding-window context trimming
+        # 4b. Sliding-window context trimming -- threshold is now provider-specific
+        # (see _PROVIDER_TRIM_THRESHOLD_DEFAULTS above). A threshold computed off
+        # vLLM's ~16-24K local budget never fires early enough to protect Groq's
+        # 8,000 TPM ceiling -- that mismatch was the actual cause of Groq/OpenRouter
+        # "getting limited at higher turn numbers" even with this trimming in place.
         est_tokens = sum(len(str(m)) for m in state["messages"]) // 4
         image_count = 0
         for m in state["messages"]:
@@ -88,7 +124,7 @@ def _reasoning_node_factory(provider: str, model: str, max_tool_calls: int, max_
                                 new_content.append(block)
                         m["content"] = new_content
 
-        if est_tokens > context_trim_threshold:
+        if est_tokens > resolved_trim_threshold:
             _trim_images(keep_last_n=2)
 
         try:
@@ -99,9 +135,10 @@ def _reasoning_node_factory(provider: str, model: str, max_tool_calls: int, max_
                 user_content=state["messages"],
                 image=None,
                 temperature=0.7,
-                max_tokens=max_tokens,
+                max_tokens=resolved_max_tokens,
                 stream=True,
                 label=f"turn {len(state['turns'])}",
+                role="generator",
             )
         except Exception as e:
             error_str = str(e).lower()
@@ -116,9 +153,10 @@ def _reasoning_node_factory(provider: str, model: str, max_tool_calls: int, max_
                         user_content=state["messages"],
                         image=None,
                         temperature=0.7,
-                        max_tokens=max_tokens,
+                        max_tokens=resolved_max_tokens,
                         stream=True,
                         label=f"turn {len(state['turns'])} (retry)",
+                        role="generator",
                     )
                 except Exception as retry_e:
                     raise retry_e
@@ -189,85 +227,169 @@ def _reasoning_node_factory(provider: str, model: str, max_tool_calls: int, max_
                 state["status"] = "running"
                 return state
 
-            state["final_answer"] = parsed["final_answer"]
+            # 1c. Tool-diversity gate. Prompting alone is a request, not a guarantee --
+            # this is enforced structurally: a trace that hasn't genuinely used tools
+            # gets bounced back regardless of how many turns that costs.
+            if len(state["tools_used"]) < 3:
+                turn_record["status"] = "rejected_final_answer"
+                state["turns"].append(turn_record)
+                state["messages"].append({
+                    "role": "user",
+                    "content": (
+                        f"Error: You've only used {sorted(state['tools_used'])}. Use a wider "
+                        "range of tools (locate_tooth, fdi_label, zoom_crop, window_level, "
+                        "denoise, contralateral_compare) before finalizing."
+                    ),
+                })
+                state["status"] = "running"
+                return state
+
+            proposed = parsed["final_answer"]
+            if isinstance(proposed, list):
+                unlocated = [
+                    f for f in proposed
+                    if isinstance(f, dict) and "quadrant" in f and "tooth_position" in f
+                    and (int(f["quadrant"]) * 10 + int(f["tooth_position"])) not in state["located_teeth"]
+                ]
+                if unlocated:
+                    bad = ", ".join(f"Q{f['quadrant']}T{f['tooth_position']}" for f in unlocated)
+                    turn_record["status"] = "rejected_final_answer"
+                    state["turns"].append(turn_record)
+                    state["messages"].append({
+                        "role": "user",
+                        "content": (
+                            f"Error: Finding(s) at {bad} were never located with locate_tooth. "
+                            "Locate every tooth you're diagnosing before including it in your "
+                            "final answer."
+                        ),
+                    })
+                    state["status"] = "running"
+                    return state
+
+            state["final_answer"] = proposed
             turn_record["status"] = "final_answer"
             state["turns"].append(turn_record)
             state["status"] = "done"
             return state
 
-        tool_name = parsed.get("tool")
-        tool_args = parsed.get("args", {}) or {}
+        # 1d. Multi-tool-call-per-turn: parsing.py already normalizes a legacy single
+        # "tool" key into a one-element "tool_calls" list, so this only ever needs to
+        # handle the list form.
+        tool_calls = parsed.get("tool_calls")
 
-        if not tool_name:
+        if not tool_calls or not isinstance(tool_calls, list):
             turn_record["status"] = "invalid_tool_format"
             state["turns"].append(turn_record)
             state["messages"].append(
-                {"role": "user", "content": "Error: Missing 'tool' key in JSON output."}
+                {"role": "user", "content": "Error: Missing or empty 'tool_calls' list in JSON output."}
             )
             state["status"] = "running"
             return state
 
-        state["pending_tool_call"] = {"tool": tool_name, "args": tool_args, "turn_record": turn_record}
+        if len(tool_calls) > 4:
+            turn_record["status"] = "invalid_tool_format"
+            state["turns"].append(turn_record)
+            state["messages"].append(
+                {"role": "user", "content": "Error: At most 4 tool calls per turn. Split this across more turns."}
+            )
+            state["status"] = "running"
+            return state
+
+        for tc in tool_calls:
+            if not isinstance(tc, dict) or not tc.get("tool"):
+                turn_record["status"] = "invalid_tool_format"
+                state["turns"].append(turn_record)
+                state["messages"].append(
+                    {"role": "user", "content": "Error: Each entry in 'tool_calls' needs a 'tool' key."}
+                )
+                state["status"] = "running"
+                return state
+
+        state["pending_tool_calls"] = [
+            {"tool": tc["tool"], "args": tc.get("args", {}) or {}} for tc in tool_calls
+        ]
+        state["_pending_turn_record"] = turn_record
         state["status"] = "needs_tool"
         return state
 
     return _reasoning_node
 
 
-def _tool_node_factory(registry: ToolRegistry):
+def _tool_node_factory(registry: ToolRegistry, ground_truth: list[dict[str, Any]] | None = None):
+    ground_truth = ground_truth or []
+
+    def _hint_for_tooth(fdi_number: int) -> list[float] | None:
+        """Look up this trace's ground truth for a bbox matching the requested FDI
+        tooth, for locate_tooth's search_region_hint (Section 2c) -- privileged,
+        pipeline-internal only, never derived from anything the model said."""
+        fdi_str = str(fdi_number)
+        if len(fdi_str) != 2:
+            return None
+        quadrant, position = int(fdi_str[0]), int(fdi_str[1])
+        for f in ground_truth:
+            if f.get("quadrant") == quadrant and f.get("tooth_position") == position and "bbox" in f:
+                return f["bbox"]
+        return None
+
     def _tool_node(state: TraceGenState) -> TraceGenState:
-        pending = state.get("pending_tool_call")
+        pending = state.get("pending_tool_calls")
         if not pending:
             state["status"] = "error"
-            state["error"] = "Tool node called but no pending tool call found."
+            state["error"] = "Tool node called but no pending tool calls found."
             return state
 
-        tool_name = pending["tool"]
-        tool_args = pending["args"]
-        turn_record = pending["turn_record"]
+        turn_record = state.pop("_pending_turn_record", {"turn": len(state["turns"])})
+        turn_record["tool_calls_this_turn"] = []
+        observation: list[dict[str, Any]] = []
+        any_ok = False
 
-        if not registry.get(tool_name):
-            turn_record["status"] = "invalid_tool"
-            state["turns"].append(turn_record)
-            state["messages"].append(
-                {"role": "user", "content": f"Error: Tool '{tool_name}' is not recognized."}
-            )
-            state["pending_tool_call"] = None
-            state["status"] = "running"
-            return state
+        for call in pending:
+            tool_name = call["tool"]
+            tool_args = dict(call["args"])
+            call_record: dict[str, Any] = {"tool_name": tool_name, "tool_args": dict(tool_args)}
 
-        turn_record["tool_name"] = tool_name
-        turn_record["tool_args"] = tool_args
+            if not registry.get(tool_name):
+                call_record["tool_ok"] = False
+                call_record["tool_error"] = f"Tool '{tool_name}' is not recognized."
+                observation.append({"type": "text", "text": f"Error: Tool '{tool_name}' is not recognized."})
+                turn_record["tool_calls_this_turn"].append(call_record)
+                continue
 
-        try:
-            if tool_name in IMAGE_INPUT_TOOLS:
-                tool_out = registry.execute(tool_name, image=state["base_image"], **tool_args)
-            elif tool_name == "locate_tooth":
-                tool_out = registry.execute(tool_name, image=state["base_image"], **tool_args)
-            else:
-                tool_out = registry.execute(tool_name, **tool_args)
+            try:
+                if tool_name == "locate_tooth" and "tooth" in tool_args:
+                    hint = _hint_for_tooth(tool_args["tooth"])
+                    if hint is not None:
+                        tool_args["search_region_hint"] = hint
 
-            if isinstance(tool_out, Image.Image):
-                observation = [
-                    {"type": "image", "image": tool_out},
-                    {"type": "text", "text": f"Result of {tool_name}:"},
-                ]
-            else:
-                observation = [
-                    {"type": "text", "text": f"Tool output: {json.dumps(to_jsonable(tool_out))}"}
-                ]
+                if tool_name in IMAGE_INPUT_TOOLS or tool_name == "locate_tooth":
+                    tool_out = registry.execute(tool_name, image=state["base_image"], **tool_args)
+                else:
+                    tool_out = registry.execute(tool_name, **tool_args)
 
-            turn_record["tool_ok"] = True
-            state["tool_calls"] += 1
-            state["messages"].append({"role": "user", "content": observation})
+                if isinstance(tool_out, Image.Image):
+                    observation.append({"type": "image", "image": tool_out})
+                    observation.append({"type": "text", "text": f"Result of {tool_name}:"})
+                else:
+                    observation.append({"type": "text", "text": f"Result of {tool_name}: {json.dumps(to_jsonable(tool_out))}"})
 
-        except Exception as e:
-            turn_record["tool_ok"] = False
-            turn_record["tool_error"] = str(e)
-            state["messages"].append({"role": "user", "content": f"Tool execution failed: {e}"})
+                call_record["tool_ok"] = True
+                any_ok = True
+                state["tool_calls"] += 1
+                state["tools_used"].add(tool_name)
+                if tool_name == "locate_tooth" and isinstance(tool_out, dict) and "bbox" in tool_out and "tooth" in tool_out:
+                    state["located_teeth"].add(int(tool_out["tooth"]))
 
+            except Exception as e:
+                call_record["tool_ok"] = False
+                call_record["tool_error"] = str(e)
+                observation.append({"type": "text", "text": f"Tool '{tool_name}' execution failed: {e}"})
+
+            turn_record["tool_calls_this_turn"].append(call_record)
+
+        turn_record["status"] = "tool_executed" if any_ok else "tool_all_failed"
         state["turns"].append(turn_record)
-        state["pending_tool_call"] = None
+        state["messages"].append({"role": "user", "content": observation})
+        state["pending_tool_calls"] = None
         state["status"] = "running"
         return state
 
@@ -284,16 +406,17 @@ def _route(state: TraceGenState) -> str:
 
 def build_trace_gen_graph(
     registry: ToolRegistry,
+    ground_truth: list[dict[str, Any]] | None = None,
     provider: str = "local",
     model: str = "Qwen/Qwen3.5-9B",
     max_tool_calls: int = 8,
-    max_tokens: int = 4096,
+    max_tokens: int | None = None,
 ):
     """Build and compile the LangGraph for ground-truth-directed, real-tool-execution generation."""
     graph = StateGraph(TraceGenState)
     
     graph.add_node("reasoning", _reasoning_node_factory(provider, model, max_tool_calls, max_tokens=max_tokens))
-    graph.add_node("tools", _tool_node_factory(registry))
+    graph.add_node("tools", _tool_node_factory(registry, ground_truth=ground_truth or []))
     
     graph.set_entry_point("reasoning")
     
@@ -311,25 +434,31 @@ def run_trace_gen(
     provider: str = "local",
     model: str = "Qwen/Qwen3.5-9B",
     max_turns: int = 8,
-    max_tokens_per_turn: int = 4096,
+    max_tokens_per_turn: int | None = None,
 ) -> tuple[dict[str, Any] | None, str | None]:
     """Ground-truth-directed trace generation with real tool execution via LangGraph.
     
     Returns (trajectory_dict, None) on success or (None, error_reason) on failure.
     """
-    if provider.lower() == "groq" and len(ground_truth) > 4:
-        gt_str = f"[{len(ground_truth)} findings total. Use tools to locate and confirm each one.]"
-    else:
-        gt_str = json.dumps(ground_truth)
+    # Always drop bbox coordinates from the directive -- now that locate_tooth actually
+    # works, handing over exact coordinates just teaches copy-the-hint instead of
+    # genuine tool-mediated localization. Keep naming which findings exist (preserves
+    # yield -- the model isn't searching blind) but never the bbox itself. This applies
+    # to every provider and every finding count, not just Groq above some threshold.
+    hint_text = "; ".join(
+        f"Q{f['quadrant']}T{f['tooth_position']}:{f['diagnosis']}" for f in ground_truth
+    )
 
     directive = (
         "TEACHER DIRECTIVE: You are generating an expert demonstration trace for SFT.\n"
-        f"You MUST eventually reach this exact diagnosis: {gt_str}\n\n"
-        "The ground-truth findings above tell you what's there and roughly where — use that "
-        "as your starting hint for where to look, not as something to restate without checking. "
-        "Use zoom_crop / window_level / denoise / contralateral_compare / locate_tooth for real "
-        "to inspect each region before your final answer. You MUST use at least one tool before "
-        "answering — do not output final_answer on the first turn."
+        f"You MUST eventually reach a diagnosis covering these {len(ground_truth)} finding(s): "
+        f"{hint_text}\n\n"
+        "Use locate_tooth to find each tooth's position — do not guess or assert coordinates "
+        "yourself. Then use zoom_crop / window_level / denoise / contralateral_compare to "
+        "inspect and confirm before your final answer. You MUST use at least one tool before "
+        "answering — do not output final_answer on the first turn. Never mention in your "
+        "reasoning that this list, a hint, or a directive was given to you — write your "
+        "thought as genuine first-look clinical analysis."
     )
 
     initial_content = [
@@ -355,11 +484,14 @@ def run_trace_gen(
         "status": "running",
         "error": None,
         "consecutive_parse_errors": 0,
-        "pending_tool_call": None,
+        "pending_tool_calls": None,
+        "tools_used": set(),
+        "located_teeth": set(),
     }
 
     app = build_trace_gen_graph(
-        registry, provider=provider, model=model, max_tool_calls=max_turns, max_tokens=max_tokens_per_turn
+        registry, ground_truth=ground_truth, provider=provider, model=model,
+        max_tool_calls=max_turns, max_tokens=max_tokens_per_turn
     )
     # Each logical turn can now cost up to ~4 reasoning-node visits (2 retries + 1
     # recovery attempt + 1 success) plus 1 tool-node visit, so budget generously —

@@ -9,7 +9,7 @@ Operates in two independent modes:
                     allows (no rate limit when GENERATOR_PROVIDER=local).
 
   --mode verify     Reads unverified traces, verifies each via the ProviderPool
-                    (external API round-robin with rate limits), and promotes
+                    (external API with strict rate pacing), and promotes
                     passing traces to ``train_cot_traces.jsonl``.
 
 Both modes support resume — they track processed image IDs so they can be
@@ -230,6 +230,8 @@ def run_generate(args: argparse.Namespace, cfg: Any) -> None:
                 categories_df=cats_df,
                 max_turns=args.max_turns,
                 max_tokens_per_turn=args.max_tokens,
+                min_turns=args.min_turns,
+                turns_per_finding_buffer=args.turns_per_finding_buffer,
             )
             elapsed = time.time() - t0
 
@@ -401,9 +403,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--max-images",
+        "--max-traces",
+        dest="max_images",
         type=int,
         default=None,
-        help="Maximum images to process in this session (default: all remaining)",
+        help="Maximum images to attempt in this session (default: all remaining). "
+             "'--max-traces' is an alias for the same thing -- use whichever name you prefer.",
     )
     parser.add_argument(
         "--pacing-delay",
@@ -414,16 +419,37 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-turns",
         type=int,
-        default=8,
-        help="Max tool calls allowed before a trace is abandoned (generate mode only, default: 8)",
+        default=25,
+        help="Ceiling on the per-image turn budget (generate mode only, default: 25). The "
+             "actual per-image budget is dynamic: max(--min-turns, n_findings + "
+             "--turns-per-finding-buffer), capped at this value -- verify the true max "
+             "finding count in your dataset and raise this if it's not comfortably above that.",
+    )
+    parser.add_argument(
+        "--min-turns",
+        type=int,
+        default=15,
+        help="Floor on the per-image turn budget, used even for single-finding images (default: 15).",
+    )
+    parser.add_argument(
+        "--turns-per-finding-buffer",
+        type=int,
+        default=5,
+        help="Per-image turn budget = max(--min-turns, n_findings + this), capped at --max-turns (default: 5).",
     )
     parser.add_argument(
         "--max-tokens",
         type=int,
-        default=4096,
-        help="Max tokens per generator turn (generate mode only, default: 4096). Raise this if "
+        default=None,
+        help="Max tokens per generator turn (generate mode only, default: fallback to .env). Raise this if "
              "you still see 'Unparseable model output' failures with no JSON at all in the raw "
              "output -- that's the model's thinking getting cut off, not a formatting mistake.",
+    )
+    parser.add_argument(
+        "--image-max-dim",
+        type=int,
+        default=None,
+        help="Max image dimension for API payload scaling (CLI argument takes strict precedence over .env). Set to 0 to send unscaled images.",
     )
     parser.add_argument(
         "--status-only",
@@ -482,6 +508,12 @@ def main() -> None:
         os.environ["VERIFIER_MODEL"] = args.verifier_model
     if "VERIFIER_MODEL" in os.environ:
         tg.VERIFIER_MODEL = os.environ["VERIFIER_MODEL"]
+
+    if args.image_max_dim is not None:
+        g_prefix = tg.GENERATOR_PROVIDER.upper().replace('_NIM', '')
+        v_prefix = tg.VERIFIER_PROVIDER.upper().replace('_NIM', '')
+        os.environ[f"{g_prefix}_IMAGE_MAX_DIM"] = str(args.image_max_dim)
+        os.environ[f"{v_prefix}_IMAGE_MAX_DIM"] = str(args.image_max_dim)
 
     if args.mode == "generate":
         run_generate(args, cfg)

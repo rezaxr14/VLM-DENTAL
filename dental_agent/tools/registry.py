@@ -108,24 +108,20 @@ class ToolRegistry:
             description="Applies medical intensity windowing to reveal specific density structures (e.g. bone, enamel, soft_tissue, metal_reduction).",
             schema={"preset": "bone"},
         )
-        
-        # 3. denoise
+
+        # 3. locate_tooth (YOLOv8 grounding) -- moved up from position 7. Locating a
+        # tooth is a prerequisite for genuinely inspecting it (not asserting bboxes
+        # from nowhere), so it belongs right after basic image prep, not after the
+        # more situational tools below.
         registry.register(
-            name="denoise",
-            func=tool_denoise,
-            description="Applies edge-preserving noise reduction to distinguish real pathology from sensor grain/noise.",
-            schema={"method": "bilateral"},
-        )
-        
-        # 4. contralateral_compare
-        registry.register(
-            name="contralateral_compare",
-            func=tool_contralateral_compare,
-            description="Crops a region in one quadrant and its anatomical mirror in the opposite quadrant, returning a side-by-side composite for symmetry comparison.",
-            schema={"bbox": [0, 0, 100, 100], "quadrant": 1},
+            name="locate_tooth",
+            func=tool_locate_tooth,
+            description="Locates a specific tooth using a trained object detector and returns its bounding box.",
+            schema={"tooth": 38},
         )
 
-        # 5. fdi_label
+        # 4. fdi_label -- moved up from position 5, pairs naturally with locate_tooth
+        # (convert quadrant/position to the FDI number locate_tooth needs, or back).
         registry.register(
             name="fdi_label",
             func=tool_fdi_label,
@@ -133,7 +129,27 @@ class ToolRegistry:
             schema={"quadrant": 1, "tooth_position": 6},
         )
 
-        # 6. locate_abnormal_teeth (optional grounding backend)
+        # 5. denoise
+        registry.register(
+            name="denoise",
+            func=tool_denoise,
+            description="Applies edge-preserving noise reduction to distinguish real pathology from sensor grain/noise.",
+            schema={"method": "bilateral"},
+        )
+
+        # 6. contralateral_compare
+        registry.register(
+            name="contralateral_compare",
+            func=tool_contralateral_compare,
+            description="Crops a region in one quadrant and its anatomical mirror in the opposite quadrant, returning a side-by-side composite for symmetry comparison.",
+            schema={"bbox": [0, 0, 100, 100], "quadrant": 1},
+        )
+
+        # 7. locate_abnormal_teeth (optional grounding backend) -- still last/optional:
+        # its backing Faster R-CNN detector has never been trained (no checkpoint
+        # exists anywhere on disk), so grounding_tool is never actually passed in by
+        # any current call site. Deferred, not wired up -- see trace_generation.py's
+        # ToolRegistry.create_default() call sites, all of which still pass none.
         if grounding_tool is not None:
             registry.register(
                 name="locate_abnormal_teeth",
@@ -141,13 +157,5 @@ class ToolRegistry:
                 description="Specialist detector returning candidate bounding boxes and FDI positions for abnormal teeth.",
                 schema={"image_id": 0},
             )
-
-        # 7. locate_tooth (YOLOv8 grounding)
-        registry.register(
-            name="locate_tooth",
-            func=tool_locate_tooth,
-            description="Locates a specific tooth using a trained object detector and returns its bounding box.",
-            schema={"tooth": 38},
-        )
 
         return registry

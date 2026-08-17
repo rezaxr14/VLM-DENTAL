@@ -14,6 +14,7 @@ The generation of synthetic training data is now orchestrated by a real LangGrap
 1. **Dynamic Tool Execution**: Every tool call runs for real against the source image. Tool outputs are appended dynamically. `<fake_tool_call>` is deprecated.
 2. **Strict Verifier**: Uses `api_pool.py` to route to a verifier model dynamically (NVIDIA NIM, Groq, OpenRouter, Anthropic, or Gemini) to ensure the agent's diagnostic trace matches ground truth and doesn't hallucinate.
 3. **Local Generation Server**: Generation uses `Qwen/Qwen3.5-9B` served via a local vLLM endpoint inside the Colab session for zero-latency, free tool execution loops.
+4. **Configuration Precedence**: Parameters follow a strict priority order: **CLI Arguments > `.env` variables > Provider Defaults**. This allows safe fallbacks in `.env` while supporting dynamic scale-up via CLI flags (e.g., `--max-tokens`).
 
 ## Important Guidelines
 - Read `AGENT_HANDOVER.md` for in-depth explanations of the agent's reasoning loop and tool suite.
@@ -24,6 +25,6 @@ The generation of synthetic training data is now orchestrated by a real LangGrap
 ## Migration Notes (From previous versions)
 - `dental_agent/agent/loop.py` handles tool dispatch generically by return type, ensuring tools like `window_level`, `denoise`, `locate_tooth`, and `contralateral_compare` execute correctly.
 - Grounding Tool (`locate_tooth`) uses YOLOv8m (5-fold cross-validation) and is **live** in the agent loop. Ensure `GROUNDING_MODEL_PATH` is set in your `.env`.
-- `api_pool.py` handles round-robin fallback across multiple OpenAI-compatible endpoints.
+- `api_pool.py` handles strict rate pacing and fail-fast exhaustion across OpenAI-compatible endpoints (no rotating pools).
 
 If you are asked to build a new feature, always check `registry.py` to ensure your new tools are correctly mapped.

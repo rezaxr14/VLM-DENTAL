@@ -40,7 +40,7 @@ These functions simulate a radiologist's workstation.
 - **`grounding.py`**: Uses YOLOv8m (5-fold CV, val mAP50 ≈ 0.647) to locate a specific tooth — live in the agent loop.
 
 ### `/dental_agent/training/` (Data Pipelines)
-- **`api_pool.py`**: Manages a round-robin pool of Gemini API keys (`API_KEYS.json`) to bypass rate limits during massive generation runs.
+- **`api_pool.py`**: Enforces strict native pacing and daily caps for API requests to bypass bans during massive generation runs.
 - **`trace_generation.py`**: **The most important script in the repository.** This handles the Teacher-Verifier loop (detailed below).
 
 ---
@@ -94,7 +94,7 @@ The system uses a highly optimized memory architecture for RLHF:
 If the User asks you to build a new feature or fix a bug:
 1. **Always read this file and `ROADMAP.md` first.**
 2. **Check your Tool Imports:** All AI diagnostic tools must be registered in `registry.py` and take `image: Image.Image` as an argument if they manipulate pixels.
-3. **Trace Generation Modifications:** If you modify `trace_generation.py`, test it by running `python scripts/run_daily_trace_generator.py` locally to ensure the Verifier doesn't start rejecting everything.
-4. **Notebooks:** Use `Master_Notebook.ipynb` for dataset prep and YOLO training. Use `SFT_Notebook.ipynb` and `GRPO_Notebook.ipynb` strictly for Phase 3 VLM training.
+3. **Trace Generation Modifications:** If you modify `trace_generation.py`, test it by running `python scripts/run_trace_gen.py` locally to ensure the Verifier doesn't start rejecting everything.
+4. **Notebooks:** Use `VLM_Dental_Colab_YOLO.ipynb` for dataset prep and YOLO training. Use `VLM_Dental_Colab_TraceGen.ipynb` for trace synthesis. Use `VLM_Dental_Colab_SFT.ipynb` and `VLM_Dental_Colab_GRPO.ipynb` strictly for Phase 3 VLM training.
 
 Godspeed, Agent.

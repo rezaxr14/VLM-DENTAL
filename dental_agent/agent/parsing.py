@@ -10,6 +10,23 @@ from typing import Any, Optional
 
 
 def parse_agent_json(text: str) -> Optional[dict[str, Any]]:
+    """Robustly extract and parse the primary actionable JSON dictionary from model output text,
+    then normalize it to the multi-tool-call schema: a result with a single "tool"/"args" key
+    pair (the older single-tool-per-turn format) gets rewritten into a one-element "tool_calls"
+    list, so every downstream consumer (the reasoning/tool nodes) only ever has to handle the
+    list form. Old single-tool traces and any provider still producing that format keep working
+    unchanged.
+    """
+    result = _parse_agent_json_raw(text)
+    if result is None:
+        return None
+    if "tool" in result and "tool_calls" not in result:
+        result = dict(result)
+        result["tool_calls"] = [{"tool": result.pop("tool"), "args": result.pop("args", {}) or {}}]
+    return result
+
+
+def _parse_agent_json_raw(text: str) -> Optional[dict[str, Any]]:
     """Robustly extract and parse the primary actionable JSON dictionary from model output text.
 
     Intelligently handles:
@@ -36,7 +53,7 @@ def parse_agent_json(text: str) -> Optional[dict[str, Any]]:
         # If there are code blocks, try the last one first (usually the final answer)
         for block in reversed(code_blocks):
             result = _try_parse_json(block.strip())
-            if result is not None and ("final_answer" in result or "tool" in result):
+            if result is not None and ("final_answer" in result or "tool" in result or "tool_calls" in result):
                 return result
 
     # 2. Extract ALL independent {} blocks and pick the best one.
@@ -75,7 +92,7 @@ def parse_agent_json(text: str) -> Optional[dict[str, Any]]:
     # Try all balanced candidates from back to front (since the final action is usually last)
     for cand in reversed(candidates):
         res = _try_parse_json(cand)
-        if res and ("final_answer" in res or "tool" in res):
+        if res and ("final_answer" in res or "tool" in res or "tool_calls" in res):
             return res
             
     # 3. If no balanced candidates worked (truncation), try repairing the outermost block that looks like an action
@@ -83,14 +100,14 @@ def parse_agent_json(text: str) -> Optional[dict[str, Any]]:
     if action_idx != -1:
         fragment = cleaned[action_idx:]
         result = _repair_truncated_json(fragment)
-        if result is not None and ("final_answer" in result or "tool" in result):
+        if result is not None and ("final_answer" in result or "tool" in result or "tool_calls" in result):
             return result
 
     # 4. Fallback: Try repairing the absolute largest block we can find just in case
     first_brace = cleaned.find("{")
     if first_brace != -1:
         result = _repair_truncated_json(cleaned[first_brace:])
-        if result is not None and ("final_answer" in result or "tool" in result):
+        if result is not None and ("final_answer" in result or "tool" in result or "tool_calls" in result):
             return result
 
     return None

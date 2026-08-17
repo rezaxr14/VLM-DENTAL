@@ -191,7 +191,7 @@ Tool suite (implement these four for the core paper; anomaly detection and calib
 - Anomaly detection: explicitly cut from this paper's scope, deferred to a follow-up — see §5.6.
 - **Clinical validation: deliberately does not require a clinician.** Primary validity anchor is DENTEX's own dentist-verified ground truth; reasoning quality is checked by a cross-model frontier-LLM judge; a prospective clinician study is named explicitly as future work, not hidden as a gap — see §6.
 - **Compute plan: staged across available resources** — Kaggle/Colab free tier + laptop now, occasional RTX 4090 this semester, dedicated RTX 4090/server next semester — see §5.4 for exactly which stage each training step runs on.
+- **Independent verifier model selection**: Resolved via `api_pool.py` configuration, supporting distinct external APIs (NVIDIA, Groq, Gemini, OpenRouter) with strict native pacing to maintain a diverse model family from the generator without risking bans.
 
 **Still genuinely open (only you can resolve these):**
-- Which model to use as the independent verifier in §5.2 — generation is now decided (locally-hosted Qwen/Qwen3.5-9B, see §5.3); the verifier just needs to be a different model family than the generator, with budget planned for k-sample self-consistency generation across ~1,000 training cases.
 - Exact current model versions at implementation time — re-check the model card/leaderboard right before you begin, since this space moves in months, not years.
