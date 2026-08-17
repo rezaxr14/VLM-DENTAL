@@ -93,3 +93,52 @@ def test_call_llm_image_max_dim(mock_get_client, mock_thumbnail):
     with patch.dict(os.environ, {"OPENROUTER_IMAGE_MAX_DIM": "500"}):
         call_llm(provider="openrouter", model="openrouter", system_prompt="", user_content="test", image=dummy_img)
         mock_thumbnail.assert_called_with((500, 500), Image.Resampling.LANCZOS)
+
+@patch("dental_agent.training.api_pool.time.sleep")
+@patch("dental_agent.training.api_pool._POOL.get_openai_compatible")
+def test_call_llm_5xx_retries_once(mock_get_client, mock_sleep):
+    """Test that a 500 error triggers exactly one retry."""
+    mock_client = MagicMock()
+    
+    # First call raises 500, second call succeeds
+    mock_client.chat.completions.create.side_effect = [
+        Exception("500 Internal server error"),
+        MagicMock(choices=[MagicMock(message=MagicMock(content="Success on retry!"))])
+    ]
+    mock_get_client.return_value = mock_client
+    
+    res = call_llm(
+        provider="groq",
+        model="groq/llama-3.1",
+        system_prompt="sys",
+        user_content="user"
+    )
+    
+    assert res == "Success on retry!"
+    assert mock_client.chat.completions.create.call_count == 2
+    mock_sleep.assert_any_call(5)
+
+@patch("dental_agent.training.api_pool.time.sleep")
+@patch("dental_agent.training.api_pool._POOL.get_openai_compatible")
+def test_call_llm_5xx_fails_twice(mock_get_client, mock_sleep):
+    """Test that if the retry also fails, it stops and raises."""
+    mock_client = MagicMock()
+    
+    # Both calls raise 500
+    mock_client.chat.completions.create.side_effect = [
+        Exception("500 Internal server error"),
+        Exception("503 Service Unavailable")
+    ]
+    mock_get_client.return_value = mock_client
+    
+    with pytest.raises(RuntimeError, match="Hard stop after one retry"):
+        call_llm(
+            provider="groq",
+            model="groq/llama-3.1",
+            system_prompt="sys",
+            user_content="user"
+        )
+        
+    assert mock_client.chat.completions.create.call_count == 2
+    mock_sleep.assert_any_call(5)
+
