@@ -56,13 +56,16 @@ def main():
         images_dir.mkdir(parents=True, exist_ok=True)
         
         # 1. Copy annotation JSON
-        # dentex.py uses: json_path = data_dir / "DENTEX" / "training_data" / "quadrant_enumeration_disease" / "train.json"
-        json_path = Path(cfg.data_dir) / "DENTEX" / "training_data" / "quadrant_enumeration_disease" / "train.json"
-        if json_path.exists():
-            print(f"Copying annotations JSON to temp folder...")
-            shutil.copy2(json_path, temp_dir_path / "train.json")
-        else:
-            print(f"WARNING: Annotation JSON not found at {json_path}")
+        # dentex.py uses: json_path = data_dir / "DENTEX" / "training_data" / "quadrant-enumeration-disease" / "train.json"
+        json_path = Path(cfg.data_dir) / "DENTEX" / "training_data" / "quadrant-enumeration-disease" / "train.json"
+        if not json_path.exists():
+            print(f"ERROR: Annotation JSON not found at {json_path}. Aborting -- uploading images "
+                  f"without train.json produces a repo that download_dentex_slice() can't use "
+                  f"(it 404s looking for train.json at the repo root). Run download_and_cleanup.py "
+                  f"first if the dataset isn't extracted locally yet.")
+            sys.exit(1)
+        print(f"Copying annotations JSON to temp folder...")
+        shutil.copy2(json_path, temp_dir_path / "train.json")
 
         # 2. Copy images
         for idx, row in eligible_imgs.iterrows():
