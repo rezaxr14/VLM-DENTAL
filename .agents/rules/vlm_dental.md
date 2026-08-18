@@ -55,3 +55,7 @@ The LangGraph loop (`langgraph_loop.py`) runs tool calls dynamically and for rea
 
 ## 10. No API Calls for Testing (CRITICAL)
 - **Rule:** NEVER waste the user's API call budget for testing or verification under ANY circumstances. If you need to verify a script or pipeline, you MUST use mock API calls, fake stubs, or local inference. Do not execute real calls to Groq, NVIDIA NIM, OpenRouter, or Gemini just to "see if it works."
+
+
+## 11. STRICT NO GIT PUSH RULE (CRITICAL)
+- **Rule:** NEVER UNDER ANY CIRCUMSTANCES run `git push` or `git commit`. DO NOT assume you should push changes even if you generated a model or wrote a script. The user must manually handle all git pushes. Your job is only to write code locally.
