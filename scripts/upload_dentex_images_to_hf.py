@@ -55,16 +55,28 @@ def main():
         images_dir = temp_dir_path / "images"
         images_dir.mkdir(parents=True, exist_ok=True)
         
-        # 1. Copy annotation JSON
-        # dentex.py uses: json_path = data_dir / "DENTEX" / "training_data" / "quadrant-enumeration-disease" / "train.json"
-        json_path = Path(cfg.data_dir) / "DENTEX" / "training_data" / "quadrant-enumeration-disease" / "train.json"
-        if not json_path.exists():
-            print(f"ERROR: Annotation JSON not found at {json_path}. Aborting -- uploading images "
-                  f"without train.json produces a repo that download_dentex_slice() can't use "
+        # 1. Copy annotation JSON. The original DENTEX zip names this file after its own
+        # annotation tier (e.g. train_quadrant_enumeration_disease.json), not "train.json" --
+        # search for it rather than hardcoding an exact name, same approach dentex.py itself
+        # uses elsewhere for this reason. dentex.py's HF-download fallback (load_dentex_dataset /
+        # load_combined_dentex_dataset) is hardcoded to request exactly "train.json" from the
+        # repo root, though, so the destination name below must stay exactly that.
+        quadrant_disease_dir = Path(cfg.data_dir) / "DENTEX" / "training_data" / "quadrant-enumeration-disease"
+        json_candidates = sorted(quadrant_disease_dir.glob("*train*.json"))
+        if not json_candidates:
+            print(f"ERROR: No train annotation JSON found under {quadrant_disease_dir} "
+                  f"(looked for *train*.json). Aborting -- uploading images without the "
+                  f"annotation JSON produces a repo that download_dentex_slice() can't use "
                   f"(it 404s looking for train.json at the repo root). Run download_and_cleanup.py "
                   f"first if the dataset isn't extracted locally yet.")
             sys.exit(1)
-        print(f"Copying annotations JSON to temp folder...")
+        if len(json_candidates) > 1:
+            print(f"ERROR: Multiple candidate JSON files found under {quadrant_disease_dir}: "
+                  f"{[p.name for p in json_candidates]}. Pick the right one and set json_path "
+                  f"explicitly rather than relying on the glob picking correctly.")
+            sys.exit(1)
+        json_path = json_candidates[0]
+        print(f"Copying annotations JSON ({json_path.name}) to temp folder as train.json...")
         shutil.copy2(json_path, temp_dir_path / "train.json")
 
         # 2. Copy images
