@@ -12,7 +12,7 @@ if repo_root not in sys.path:
     sys.path.insert(0, repo_root)
 
 from dental_agent.config import load_config, load_env
-from dental_agent.data.dentex import load_dentex_dataset
+from dental_agent.data.dentex import load_dentex_dataset, find_local_dentex_dir
 
 try:
     from huggingface_hub import HfApi
@@ -38,6 +38,11 @@ def main():
     api = HfApi(token=hf_token)
     
     print(f"Loading dataset from {cfg.data_dir}...")
+    dentex_path = find_local_dentex_dir(cfg.data_dir, split_name="train")
+    if not dentex_path:
+        print("ERROR: Could not find DENTEX dataset locally. Run download_dataset.py first.")
+        sys.exit(1)
+        
     imgs_df, annots_df, cats_df = load_dentex_dataset(
         data_dir=cfg.data_dir, split_name="train", combine_enumeration_splits=False
     )
@@ -61,13 +66,13 @@ def main():
         # uses elsewhere for this reason. dentex.py's HF-download fallback (load_dentex_dataset /
         # load_combined_dentex_dataset) is hardcoded to request exactly "train.json" from the
         # repo root, though, so the destination name below must stay exactly that.
-        quadrant_disease_dir = Path(cfg.data_dir) / "DENTEX" / "training_data" / "quadrant-enumeration-disease"
+        quadrant_disease_dir = dentex_path / "training_data" / "quadrant-enumeration-disease"
         json_candidates = sorted(quadrant_disease_dir.glob("*train*.json"))
         if not json_candidates:
             print(f"ERROR: No train annotation JSON found under {quadrant_disease_dir} "
                   f"(looked for *train*.json). Aborting -- uploading images without the "
                   f"annotation JSON produces a repo that download_dentex_slice() can't use "
-                  f"(it 404s looking for train.json at the repo root). Run download_and_cleanup.py "
+                  f"(it 404s looking for train.json at the repo root). Run download_dataset.py "
                   f"first if the dataset isn't extracted locally yet.")
             sys.exit(1)
         if len(json_candidates) > 1:
@@ -78,6 +83,19 @@ def main():
         json_path = json_candidates[0]
         print(f"Copying annotations JSON ({json_path.name}) to temp folder as train.json...")
         shutil.copy2(json_path, temp_dir_path / "train.json")
+
+        # Copy validation JSON
+        val_json_path = dentex_path / "validation_triple.json"
+        if not val_json_path.exists():
+            val_candidates = sorted(dentex_path.rglob("*validation_triple*.json"))
+            if val_candidates:
+                val_json_path = val_candidates[0]
+
+        if val_json_path.exists():
+            print(f"Copying validation JSON ({val_json_path.name}) to temp folder as validation_triple.json...")
+            shutil.copy2(val_json_path, temp_dir_path / "validation_triple.json")
+        else:
+            print(f"WARNING: No validation_triple.json found under {dentex_path}. The HF repo will only support training splits.")
 
         # 2. Copy images
         for idx, row in eligible_imgs.iterrows():

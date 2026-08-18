@@ -427,11 +427,11 @@ def find_local_dentex_dir(data_dir: str | Path | None = None, split_name: str = 
             # Check for split-specific files
             is_train = split_name in ("train", "training")
             if is_train:
-                has_train_data = any(c.rglob("training_data*")) or any(c.rglob("train*.json")) or any(c.rglob("disease*.json"))
+                has_train_data = any(c.rglob("*train*.json")) or any(c.rglob("*disease*.json")) or any(c.rglob("*triple*.json"))
                 if has_train_data:
                     return c
             else:
-                has_val_data = any(c.rglob("validation_data*")) or any(c.rglob("val*.json"))
+                has_val_data = any(c.rglob("*val*.json")) or any(c.rglob("*validation_triple*.json"))
                 if has_val_data:
                     return c
     return None
@@ -458,8 +458,8 @@ def load_combined_dentex_dataset(
         if repo_id:
             print(f"Dataset not found locally, but DENTEX_IMAGES_REPO={repo_id} is set.")
             print(f"⬇️ Downloading annotation JSON directly from {repo_id}...")
-            json_name = f"{split_name}.json" if split_name in ("train", "training") else "validation_triple.json"
-            local_json = hf_hub_download(repo_id=repo_id, filename="train.json", repo_type="dataset", cache_dir=str(data_dir) if data_dir else None)
+            json_name = "train.json" if split_name in ("train", "training") else "validation_triple.json"
+            local_json = hf_hub_download(repo_id=repo_id, filename=json_name, repo_type="dataset", cache_dir=str(data_dir) if data_dir else None)
             dentex_path = Path(local_json).parent
         else:
             print(f"⚠️ WARNING: Dataset for split '{split_name}' NOT found in any local or Colab Drive paths!")
@@ -563,7 +563,8 @@ def load_dentex_dataset(
         if repo_id:
             print(f"Dataset not found locally, but DENTEX_IMAGES_REPO={repo_id} is set.")
             print(f"⬇️ Downloading annotation JSON directly from {repo_id}...")
-            local_json = hf_hub_download(repo_id=repo_id, filename="train.json", repo_type="dataset", cache_dir=str(data_dir) if data_dir else None)
+            json_name = "train.json" if split_name in ("train", "training") else "validation_triple.json"
+            local_json = hf_hub_download(repo_id=repo_id, filename=json_name, repo_type="dataset", cache_dir=str(data_dir) if data_dir else None)
             dentex_path = Path(local_json).parent
         else:
             print(f"Dataset for split '{split_name}' not found locally. Triggering download...")
