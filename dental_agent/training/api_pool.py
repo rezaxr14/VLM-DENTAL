@@ -447,8 +447,12 @@ def call_llm(
     except Exception as e:
         msg = str(e)
         status_code = getattr(getattr(e, "response", None), "status_code", None) or getattr(e, "status_code", None)
+        msg_lower = msg.lower()
         is_5xx = (
-            "internal server error" in msg.lower()
+            "internal server error" in msg_lower
+            or "unavailable" in msg_lower  # Gemini: "503 UNAVAILABLE. ... high demand ..."
+            or any(f"{code} " in msg or f"{code}." in msg or msg.strip().startswith(str(code))
+                   for code in (500, 502, 503, 504))
             or (isinstance(status_code, int) and 500 <= status_code < 600)
         )
         if not is_5xx:

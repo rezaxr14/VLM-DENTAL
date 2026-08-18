@@ -229,6 +229,7 @@ def run_generate(args: argparse.Namespace, cfg: Any) -> None:
                 annots_df=annots_df,
                 categories_df=cats_df,
                 max_turns=args.max_turns,
+                max_tool_calls=args.max_tool_calls,
                 max_tokens_per_turn=args.max_tokens,
                 min_turns=args.min_turns,
                 turns_per_finding_buffer=args.turns_per_finding_buffer,
@@ -424,6 +425,12 @@ def parse_args() -> argparse.Namespace:
              "actual per-image budget is dynamic: max(--min-turns, n_findings + "
              "--turns-per-finding-buffer), capped at this value -- verify the true max "
              "finding count in your dataset and raise this if it's not comfortably above that.",
+    )
+    parser.add_argument(
+        "--max-tool-calls",
+        type=int,
+        default=50,
+        help="Hard graph limit for the total number of tool calls permitted before failing (default: 50).",
     )
     parser.add_argument(
         "--min-turns",

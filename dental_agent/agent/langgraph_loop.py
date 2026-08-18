@@ -434,6 +434,7 @@ def run_trace_gen(
     provider: str = "local",
     model: str = "Qwen/Qwen3.5-9B",
     max_turns: int = 8,
+    max_tool_calls: int = 50,
     max_tokens_per_turn: int | None = None,
 ) -> tuple[dict[str, Any] | None, str | None]:
     """Ground-truth-directed trace generation with real tool execution via LangGraph.
@@ -491,14 +492,14 @@ def run_trace_gen(
 
     app = build_trace_gen_graph(
         registry, ground_truth=ground_truth, provider=provider, model=model,
-        max_tool_calls=max_turns, max_tokens=max_tokens_per_turn
+        max_tool_calls=max_tool_calls, max_tokens=max_tokens_per_turn
     )
     # Each logical turn can now cost up to ~4 reasoning-node visits (2 retries + 1
     # recovery attempt + 1 success) plus 1 tool-node visit, so budget generously —
     # this is just a runaway-loop safety valve, not the real cost control (that's
     # max_tool_calls / consecutive_parse_errors above).
     final_state: TraceGenState = app.invoke(
-        initial_state, config={"recursion_limit": max_turns * 6 + 10}
+        initial_state, config={"recursion_limit": max_tool_calls * 2 + max_turns * 6 + 10}
     )
 
     error = final_state.get("error")

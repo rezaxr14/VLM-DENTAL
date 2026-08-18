@@ -110,6 +110,7 @@ def generate_interactive_trajectory(
     ground_truth: list[dict[str, Any]],
     registry: ToolRegistry,
     max_turns: int = 8,
+    max_tool_calls: int = 50,
     max_tokens_per_turn: int | None = None,
     provider: str = GENERATOR_PROVIDER,
     model: str = GENERATOR_MODEL,
@@ -137,6 +138,7 @@ def generate_interactive_trajectory(
         provider=gen_provider,
         model=gen_model,
         max_turns=dynamic_max_turns,
+        max_tool_calls=max_tool_calls,
         max_tokens_per_turn=max_tokens_per_turn,
     )
 
@@ -299,6 +301,7 @@ def generate_only(
     categories_df: pd.DataFrame | None = None,
     diag_col: str = "category_id_3",
     max_turns: int = 25,
+    max_tool_calls: int = 50,
     max_tokens_per_turn: int | None = None,
     min_turns: int = 15,
     turns_per_finding_buffer: int = 5,
@@ -340,7 +343,7 @@ def generate_only(
     print(f"  (findings={n_findings}, turn budget={turns_budget})", flush=True)
 
     traj, fail_reason = generate_interactive_trajectory(
-        image, ground_truth, registry, max_turns=turns_budget, max_tokens_per_turn=max_tokens_per_turn
+        image, ground_truth, registry, max_turns=turns_budget, max_tool_calls=max_tool_calls, max_tokens_per_turn=max_tokens_per_turn
     )
     if traj is None or traj.get("final_answer") is None:
         return {

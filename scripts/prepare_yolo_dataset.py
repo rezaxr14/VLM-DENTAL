@@ -34,8 +34,10 @@ def convert_single_image(img_row, annots_df, images_out, labels_out):
         if pd.isna(ann.get("category_id_1")) or pd.isna(ann.get("category_id_2")):
             continue
 
-        quadrant = int(ann["category_id_1"])
-        position = int(ann["category_id_2"])
+        # DENTEX's category_id_1/category_id_2 are 0-indexed (quadrant 0-3, position 0-7) --
+        # convert to FDI (1-4, 1-8) before using them.
+        quadrant = int(ann["category_id_1"]) + 1
+        position = int(ann["category_id_2"]) + 1
 
         # Map FDI (Quadrant 1-4, Position 1-8) to YOLO Class (0-31)
         if not (1 <= quadrant <= 4 and 1 <= position <= 8):
