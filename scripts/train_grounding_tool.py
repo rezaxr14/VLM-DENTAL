@@ -137,6 +137,12 @@ def cross_validate(args):
     best_dst = model_root / "grounding_tool_cv_best" / "weights" / "best.pt"
     best_dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(best_src, best_dst)
+    
+    # Copy all training results (PR curves, confusion matrix, args.yaml, results.csv, etc.)
+    best_fold_dir = model_root / f"cv_fold_{best_fold}"
+    for file_path in best_fold_dir.iterdir():
+        if file_path.is_file():
+            shutil.copy2(file_path, model_root / "grounding_tool_cv_best" / file_path.name)
 
     # Keep every fold's best model reachable for later ensemble/ablation work.
     for fold in range(n_folds):
