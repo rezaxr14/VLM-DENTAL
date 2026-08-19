@@ -86,6 +86,22 @@ def cross_validate(args):
         confusion_matrix = fold_dir / "confusion_matrix.png"
         if resume and confusion_matrix.exists():
             print(f"\n  FOLD {fold + 1}/{n_folds} — already complete, skipping.")
+            
+            # Since we skipped training, we must read the metrics from results.csv so it's included in the final mean!
+            csv_path = fold_dir / "results.csv"
+            if csv_path.exists():
+                import pandas as pd
+                df = pd.read_csv(csv_path)
+                df.columns = df.columns.str.strip()
+                last_row = df.iloc[-1]
+                metrics = {
+                    "fold": fold,
+                    "map50": float(last_row["metrics/mAP50(B)"]),
+                    "map50_95": float(last_row["metrics/mAP50-95(B)"]),
+                    "precision": float(last_row["metrics/precision(B)"]),
+                    "recall": float(last_row["metrics/recall(B)"]),
+                }
+                results.append(metrics)
             continue
 
         print(f"\n{'=' * 60}")
