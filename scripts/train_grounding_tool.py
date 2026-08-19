@@ -82,7 +82,9 @@ def cross_validate(args):
         best_pt = fold_dir / "weights" / "best.pt"
         last_pt = fold_dir / "weights" / "last.pt"
 
-        if resume and best_pt.exists():
+        # A fold is complete only if YOLO finished and generated the final validation images
+        confusion_matrix = fold_dir / "confusion_matrix.png"
+        if resume and confusion_matrix.exists():
             print(f"\n  FOLD {fold + 1}/{n_folds} — already complete, skipping.")
             continue
 
