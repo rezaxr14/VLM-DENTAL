@@ -30,12 +30,14 @@ The project is structured into 6 phases (documented in `ROADMAP.md`):
 - **`parsing.py`**: A custom bracket-counting JSON parser (`parse_agent_json`). Standard `json.loads` fails because LLMs inject markdown blocks and unstructured text. This module extracts valid JSON from noisy outputs and attempts to repair truncated JSON during trace generation.
 
 ### `/dental_agent/tools/` (The Diagnostic Suite)
-These functions simulate a radiologist's workstation. 
+These functions simulate a radiologist's workstation. All 8 are registered by `ToolRegistry.create_default()`.
 - **`registry.py`**: The master `ToolRegistry` that handles dynamic execution and generates the tool descriptions injected into the system prompt.
-- **`zoom_crop.py`**: Extracts a bounding box with context padding.
-- **`windowing.py`**: Applies non-linear intensity transforms (bone window, enamel window) to enhance radiopacity.
-- **`denoise.py`**: Edge-preserving bilateral filtering to remove sensor noise without blurring the enamel-dentin junction.
-- **`contralateral.py`**: Extremely advanced tool that crops a pathology in one quadrant, computes its anatomical mirror in the opposite quadrant, flips it, and stitches them side-by-side so the LLM can compare bilateral symmetry.
+- **`zoom_crop.py`**: Extracts a bounding box with context padding (`padding_frac`, now exposed in the schema, not just the function signature).
+- **`windowing.py`**: Applies non-linear intensity transforms (bone window, enamel window) to enhance radiopacity. Presets remain the default, but `center`/`width` can now be passed to override a preset's exact values.
+- **`denoise.py`**: Edge-preserving bilateral or median filtering to remove sensor noise without blurring the enamel-dentin junction. Now takes a continuous `strength` (0.0-1.0) instead of a fixed intensity.
+- **`enhance_contrast.py`** (in `contrast.py`): Multiplicative contrast adjustment (`factor`). Existed as a function for a while but wasn't actually registered until now — was silently unreachable, same dead-tool pattern `locate_abnormal_teeth` still has.
+- **`contralateral.py`**: Crops a pathology in one quadrant and its anatomical mirror in the opposite quadrant, stitched side-by-side for bilateral symmetry comparison. `quadrant` now actually constrains the mirror search to the same jaw half (upper 1-2 / lower 3-4) — previously accepted but silently unused, which could pull a "mirror" crop from the wrong jaw for boxes near the vertical midline.
+- **`nudge.py`**: `nudge_crop` — lets the agent shift/rescale a bbox it was already given (from `locate_tooth` or a prior nudge) without re-running detection. Data-only like `locate_tooth` (returns coordinates, not an image) — pair with `zoom_crop` to see the corrected region. This is the tool that makes locate_tooth's output something to verify rather than something to trust outright.
 - **`fdi.py`**: Converts raw numbering to standard 2-digit FDI notation.
 - **`grounding.py`**: Uses YOLOv8m (5-fold CV, val mAP50 ≈ 0.5901) to locate a specific tooth — live in the agent loop.
 
@@ -49,7 +51,9 @@ These functions simulate a radiologist's workstation.
 To train our final VLM, we need a dataset of an expert using the tools. We synthesize this data using a locally-hosted **Qwen/Qwen3.5-9B** (served via vLLM inside the Kaggle/Colab session — not a remote API, and not the laptop, since this needs real GPU time), orchestrated as a real agent loop in LangGraph.
 
 ### Step 1: Ground-Truth-Directed, Real Tool Execution
-`generate_interactive_trajectory()` still conditions the Teacher on the known ground-truth label and seeds crop coordinates from the ground-truth bounding box for *every ground truth pathology in the image* — we keep doing this deliberately: blind exploration on an untuned 8B model would tank the yield of usable, correctly-labeled training data. What changed is that tool calls now **execute for real** against the source image inside the LangGraph loop (`zoom_crop`, `window_level`, etc.) instead of being pre-computed and narrated via `<fake_tool_call>` tags. The model receives the actual resulting image at each turn, so its stated visual evidence is checkable against what it was really shown, not just plausible-sounding.
+`generate_interactive_trajectory()` still conditions the Teacher on the known ground-truth label for *every ground truth pathology in the image* — we keep doing this deliberately: blind exploration on an untuned 8B model would tank the yield of usable, correctly-labeled training data. Tool calls **execute for real** against the source image inside the LangGraph loop (`zoom_crop`, `window_level`, etc.) instead of being pre-computed and narrated via `<fake_tool_call>` tags. The model receives the actual resulting image at each turn, so its stated visual evidence is checkable against what it was really shown, not just plausible-sounding.
+
+`locate_tooth`'s `search_region_hint` is always applied when ground truth exists for the requested tooth (`hint_probability=1.0`) — but this only narrows where the real YOLO detector searches, it does NOT hand over the exact bbox. What the model is actually *shown* is then independently, tier-perturbed: clean 45% of the time, a small (12-28% of box size) synthetic offset 25% of the time, a large (45-75%) offset 30% of the time — applied to the displayed bbox only, never to what's logged internally. This is what makes `nudge_crop` something the model has to learn to use by genuine judgment rather than as a scripted step: perturbation tiers are fixed/configured, not derived from the current detector's real accuracy, specifically so demonstrations don't go stale as the grounding tool improves later. Full numbers in `TRACE_GEN_CONFIG.md`; full reasoning in `_tool_node_factory`'s docstring (`langgraph_loop.py`).
 
 ### Step 2: Dynamic Execution
 If the LLM needs a tool that wasn't pre-computed, it outputs a standard JSON tool call. The script executes it dynamically against the **base image** and feeds the result back.

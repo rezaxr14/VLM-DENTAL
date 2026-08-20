@@ -10,7 +10,7 @@ This document contains publication-ready diagram definitions (Mermaid and Image 
 ```mermaid
 flowchart TD
     subgraph S0["Stage 0: Grounding Model"]
-        D0["DENTEX Dataset<br/>(BBoxes & FDI Labels)"] --> Y0["YOLOv8m Tooth Detector<br/>(5-Fold CV, mAP50=0.647)"]
+        D0["DENTEX Dataset<br/>(BBoxes & FDI Labels)"] --> Y0["YOLOv8m Tooth Detector<br/>(5-Fold CV, mAP50=0.590)"]
         Y0 --> GT["locate_tooth Tool<br/>(Live in Agent Loop)"]
     end
 

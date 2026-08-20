@@ -97,16 +97,16 @@ class ToolRegistry:
         registry.register(
             name="zoom_crop",
             func=tool_zoom_crop,
-            description="Crops around a bounding box [x, y, w, h] with context padding to provide a zoomed view.",
-            schema={"bbox": [0, 0, 100, 100]},
+            description="Crops around a bounding box [x, y, w, h] with context padding to provide a zoomed view. padding_frac controls how much context around the box to include (default 0.25 = 25% of box size on each side; use higher for more surrounding anatomy, lower for a tighter view once you're confident in the box).",
+            schema={"bbox": [0, 0, 100, 100], "padding_frac": 0.25},
         )
 
         # 2. window_level
         registry.register(
             name="window_level",
             func=tool_window_level,
-            description="Applies medical intensity windowing to reveal specific density structures (e.g. bone, enamel, soft_tissue, metal_reduction).",
-            schema={"preset": "bone"},
+            description="Applies medical intensity windowing to reveal specific density structures. preset gives a starting point (bone, enamel, soft_tissue, metal_reduction); pass center and/or width to override the preset's values exactly if a finding needs a differently-placed window.",
+            schema={"preset": "bone", "center": None, "width": None},
         )
 
         # 3. locate_tooth (YOLOv8 grounding) -- moved up from position 7. Locating a
@@ -133,8 +133,8 @@ class ToolRegistry:
         registry.register(
             name="denoise",
             func=tool_denoise,
-            description="Applies edge-preserving noise reduction to distinguish real pathology from sensor grain/noise.",
-            schema={"method": "bilateral"},
+            description="Applies edge-preserving noise reduction to distinguish real pathology from sensor grain/noise. strength (0.0-1.0, default 0.6) controls how aggressively to smooth -- low to preserve fine detail, high for visibly grainy crops.",
+            schema={"method": "bilateral", "strength": 0.6},
         )
 
         # 6. contralateral_compare
@@ -143,6 +143,17 @@ class ToolRegistry:
             func=tool_contralateral_compare,
             description="Crops a region in one quadrant and its anatomical mirror in the opposite quadrant, returning a side-by-side composite for symmetry comparison.",
             schema={"bbox": [0, 0, 100, 100], "quadrant": 1},
+        )
+
+        # 7. enhance_contrast -- was previously unregistered (imported at the top
+        # of this file, but never actually added to create_default()'s tool set,
+        # same dead-tool pattern locate_abnormal_teeth had). Already had a
+        # well-designed continuous `factor` parameter; just needed wiring in.
+        registry.register(
+            name="enhance_contrast",
+            func=tool_enhance_contrast,
+            description="Adjusts contrast by a multiplicative factor (default 1.5; >1 increases contrast, <1 decreases it, 1.0 is unchanged). Useful for subtle enamel demineralization or periapical radiolucency that's hard to see at normal contrast.",
+            schema={"factor": 1.5},
         )
 
         # 7. locate_abnormal_teeth (optional grounding backend) -- still last/optional:

@@ -33,6 +33,7 @@ IMAGE_CONSUMING_TOOLS = {
     "contralateral_compare",
     "locate_tooth",
     "nudge_crop",
+    "enhance_contrast",
 }
 
 

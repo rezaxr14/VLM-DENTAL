@@ -12,21 +12,23 @@ This is the heart of the project containing all reusable logic. It is imported b
 ### `dental_agent/agent/` (Agent Loop & Parsing)
 *Logic for the autonomous agent's decision-making cycle.*
 - `langgraph_loop.py`: **The primary execution loop (LangGraph-orchestrated).** Takes an input X-ray image, a system prompt, and a `ToolRegistry`, builds a `StateGraph` with `reasoning` → `tools` conditional edges, runs the model through real tool executions turn-by-turn, and outputs a complete multi-turn trajectory dict (`turns`, `tool_calls`, `final_answer`, `messages`).
-- `loop.py`: **Legacy/helper loop.** Contains older orchestration logic retained for backward compatibility. New code should use `langgraph_loop.py`.
+- `loop.py`: **GRPO rollout loop.** Not legacy — this is the real, unhinted policy-rollout loop `grpo.py`'s `collect_grpo_group` actually calls (`run_agent`). `langgraph_loop.py` is trace-gen's loop, not a replacement for this one; the two exist for genuinely different jobs (see `tool_dispatch.py`'s docstring).
+- `tool_dispatch.py`: **Shared tool-call dispatcher**, used by both `loop.py` and `langgraph_loop.py` so they can't independently diverge on which tools need the source image and which image to pass — a real bug of exactly that kind (GRPO compounding crops turn-over-turn instead of always using the original image) was fixed by introducing this. Add new image-consuming tools to `IMAGE_CONSUMING_TOOLS` here, not inside either loop.
 - `parsing.py`: **The JSON extractor.** Takes raw LLM text outputs (including mixed XML/Markdown/truncated text), safely isolates the JSON, and outputs a clean Python dictionary representing the chosen action or final answer.
 - `prompts.py`: **The instruction sets.** Takes a list of registered tools, dynamically formats them, and outputs the final text system prompts injected into the LLM context. Also contains `NO_TOOLS_SYSTEM_PROMPT` and `ZERO_SHOT_PROMPT` for baseline evaluation.
 - `visualization.py`: **The rendering utility.** Takes trajectory data and coordinates, and outputs annotated images with bounding boxes and tool results drawn on them for visual debugging.
 
 ### `dental_agent/tools/` (Agent Capabilities)
-*The individual tools the VLM can invoke.*
+*The individual tools the VLM can invoke. 8 registered by `ToolRegistry.create_default()`.*
 - `registry.py`: **The tool manager.** `ToolRegistry.create_default()` registers all built-in tools. Takes a tool name string and dictionary of arguments from the agent, routes it to the correct python function below, and outputs the result back to the agent loop. Any new tool MUST be registered here.
-- `zoom_crop.py`: **Cropping tool.** Takes an input image and a bounding box coordinate array, and outputs a cropped, high-resolution image of that specific region.
-- `windowing.py`: **Contrast mapping tool.** Takes an input image and a tissue preset string (e.g., "bone"), and outputs a contrast-adjusted image mimicking a CT scan.
-- `denoise.py`: **Filtering tool.** Takes an input image and a method string ("bilateral" or "median"), and outputs a smoothed image with reduced grain/noise.
-- `contralateral.py`: **Comparison tool.** Takes an input image, a bounding box, and a jaw quadrant integer, calculates the opposite side, and outputs a side-by-side composite image for symmetry comparison.
+- `zoom_crop.py`: **Cropping tool.** Takes an input image, a bounding box, and an optional `padding_frac` (how much surrounding context to include), and outputs a cropped, high-resolution image of that region.
+- `windowing.py`: **Contrast mapping tool.** Takes an input image and a tissue preset string (e.g., "bone"), or explicit `center`/`width` values to override a preset exactly, and outputs a contrast-adjusted image mimicking a CT scan.
+- `denoise.py`: **Filtering tool.** Takes an input image, a method string ("bilateral" or "median"), and a continuous `strength` (0.0-1.0), and outputs a smoothed image with reduced grain/noise.
+- `contralateral.py`: **Comparison tool.** Takes an input image, a bounding box, and a jaw quadrant integer (which now actually constrains the mirror search to the same jaw half, upper 1-2 / lower 3-4), calculates the opposite side, and outputs a side-by-side composite image for symmetry comparison.
+- `nudge.py`: **Correction tool (nudge_crop).** Takes a bbox the agent was already given plus a shift (`dx_frac`/`dy_frac`) and/or rescale (`scale`), and outputs the adjusted coordinates — data only, not an image; pair with `zoom_crop` to view the result. Lets the agent correct `locate_tooth`'s output instead of just trusting it.
 - `grounding.py`: **AI detection tool (locate_tooth).** Takes an input image and an FDI tooth number, passes it through our trained YOLOv8m model (5-fold cross-validation, val mAP50 ≈ 0.5901 (R ≈ 0.888, P ≈ 0.5457), and outputs bounding box coordinates locating the tooth. Requires `GROUNDING_MODEL_PATH` or auto-detects from `data/models/grounding_tool_cv_best/weights/best.pt`.
 - `fdi.py`: **Dental logic helper.** Takes quadrant and tooth position integers, handles the math for FDI two-digit tooth numbering, and outputs standardized positional data.
-- `contrast.py`: **Basic contrast tool.** Takes an input image and a float alpha/beta value, and outputs a manually brightened or darkened image.
+- `contrast.py`: **Contrast tool (enhance_contrast).** Takes an input image and a multiplicative `factor` (not alpha/beta — the function signature is factor-only), and outputs a contrast-adjusted image. Existed as a function for a while but wasn't actually registered until recently — was silently unreachable.
 - `synthetic.py`: **Mock tools.** Takes mock arguments, used exclusively for testing the agent loop without real models, and outputs dummy responses.
 
 ### `dental_agent/training/` (Pipelines & RL)
