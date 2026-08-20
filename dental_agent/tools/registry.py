@@ -158,4 +158,18 @@ class ToolRegistry:
                 schema={"image_id": 0},
             )
 
+        # 8. nudge_crop -- lets the agent correct a bbox it was already given
+        # (from locate_tooth or a prior nudge_crop) when the detector's box
+        # doesn't actually center the tooth it asked for. Data-only, like
+        # locate_tooth: returns adjusted coordinates, not an image -- pair
+        # with zoom_crop on the returned bbox to see the corrected region.
+        from dental_agent.tools.nudge import tool_nudge_crop
+
+        registry.register(
+            name="nudge_crop",
+            func=tool_nudge_crop,
+            description="Adjusts a bounding box you were already given (shift + rescale) without re-running detection. Use when a returned crop is off-target.",
+            schema={"bbox": [0, 0, 100, 100], "dx_frac": 0.0, "dy_frac": 0.0, "scale": 1.0},
+        )
+
         return registry

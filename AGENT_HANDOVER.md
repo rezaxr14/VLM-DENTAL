@@ -17,7 +17,7 @@ The project is structured into 6 phases (documented in `ROADMAP.md`):
 2. **Aim 1 - Synthetic Trace Generation (In Progress):** Using a locally-hosted Qwen/Qwen3.5-9B (LangGraph agent loop, run on Kaggle/Colab) to generate high-quality diagnostic traces on the DENTEX dataset.
 3. **Aim 2/3 - VLM Training (Pending):** Supervised Fine-Tuning (SFT) and Group Relative Policy Optimization (GRPO) to teach an open-source VLM to mimic the Teacher LLM.
 4. **Aim 4 - Evaluation (Pending):** Benchmarking against clinical baselines.
-5. **Aim 5 - Grounding Integration (Done, feeding the VLM):** Trained YOLOv8m with 5-fold cross-validation to locate teeth. Validation mAP50 ≈ 0.647 (R ≈ 0.90, P ≈ 0.588) — past the quality bar, `locate_tooth` is live in the agent loop.
+5. **Aim 5 - Grounding Integration (Done, feeding the VLM):** Trained YOLOv8m with 5-fold cross-validation to locate teeth. Validation mAP50 ≈ 0.5901 (R ≈ 0.888, P ≈ 0.5457) — past the quality bar, `locate_tooth` is live in the agent loop.
 6. **Phase 6 - Web UI (Pending):** A Gradio/Streamlit app for real-time inference.
 
 ---
@@ -37,7 +37,7 @@ These functions simulate a radiologist's workstation.
 - **`denoise.py`**: Edge-preserving bilateral filtering to remove sensor noise without blurring the enamel-dentin junction.
 - **`contralateral.py`**: Extremely advanced tool that crops a pathology in one quadrant, computes its anatomical mirror in the opposite quadrant, flips it, and stitches them side-by-side so the LLM can compare bilateral symmetry.
 - **`fdi.py`**: Converts raw numbering to standard 2-digit FDI notation.
-- **`grounding.py`**: Uses YOLOv8m (5-fold CV, val mAP50 ≈ 0.647) to locate a specific tooth — live in the agent loop.
+- **`grounding.py`**: Uses YOLOv8m (5-fold CV, val mAP50 ≈ 0.5901) to locate a specific tooth — live in the agent loop.
 
 ### `/dental_agent/training/` (Data Pipelines)
 - **`api_pool.py`**: Enforces strict native pacing and daily caps for API requests to bypass bans during massive generation runs.

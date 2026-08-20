@@ -13,7 +13,7 @@ See [dentex-agentic-vlm-proposal.md](dentex-agentic-vlm-proposal.md) for the ful
 - **Two-Stage Fine-Tuning Pipeline**:
   - **Aim 1 / Stage 1 (SFT)**: Multi-turn expert demonstration distillation — generated locally with Qwen/Qwen3.5-9B via a real LangGraph tool-execution loop (ground-truth-directed, Kaggle/Colab), cross-family verified (a different model family than the generator, to reduce correlated blind spots).
   - **Aim 2 / Stage 2 (GRPO)**: Direct policy gradient optimization against multi-objective rewards (FDI accuracy + pathology diagnosis + format adherence + tool efficiency).
-- **Stage 0 Detector**: Dedicated YOLOv8m tooth localization model, trained with 5-fold cross-validation, to replace oracle grounding — validation mAP50 ≈ 0.647 (R ≈ 0.90, P ≈ 0.588), past the detection-quality bar set for live use.
+- **Stage 0 Detector**: Dedicated YOLOv8m tooth localization model, trained with 5-fold cross-validation, to replace oracle grounding — validation mAP50 ≈ 0.5901 (R ≈ 0.888, P ≈ 0.5457), past the detection-quality bar set for live use.
 - **Robust Evaluation & Ablation Harness**: H1 (tool-use vs. direct reasoning) and H2 (GRPO vs. SFT vs. zero-shot GPT-4o) evaluation suites with bootstrap confidence intervals and calibration (ECE) metrics.
 - **Unified & Environment-Agnostic**: One-click execution on Local Workstations (RTX 4090), Kaggle, and Google Colab with HuggingFace Hub artifact persistence.
 

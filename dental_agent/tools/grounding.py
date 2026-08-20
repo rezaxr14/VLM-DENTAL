@@ -19,8 +19,9 @@ class ToothGrounder:
         # NOTE: grounding tool is YOLOv8m trained with 5-fold cross-validation (not YOLOv8x).
         # Decision: uses a single best-performing fold's weights, not an ensemble across all 5 —
         # simpler and cheaper at inference time, and the single-fold validation numbers
-        # (mAP50 ≈ 0.647, R ≈ 0.90, P ≈ 0.588) already clear the bar this tool needs to hit.
-        # Point GROUNDING_MODEL_PATH at that fold's best.pt.
+        # (mAP50 ≈ 0.590, R ≈ 0.888, P ≈ 0.546, from the current CV run in YOLO_CV_RESULTS.md)
+        # already clear the bar this tool needs to hit. Point GROUNDING_MODEL_PATH at that
+        # fold's best.pt.
         self.model_path = Path(
             model_path
             or os.environ.get("GROUNDING_MODEL_PATH", "data/models/grounding_tool_cv_best/weights/best.pt")

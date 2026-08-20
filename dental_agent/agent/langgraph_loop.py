@@ -14,6 +14,7 @@ paired with a narrated tool-call tag it never actually triggered.
 from __future__ import annotations
 
 import json
+import random
 from typing import Any, TypedDict
 from PIL import Image
 
@@ -315,7 +316,18 @@ def _reasoning_node_factory(provider: str, model: str, max_tool_calls: int, max_
     return _reasoning_node
 
 
-def _tool_node_factory(registry: ToolRegistry, ground_truth: list[dict[str, Any]] | None = None):
+def _tool_node_factory(
+    registry: ToolRegistry,
+    ground_truth: list[dict[str, Any]] | None = None,
+    hint_probability: float = 0.65,
+):
+    """hint_probability: chance that locate_tooth's search_region_hint is actually
+    applied when ground truth exists for the requested tooth. Deliberately <1.0 --
+    always applying it makes the detector's real ~55% precision effectively
+    invisible to the model, so it never has a genuine reason to verify a returned
+    box rather than trust it. The remaining (1 - hint_probability) fraction of
+    calls fall back to real unconstrained full-image search, at the tool's actual
+    measured precision, so accept-or-nudge is a real decision, not a formality."""
     ground_truth = ground_truth or []
 
     def _hint_for_tooth(fdi_number: int) -> list[float] | None:
@@ -358,10 +370,10 @@ def _tool_node_factory(registry: ToolRegistry, ground_truth: list[dict[str, Any]
             try:
                 if tool_name == "locate_tooth" and "tooth" in tool_args:
                     hint = _hint_for_tooth(tool_args["tooth"])
-                    if hint is not None:
+                    if hint is not None and random.random() < hint_probability:
                         tool_args["search_region_hint"] = hint
 
-                if tool_name in IMAGE_INPUT_TOOLS or tool_name == "locate_tooth":
+                if tool_name in IMAGE_INPUT_TOOLS or tool_name in ("locate_tooth", "nudge_crop"):
                     tool_out = registry.execute(tool_name, image=state["base_image"], **tool_args)
                 else:
                     tool_out = registry.execute(tool_name, **tool_args)
@@ -411,12 +423,13 @@ def build_trace_gen_graph(
     model: str = "Qwen/Qwen3.5-9B",
     max_tool_calls: int = 8,
     max_tokens: int | None = None,
+    hint_probability: float = 0.65,
 ):
     """Build and compile the LangGraph for ground-truth-directed, real-tool-execution generation."""
     graph = StateGraph(TraceGenState)
     
     graph.add_node("reasoning", _reasoning_node_factory(provider, model, max_tool_calls, max_tokens=max_tokens))
-    graph.add_node("tools", _tool_node_factory(registry, ground_truth=ground_truth or []))
+    graph.add_node("tools", _tool_node_factory(registry, ground_truth=ground_truth or [], hint_probability=hint_probability))
     
     graph.set_entry_point("reasoning")
     
@@ -436,6 +449,7 @@ def run_trace_gen(
     max_turns: int = 8,
     max_tool_calls: int = 50,
     max_tokens_per_turn: int | None = None,
+    hint_probability: float = 0.65,
 ) -> tuple[dict[str, Any] | None, str | None]:
     """Ground-truth-directed trace generation with real tool execution via LangGraph.
     
@@ -455,11 +469,15 @@ def run_trace_gen(
         f"You MUST eventually reach a diagnosis covering these {len(ground_truth)} finding(s): "
         f"{hint_text}\n\n"
         "Use locate_tooth to find each tooth's position — do not guess or assert coordinates "
-        "yourself. Then use zoom_crop / window_level / denoise / contralateral_compare to "
-        "inspect and confirm before your final answer. You MUST use at least one tool before "
-        "answering — do not output final_answer on the first turn. Never mention in your "
-        "reasoning that this list, a hint, or a directive was given to you — write your "
-        "thought as genuine first-look clinical analysis."
+        "yourself. locate_tooth's box is not guaranteed to be exact or even correct: before "
+        "trusting it, zoom_crop into it and check the crop actually shows the tooth you asked "
+        "for. If it looks off-center, too tight, or shows the wrong tooth, use nudge_crop to "
+        "shift or rescale the box, then zoom_crop again — do not silently proceed on a crop "
+        "that doesn't match what you expected. Then use window_level / denoise / "
+        "contralateral_compare to inspect and confirm before your final answer. You MUST use "
+        "at least one tool before answering — do not output final_answer on the first turn. "
+        "Never mention in your reasoning that this list, a hint, or a directive was given to "
+        "you — write your thought as genuine first-look clinical analysis."
     )
 
     initial_content = [
@@ -492,7 +510,8 @@ def run_trace_gen(
 
     app = build_trace_gen_graph(
         registry, ground_truth=ground_truth, provider=provider, model=model,
-        max_tool_calls=max_tool_calls, max_tokens=max_tokens_per_turn
+        max_tool_calls=max_tool_calls, max_tokens=max_tokens_per_turn,
+        hint_probability=hint_probability,
     )
     # Each logical turn can now cost up to ~4 reasoning-node visits (2 retries + 1
     # recovery attempt + 1 success) plus 1 tool-node visit, so budget generously —

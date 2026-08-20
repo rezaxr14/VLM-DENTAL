@@ -135,11 +135,19 @@ def run_agent(
         # json.dumps(tool_out) on what these tools actually return (a PIL.Image for the first
         # three), raising a TypeError caught by the except below and silently reported as "tool
         # execution failed." Fixed to dispatch generically by the tool's actual return type.
+        #
+        # NOTE 2: this used to execute IMAGE_INPUT_TOOLS against current_image (the most
+        # recently returned crop), compounding across turns -- diverging from
+        # langgraph_loop.py's trace-gen loop, which always executes against base_image
+        # specifically to avoid compounding crop drift (see its IMAGE_INPUT_TOOLS comment).
+        # SFT traces are generated under the base_image convention, so a GRPO rollout that
+        # instead compounds crops is a real train/rollout distribution mismatch, not just a
+        # style difference. Fixed to match: always base_image here too.
         IMAGE_INPUT_TOOLS = {"zoom_crop", "window_level", "denoise", "contralateral_compare"}
         try:
             if tool_name in IMAGE_INPUT_TOOLS:
-                tool_out = registry.execute(tool_name, image=current_image, **tool_args)
-            elif tool_name == "locate_tooth":
+                tool_out = registry.execute(tool_name, image=base_image, **tool_args)
+            elif tool_name in ("locate_tooth", "nudge_crop"):
                 tool_out = registry.execute(tool_name, image=base_image, **tool_args)
             else:
                 tool_out = registry.execute(tool_name, **tool_args)
