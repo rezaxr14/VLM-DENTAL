@@ -12,8 +12,13 @@ import pandas as pd
 
 from dental_agent.agent.prompts import build_agent_system_prompt, NO_TOOLS_SYSTEM_PROMPT
 from dental_agent.agent.parsing import parse_agent_json
+from dental_agent.agent.tool_dispatch import execute_tool_call
 from dental_agent.model.inference import generate_agent_reply
 from dental_agent.tools.registry import ToolRegistry
+
+# NOTE: tool-dispatch logic (which tools need `image=`, and which image) now
+# lives in tool_dispatch.py, shared with langgraph_loop.py's trace-gen graph --
+# see that module's docstring for why. Don't reintroduce a local copy here.
 
 
 @dataclass
@@ -76,7 +81,6 @@ def run_agent(
         },
     ]
 
-    current_image = base_image
     turns: list[dict[str, Any]] = []
     assistant_token_spans: list[dict[str, Any]] = []
     final_answer = None
@@ -128,32 +132,15 @@ def run_agent(
         turn_record["tool_name"] = tool_name
         turn_record["tool_args"] = tool_args
 
-        # NOTE: previously this branched on hardcoded tool names (zoom_crop, enhance_contrast,
-        # locate_abnormal_teeth) — but enhance_contrast and locate_abnormal_teeth aren't actually
-        # registered by ToolRegistry.create_default(), and window_level/denoise/
-        # contralateral_compare/locate_tooth all fell into the generic `else` branch, which did
-        # json.dumps(tool_out) on what these tools actually return (a PIL.Image for the first
-        # three), raising a TypeError caught by the except below and silently reported as "tool
-        # execution failed." Fixed to dispatch generically by the tool's actual return type.
-        #
-        # NOTE 2: this used to execute IMAGE_INPUT_TOOLS against current_image (the most
-        # recently returned crop), compounding across turns -- diverging from
-        # langgraph_loop.py's trace-gen loop, which always executes against base_image
-        # specifically to avoid compounding crop drift (see its IMAGE_INPUT_TOOLS comment).
-        # SFT traces are generated under the base_image convention, so a GRPO rollout that
-        # instead compounds crops is a real train/rollout distribution mismatch, not just a
-        # style difference. Fixed to match: always base_image here too.
-        IMAGE_INPUT_TOOLS = {"zoom_crop", "window_level", "denoise", "contralateral_compare"}
+        # Dispatch logic lives in tool_dispatch.py, shared with langgraph_loop.py's
+        # trace-gen graph, so the two loops can't silently diverge on which tools
+        # need `image=` or which image they see again (see that module's docstring
+        # for the history of why this used to be duplicated, and the bug that came
+        # of it). Always base_image -- never a compounded, previously-cropped view.
         try:
-            if tool_name in IMAGE_INPUT_TOOLS:
-                tool_out = registry.execute(tool_name, image=base_image, **tool_args)
-            elif tool_name in ("locate_tooth", "nudge_crop"):
-                tool_out = registry.execute(tool_name, image=base_image, **tool_args)
-            else:
-                tool_out = registry.execute(tool_name, **tool_args)
+            tool_out = execute_tool_call(registry, tool_name, tool_args, base_image)
 
             if isinstance(tool_out, Image.Image):
-                current_image = tool_out
                 observation_content = [
                     {"type": "image", "image": tool_out},
                     {"type": "text", "text": f"Result of {tool_name}:"},

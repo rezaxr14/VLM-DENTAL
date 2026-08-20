@@ -27,14 +27,15 @@ except ImportError as _e:  # pragma: no cover
     ) from _e
 
 from dental_agent.agent.parsing import parse_agent_json
+from dental_agent.agent.tool_dispatch import execute_tool_call
 from dental_agent.tools.registry import ToolRegistry
+from dental_agent.tools.nudge import tool_nudge_crop
 from dental_agent.training.api_pool import call_llm
 from dental_agent.utils.serialization import to_jsonable
 
-# Tools that take `image` and return a PIL.Image. Always executed against the base
-# image (not whatever the model most recently zoomed into) to avoid compounding crop
-# drift across turns.
-IMAGE_INPUT_TOOLS = {"zoom_crop", "window_level", "denoise", "contralateral_compare"}
+# NOTE: tool-dispatch logic (which tools need `image=`, and which image) now
+# lives in tool_dispatch.py, shared with loop.py's GRPO rollout -- see that
+# module's docstring for why. Don't reintroduce a local copy here.
 
 
 class TraceGenState(TypedDict):
@@ -319,15 +320,27 @@ def _reasoning_node_factory(provider: str, model: str, max_tool_calls: int, max_
 def _tool_node_factory(
     registry: ToolRegistry,
     ground_truth: list[dict[str, Any]] | None = None,
-    hint_probability: float = 0.65,
+    hint_probability: float = 1.0,
+    perturb_probability: float = 0.35,
 ):
-    """hint_probability: chance that locate_tooth's search_region_hint is actually
-    applied when ground truth exists for the requested tooth. Deliberately <1.0 --
-    always applying it makes the detector's real ~55% precision effectively
-    invisible to the model, so it never has a genuine reason to verify a returned
-    box rather than trust it. The remaining (1 - hint_probability) fraction of
-    calls fall back to real unconstrained full-image search, at the tool's actual
-    measured precision, so accept-or-nudge is a real decision, not a formality."""
+    """hint_probability: chance search_region_hint is applied when ground truth
+    exists for the requested tooth. Defaults to 1.0 (always) -- the hint gives
+    locate_tooth's real underlying detector the best chance of a correct result;
+    it is not the mechanism that teaches accept-vs-nudge (see perturb_probability).
+
+    perturb_probability: independent chance that, once locate_tooth returns a
+    bbox, a synthetic offset is applied to what the model is SHOWN (never to
+    what's logged as ground truth internally). This is deliberately decoupled
+    from the real detector's actual accuracy: it's a pipeline-level teaching
+    device, not a report of locate_tooth's true error rate. That matters
+    because the grounding tool is expected to keep improving (better weights,
+    eventually a multi-dataset detector) -- if "how often the model must
+    verify/correct" were sourced from the current detector's real precision
+    (as an earlier version of this function did, via hint omission), traces
+    generated today would go stale relative to tomorrow's detector and need
+    regenerating. Perturbation at a fixed, configured rate keeps teaching the
+    same verify-before-trusting behavior regardless of how good locate_tooth
+    gets, so today's traces stay valid without a re-run."""
     ground_truth = ground_truth or []
 
     def _hint_for_tooth(fdi_number: int) -> list[float] | None:
@@ -342,6 +355,20 @@ def _tool_node_factory(
             if f.get("quadrant") == quadrant and f.get("tooth_position") == position and "bbox" in f:
                 return f["bbox"]
         return None
+
+    def _synthetic_offset(bbox: list[float], image: Image.Image) -> list[float]:
+        """Nudge *bbox* by a random, bounded, tool-independent offset -- reuses
+        nudge_crop's own shift/clamp math so the perturbation always lands
+        somewhere nudge_crop itself could plausibly produce or correct. Magnitude
+        (25-55% of the box's own size, per axis, random sign) is deliberately
+        modest: with zoom_crop's padding on top, the true tooth should usually
+        still be at least partially visible, so there's a genuine, recoverable
+        "this looks off" signal to notice -- not a total miss that forces a
+        blind restart."""
+        dx = random.uniform(0.25, 0.55) * random.choice([-1, 1])
+        dy = random.uniform(0.25, 0.55) * random.choice([-1, 1])
+        result = tool_nudge_crop(image, bbox, dx_frac=dx, dy_frac=dy)
+        return result.get("bbox", bbox)
 
     def _tool_node(state: TraceGenState) -> TraceGenState:
         pending = state.get("pending_tool_calls")
@@ -373,10 +400,18 @@ def _tool_node_factory(
                     if hint is not None and random.random() < hint_probability:
                         tool_args["search_region_hint"] = hint
 
-                if tool_name in IMAGE_INPUT_TOOLS or tool_name in ("locate_tooth", "nudge_crop"):
-                    tool_out = registry.execute(tool_name, image=state["base_image"], **tool_args)
-                else:
-                    tool_out = registry.execute(tool_name, **tool_args)
+                tool_out = execute_tool_call(registry, tool_name, tool_args, state["base_image"])
+
+                if (
+                    tool_name == "locate_tooth"
+                    and isinstance(tool_out, dict)
+                    and "bbox" in tool_out
+                    and random.random() < perturb_probability
+                ):
+                    call_record["true_bbox"] = tool_out["bbox"]  # internal only, never shown to the model
+                    tool_out = dict(tool_out)
+                    tool_out["bbox"] = _synthetic_offset(tool_out["bbox"], state["base_image"])
+                    call_record["perturbed"] = True
 
                 if isinstance(tool_out, Image.Image):
                     observation.append({"type": "image", "image": tool_out})
@@ -423,13 +458,17 @@ def build_trace_gen_graph(
     model: str = "Qwen/Qwen3.5-9B",
     max_tool_calls: int = 8,
     max_tokens: int | None = None,
-    hint_probability: float = 0.65,
+    hint_probability: float = 1.0,
+    perturb_probability: float = 0.35,
 ):
     """Build and compile the LangGraph for ground-truth-directed, real-tool-execution generation."""
     graph = StateGraph(TraceGenState)
     
     graph.add_node("reasoning", _reasoning_node_factory(provider, model, max_tool_calls, max_tokens=max_tokens))
-    graph.add_node("tools", _tool_node_factory(registry, ground_truth=ground_truth or [], hint_probability=hint_probability))
+    graph.add_node("tools", _tool_node_factory(
+        registry, ground_truth=ground_truth or [],
+        hint_probability=hint_probability, perturb_probability=perturb_probability,
+    ))
     
     graph.set_entry_point("reasoning")
     
@@ -449,7 +488,8 @@ def run_trace_gen(
     max_turns: int = 8,
     max_tool_calls: int = 50,
     max_tokens_per_turn: int | None = None,
-    hint_probability: float = 0.65,
+    hint_probability: float = 1.0,
+    perturb_probability: float = 0.35,
 ) -> tuple[dict[str, Any] | None, str | None]:
     """Ground-truth-directed trace generation with real tool execution via LangGraph.
     
@@ -511,7 +551,7 @@ def run_trace_gen(
     app = build_trace_gen_graph(
         registry, ground_truth=ground_truth, provider=provider, model=model,
         max_tool_calls=max_tool_calls, max_tokens=max_tokens_per_turn,
-        hint_probability=hint_probability,
+        hint_probability=hint_probability, perturb_probability=perturb_probability,
     )
     # Each logical turn can now cost up to ~4 reasoning-node visits (2 retries + 1
     # recovery attempt + 1 success) plus 1 tool-node visit, so budget generously —
