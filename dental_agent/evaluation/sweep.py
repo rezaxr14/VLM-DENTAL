@@ -59,14 +59,19 @@ def sweep_reward_weights(
             anns = annots_df[annots_df["image_id"] == image_id]
             if anns.empty:
                 continue
-            ann0 = anns.iloc[0]
-            ground_truth = {
-                "quadrant": int(ann0.get("category_id_1", 1)),
-                "tooth_position": int(ann0.get("category_id_2", 1)),
-                "diagnosis": cat_lookup.get(ann0.get(diag_col), "Caries"),
-            }
+            # Every row is a real finding -- .iloc[0] previously kept only the
+            # first and discarded the rest (same root cause fixed in
+            # train_grpo). ground_truth is now a list.
+            ground_truth = [
+                {
+                    "quadrant": int(row.get("category_id_1", 1)),
+                    "tooth_position": int(row.get("category_id_2", 1)),
+                    "diagnosis": cat_lookup.get(row.get(diag_col), "Caries"),
+                }
+                for _, row in anns.iterrows()
+            ]
         else:
-            ground_truth = {"quadrant": 1, "tooth_position": 1, "diagnosis": "Caries"}
+            ground_truth = [{"quadrant": 1, "tooth_position": 1, "diagnosis": "Caries"}]
 
         if agent_fn is not None:
             traj = agent_fn(image_id)

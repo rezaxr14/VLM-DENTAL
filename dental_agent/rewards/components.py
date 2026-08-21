@@ -141,7 +141,7 @@ def reward_efficiency(
 
 def reward_accuracy(
     trajectory: Mapping[str, Any],
-    ground_truth: Mapping[str, Any],
+    ground_truth: Mapping[str, Any] | list[Mapping[str, Any]],
 ) -> float:
     """Graded diagnostic accuracy reward (R_accuracy in §5.5).
 
@@ -149,43 +149,87 @@ def reward_accuracy(
     - +0.25: Correct dental quadrant (1-4)
     - +0.25: Correct tooth position (1-8)  -> total +0.50 for exact FDI tooth localization
     - +0.50: Correct pathology diagnosis class (Caries, Deep Caries, Periapical Lesion, Impacted Tooth)
-    - Total: 1.0 for perfect FDI localization + disease diagnosis.
+    - Total: 1.0 for perfect FDI localization + disease diagnosis, per matched finding.
 
-    NOTE: this still assumes a single ground-truth finding per trajectory
-    (ground_truth is a single {quadrant, tooth_position, diagnosis} dict, and
-    a list final_answer is not matched against multiple ground-truth
-    findings) -- flagged separately, not fixed here. Extending this to score
-    multi-finding trajectories properly needs a real design decision on
-    matching strategy and false-positive handling, not a quick patch
-    alongside efficiency retuning.
+    Handles multiple findings on both sides (ground_truth and the predicted
+    final_answer can each be a single dict or a list of dicts). Predictions
+    are matched to ground-truth findings by greedy highest-pair-score-first
+    assignment (one-to-one) using the same 0.25/0.25/0.50 rule per pair --
+    case sizes here are small (a panoramic X-ray realistically has a handful
+    of findings at most), so greedy matching is equivalent to optimal in the
+    overwhelming majority of cases and avoids pulling in a full
+    assignment-problem solver for this scale.
+
+    The result is an F1-style harmonic mean of:
+    - recall: total matched score / number of ground-truth findings (a
+      missed finding contributes 0, so under-prediction is penalized)
+    - precision: total matched score / number of predicted findings (an
+      extra, unmatched prediction contributes 0, so hallucinating findings
+      that aren't there is penalized too -- a pure recall-oriented average
+      would let the model spam findings hoping to match ground truth for
+      free, which is a bad incentive for a diagnostic reward)
+
+    With exactly one ground-truth finding and one predicted finding this
+    reduces to exactly the original single-pair score (verified in tests) --
+    existing single-finding call sites are unaffected.
     """
-    ans = trajectory.get("final_answer")
-    if isinstance(ans, list):
-        # Multi-finding answer against single-finding ground truth: take the
-        # first finding as a reasonable stand-in rather than scoring 0.0
-        # outright, until the real multi-finding design lands.
-        ans = ans[0] if ans and isinstance(ans[0], dict) else None
-    if not isinstance(ans, dict):
+    def _normalize_findings(x: Any) -> list[dict[str, Any]]:
+        if isinstance(x, dict):
+            return [x]
+        if isinstance(x, list):
+            return [f for f in x if isinstance(f, dict)]
+        return []
+
+    def _pair_score(pred: Mapping[str, Any], gt: Mapping[str, Any]) -> float:
+        s = 0.0
+        pq, gq = pred.get("quadrant"), gt.get("quadrant")
+        if pq is not None and gq is not None:
+            try:
+                if int(pq) == int(gq):
+                    s += 0.25
+            except (TypeError, ValueError):
+                pass
+        pp, gp = pred.get("tooth_position"), gt.get("tooth_position")
+        if pp is not None and gp is not None:
+            try:
+                if int(pp) == int(gp):
+                    s += 0.25
+            except (TypeError, ValueError):
+                pass
+        pd_, gd = str(pred.get("diagnosis", "")).strip().lower(), str(gt.get("diagnosis", "")).strip().lower()
+        if pd_ and gd and pd_ == gd:
+            s += 0.50
+        return s
+
+    preds = _normalize_findings(trajectory.get("final_answer"))
+    gts = _normalize_findings(ground_truth)
+
+    if not gts:
+        # No ground-truth findings at all (shouldn't happen for DENTEX, which
+        # always has at least one annotation per image, but handle it rather
+        # than divide by zero): correct if the model also predicted nothing.
+        return 1.0 if not preds else 0.0
+    if not preds:
+        return 0.0  # nothing predicted, every ground-truth finding missed
+
+    pairs = sorted(
+        ((_pair_score(p, g), pi, gi) for pi, p in enumerate(preds) for gi, g in enumerate(gts)),
+        key=lambda x: x[0],
+        reverse=True,
+    )
+
+    matched_pred: set[int] = set()
+    matched_gt: set[int] = set()
+    matched_total = 0.0
+    for score, pi, gi in pairs:
+        if pi in matched_pred or gi in matched_gt:
+            continue
+        matched_pred.add(pi)
+        matched_gt.add(gi)
+        matched_total += score
+
+    recall = matched_total / len(gts)
+    precision = matched_total / len(preds)
+    if precision + recall == 0:
         return 0.0
-
-    score = 0.0
-    gt_quad = ground_truth.get("quadrant")
-    gt_pos = ground_truth.get("tooth_position")
-    gt_diag = str(ground_truth.get("diagnosis", "")).strip().lower()
-
-    # 1. Quadrant check (+0.25)
-    pred_quad = ans.get("quadrant")
-    if pred_quad is not None and gt_quad is not None and int(pred_quad) == int(gt_quad):
-        score += 0.25
-
-    # 2. Tooth position check (+0.25)
-    pred_pos = ans.get("tooth_position")
-    if pred_pos is not None and gt_pos is not None and int(pred_pos) == int(gt_pos):
-        score += 0.25
-
-    # 3. Pathology diagnosis check (+0.50)
-    pred_diag = str(ans.get("diagnosis", "")).strip().lower()
-    if pred_diag and gt_diag and pred_diag == gt_diag:
-        score += 0.50
-
-    return score
+    return 2 * precision * recall / (precision + recall)

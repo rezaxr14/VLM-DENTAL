@@ -17,11 +17,14 @@ from dental_agent.rewards.components import (
 
 def combine_reward(
     trajectory: Mapping[str, Any],
-    ground_truth: Mapping[str, Any],
+    ground_truth: Mapping[str, Any] | list[Mapping[str, Any]],
     weights: RewardWeights | Mapping[str, float] | None = None,
     max_tool_calls: int = 50,
 ) -> tuple[float, dict[str, float]]:
     """Compute total composite reward R_total = sum(w_i * R_i).
+
+    ground_truth may be a single finding dict or a list of finding dicts --
+    see reward_accuracy for how multiple findings are matched and scored.
 
     Parameters
     ----------

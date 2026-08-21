@@ -51,7 +51,37 @@ enhance_contrast (factor), nudge_crop (bbox, dx_frac, dy_frac, scale).
 
 ## Dynamic tool-call budget
 
-- `run_trace_gen`'s `max_tool_calls` defaults to 50 (already the case before today's
-  patches — no change needed there for "some images need more calls than others").
-- GRPO's `max_tool_calls` still defaults to 4 (`grpo.py`) — this is the actual mismatch,
-  not yet addressed. Next patch.
+- `run_trace_gen`'s `max_tool_calls` defaults to 50 (unchanged — was already the case).
+- GRPO's `max_tool_calls` (`run_agent`, `collect_grpo_group`, `grpo_step`) now also defaults
+  to 50, and is counted by actual tool CALLS, not turns (a turn can carry several calls).
+  `combine_reward`'s efficiency ceiling is threaded through explicitly at the call site in
+  `collect_grpo_group` so it always matches whatever budget the rollout actually used.
+
+## Critical fix: GRPO couldn't dispatch tool calls at all
+
+`parse_agent_json` normalizes every parsed response into a `tool_calls` list, popping the
+legacy flat `tool`/`args` keys in the process. `run_agent` (loop.py) was still reading the
+now-permanently-absent `parsed.get("tool")` -- every tool-call attempt during a GRPO
+rollout hit "not recognized", regardless of what the model asked for. Fixed: `run_agent`
+now reads `tool_calls`, executes multiple calls per turn, and produces the same canonical
+`tool_calls_this_turn` shape trace-gen's loop does.
+
+## reward_efficiency redesign
+
+Old design: flat penalty per tool call, no reference to case complexity, and its own
+`max_calls` parameter was accepted but never used anywhere in the function body. New
+design: reference budget = 6 calls per distinct located tooth (derived from the
+trajectory's own `locate_tooth` calls, not a separate field); `locate_tooth` and
+`nudge_crop` are exempt from the per-call cost entirely; only genuine waste (exceeding
+budget, or an exact repeated tool+args call back-to-back) costs anything.
+
+## Multi-finding accuracy scoring
+
+`reward_accuracy` previously assumed one ground-truth finding per image, and `train_grpo`
+/ `sweep.py` both only ever took `.iloc[0]` of an image's annotations -- discarding every
+other real finding an image had before the reward even saw it. Both fixed: ground truth is
+now every annotation row for that image (a list), and `reward_accuracy` matches predicted
+findings to ground-truth findings by greedy highest-pair-score-first assignment, scoring
+the result as an F1-style harmonic mean of recall (missed findings count as 0) and
+precision (hallucinated extra findings also count as 0 -- prevents free-riding by
+over-predicting). Reduces to exactly the old single-pair score when there's one of each.

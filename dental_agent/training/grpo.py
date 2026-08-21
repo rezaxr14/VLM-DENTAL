@@ -124,7 +124,7 @@ def collect_grpo_group(
     processor: Any,
     image_id: int,
     images_df: pd.DataFrame,
-    ground_truth: dict[str, Any],
+    ground_truth: dict[str, Any] | list[dict[str, Any]],
     registry: ToolRegistry,
     group_size: int = 4,
     max_tool_calls: int = 50,
@@ -172,7 +172,7 @@ def collect_grpo_group(
 def grpo_step(
     model: Any,
     processor: Any,
-    image_ids_and_gts: list[tuple[int, dict[str, Any]]],
+    image_ids_and_gts: list[tuple[int, list[dict[str, Any]]]],
     images_df: pd.DataFrame,
     registry: ToolRegistry | None = None,
     group_size: int = 4,
@@ -371,12 +371,18 @@ def train_grpo(
         if img_annots.empty:
             continue
 
-        ann = img_annots.iloc[0]
-        gt = {
-            "quadrant": int(ann.get("category_id_1", 1)),
-            "tooth_position": int(ann.get("category_id_2", 1)),
-            "diagnosis": cat_lookup.get(ann.get(diag_col), "Caries"),
-        }
+        # Every annotation row for this image is a real finding -- .iloc[0]
+        # previously kept only the first and silently discarded the rest, so
+        # even a perfectly multi-finding-aware reward_accuracy would never
+        # have seen more than one finding per image. gt is now a list.
+        gt = [
+            {
+                "quadrant": int(row.get("category_id_1", 1)),
+                "tooth_position": int(row.get("category_id_2", 1)),
+                "diagnosis": cat_lookup.get(row.get(diag_col), "Caries"),
+            }
+            for _, row in img_annots.iterrows()
+        ]
 
         stats = grpo_step(
             model=model,
