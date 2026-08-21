@@ -117,27 +117,15 @@ def download_dentex_slice(
 ) -> dict[int, Path | None]:
     """Download only the given image_ids from the lightweight per-image HF repo.
     Returns {image_id: local_path}. Falls back to None entries if fetch fails.
+
+    Thin wrapper over the dataset-agnostic download_dataset_slice (see
+    hf_dataset_utils.py) -- kept here under its original name so existing
+    call sites (run_trace_gen.py, tests) don't need to change.
     """
     if repo_id is None:
         repo_id = os.environ.get("DENTEX_IMAGES_REPO")
-    if not repo_id:
-        return {}
-
-    local_paths = {}
-    for img_id in image_ids:
-        filename = f"images/{img_id}.png"
-        try:
-            local_path = hf_hub_download(
-                repo_id=repo_id,
-                filename=filename,
-                repo_type="dataset",
-                cache_dir=cache_dir,
-            )
-            local_paths[img_id] = Path(local_path)
-        except Exception as e:
-            print(f"Warning: Failed to download targeted slice image {img_id}: {e}")
-            local_paths[img_id] = None
-    return local_paths
+    from dental_agent.data.hf_dataset_utils import download_dataset_slice
+    return download_dataset_slice(image_ids, repo_id=repo_id, filename_template="images/{id}.png", cache_dir=cache_dir)
 
 
 def extract_dentex_zips(root_dir: str | Path, remove_zips: bool = True) -> None:

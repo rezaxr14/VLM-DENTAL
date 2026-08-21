@@ -46,6 +46,7 @@ if repo_root not in sys.path:
 
 from dental_agent.config import load_config, load_env
 from dental_agent.data.dentex import load_dentex_dataset
+from dental_agent.data.tufts import load_tufts_dataset
 from dental_agent.training.api_pool import (
     verify_local_server_health,
     RPDLimitExhausted,
@@ -148,10 +149,17 @@ def run_generate(args: argparse.Namespace, cfg: Any) -> None:
     """Run the LangGraph generation loop, writing unverified traces."""
     output_path = Path(args.output or DEFAULT_UNVERIFIED)
 
-    # Load dataset
-    imgs_df, annots_df, cats_df = load_dentex_dataset(
-        data_dir=cfg.data_dir, split_name=args.split
-    )
+    # Load dataset -- dispatches on --dataset (default: dentex, unchanged
+    # behavior). tufts currently raises NotImplementedError with a clear
+    # message until its tooth-position/diagnosis mapping is filled in
+    # (see dental_agent/data/tufts.py's module docstring) -- that's
+    # intentional, not a bug in this dispatch.
+    if args.dataset == "tufts":
+        imgs_df, annots_df, cats_df = load_tufts_dataset(data_dir=cfg.data_dir)
+    else:
+        imgs_df, annots_df, cats_df = load_dentex_dataset(
+            data_dir=cfg.data_dir, split_name=args.split
+        )
 
     annotated_ids = set(annots_df["image_id"].unique())
     eligible_imgs = imgs_df[imgs_df["id"].isin(annotated_ids)]
@@ -161,11 +169,17 @@ def run_generate(args: argparse.Namespace, cfg: Any) -> None:
         slice_ids = get_slice_ids(eligible_imgs["id"].tolist(), args.total_slices, args.slice_index, args.slice_seed)
         eligible_imgs = eligible_imgs[eligible_imgs["id"].isin(slice_ids)]
 
-    repo_id = os.environ.get("DENTEX_IMAGES_REPO")
+    if args.dataset == "tufts":
+        repo_id = os.environ.get("TUFTS_IMAGES_REPO")
+    else:
+        repo_id = os.environ.get("DENTEX_IMAGES_REPO")
     if repo_id:
         print(f"Fetching targeted images from {repo_id}...")
-        from dental_agent.data.dentex import download_dentex_slice
-        local_paths_map = download_dentex_slice(eligible_imgs["id"].tolist(), repo_id=repo_id, cache_dir=cfg.data_dir)
+        if args.dataset == "tufts":
+            from dental_agent.data.tufts import download_tufts_slice as _download_slice
+        else:
+            from dental_agent.data.dentex import download_dentex_slice as _download_slice
+        local_paths_map = _download_slice(eligible_imgs["id"].tolist(), repo_id=repo_id, cache_dir=cfg.data_dir)
         def _update_path(row):
             pid = row["id"]
             if pid in local_paths_map and local_paths_map[pid] is not None:
@@ -394,7 +408,16 @@ def parse_args() -> argparse.Namespace:
         "--split",
         type=str,
         default="validation",
-        help="DENTEX split to process (validation or train)",
+        help="DENTEX split to process (validation or train) -- ignored for --dataset tufts",
+    )
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        default="dentex",
+        choices=["dentex", "tufts"],
+        help="Which dataset to generate traces from. Defaults to dentex (unchanged behavior). "
+             "tufts currently raises NotImplementedError until its tooth-position/diagnosis "
+             "mapping is filled in -- see dental_agent/data/tufts.py.",
     )
     parser.add_argument(
         "--k",
