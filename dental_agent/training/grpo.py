@@ -127,7 +127,7 @@ def collect_grpo_group(
     ground_truth: dict[str, Any],
     registry: ToolRegistry,
     group_size: int = 4,
-    max_tool_calls: int = 4,
+    max_tool_calls: int = 50,
 ) -> tuple[list[dict], list[float], list[torch.Tensor], list[torch.Tensor]]:
     """Sample `group_size` rollouts for one image. Also captures each trajectory's OLD
     (pre-update) per-token log-probs under no_grad, right after generation."""
@@ -144,7 +144,11 @@ def collect_grpo_group(
             verbose=False,
         )
         traj_dict = traj.to_dict() if hasattr(traj, "to_dict") else traj
-        total_reward, _ = combine_reward(traj_dict, ground_truth)
+        # max_tool_calls passed through explicitly -- combine_reward has its own
+        # default, which previously silently diverged from whatever budget the
+        # rollout above actually used (reward_efficiency's reference ceiling
+        # wouldn't match the real one the rollout was bounded by).
+        total_reward, _ = combine_reward(traj_dict, ground_truth, max_tool_calls=max_tool_calls)
         trajectories.append(traj_dict)
         rewards.append(total_reward)
 
@@ -172,7 +176,7 @@ def grpo_step(
     images_df: pd.DataFrame,
     registry: ToolRegistry | None = None,
     group_size: int = 4,
-    max_tool_calls: int = 4,
+    max_tool_calls: int = 50,
     lr: float = 1e-5,
     epochs_per_batch: int = 1,
     clip_eps: float = 0.2,

@@ -49,7 +49,7 @@ def run_agent(
     model: Any,
     processor: Any,
     registry: ToolRegistry | None = None,
-    max_tool_calls: int = 4,
+    max_tool_calls: int = 50,
     verbose: bool = True,
 ) -> AgentTrajectory:
     """Run the multi-turn agent loop on a single dental radiograph.
@@ -85,8 +85,17 @@ def run_agent(
     assistant_token_spans: list[dict[str, Any]] = []
     final_answer = None
     tool_call_count = 0
+    registered_names = {t.name for t in registry.list_tools()}
 
-    for turn_idx in range(max_tool_calls + 1):
+    # max_tool_calls bounds total CALLS, not turns -- a turn can carry several
+    # (the agent may request multiple tool calls at once, same as trace-gen's
+    # loop), so a turn-indexed bound would silently allow up to ~4x
+    # max_tool_calls actual calls once multi-call turns are in play. The outer
+    # range here is a generous safety valve against a model that never
+    # produces a valid response, not the real budget -- the real budget is
+    # enforced by tool_call_count below, and once it's hit the model is told
+    # to answer instead of silently having further calls dropped.
+    for turn_idx in range(max_tool_calls + 15):
         reply, prompt_len, gen_ids = generate_agent_reply(
             model, processor, messages, return_ids=True
         )
@@ -112,58 +121,107 @@ def run_agent(
             messages.append({"role": "assistant", "content": reply})
             break
 
-        # Check for tool call
-        tool_name = parsed.get("tool")
-        tool_args = parsed.get("args", {})
-
-        if not tool_name or tool_name not in [t.name for t in registry.list_tools()]:
+        # parse_agent_json normalizes a legacy single "tool"/"args" pair into a
+        # one-element "tool_calls" list (popping the old keys), so tool_calls
+        # is the only shape to read here regardless of whether the model asked
+        # for one tool or several.
+        tool_calls = parsed.get("tool_calls")
+        if not tool_calls or not isinstance(tool_calls, list):
             turn_record["status"] = "invalid_tool"
-            turn_record["tool_ok"] = False
+            turn_record["tool_calls_this_turn"] = []
             turns.append(turn_record)
             messages.append({"role": "assistant", "content": reply})
             messages.append({
                 "role": "user",
-                "content": f"Error: Tool '{tool_name}' is not recognized.",
+                "content": "Error: no valid tool_calls or final_answer found in your response.",
             })
             continue
 
-        # Execute registered tool
-        tool_call_count += 1
-        turn_record["tool_name"] = tool_name
-        turn_record["tool_args"] = tool_args
+        if tool_call_count >= max_tool_calls:
+            # Budget exhausted -- don't silently drop the requested calls,
+            # tell the model plainly and give it a real chance to comply
+            # instead of looping until the outer safety valve trips.
+            turn_record["status"] = "budget_exhausted"
+            turn_record["tool_calls_this_turn"] = []
+            turns.append(turn_record)
+            messages.append({"role": "assistant", "content": reply})
+            messages.append({
+                "role": "user",
+                "content": f"You've used your tool-call budget ({max_tool_calls}). "
+                f"Provide your final_answer now based on what you've already seen.",
+            })
+            continue
 
         # Dispatch logic lives in tool_dispatch.py, shared with langgraph_loop.py's
         # trace-gen graph, so the two loops can't silently diverge on which tools
         # need `image=` or which image they see again (see that module's docstring
         # for the history of why this used to be duplicated, and the bug that came
         # of it). Always base_image -- never a compounded, previously-cropped view.
-        try:
-            tool_out = execute_tool_call(registry, tool_name, tool_args, base_image)
+        observation_content: list[dict[str, Any]] = []
+        calls_this_turn: list[dict[str, Any]] = []
+        any_ok = False
 
-            if isinstance(tool_out, Image.Image):
-                observation_content = [
-                    {"type": "image", "image": tool_out},
-                    {"type": "text", "text": f"Result of {tool_name}:"},
-                ]
-            else:
-                from dental_agent.utils.serialization import to_jsonable
-                observation_content = [
-                    {"type": "text", "text": f"Tool output: {json.dumps(to_jsonable(tool_out))}"}
-                ]
+        for call in tool_calls:
+            if tool_call_count >= max_tool_calls:
+                break  # budget ran out mid-turn (a multi-call turn requested more than remained)
 
-            turn_record["tool_ok"] = True
-            messages.append({"role": "assistant", "content": reply})
-            messages.append({"role": "user", "content": observation_content})
+            tool_name = call.get("tool") if isinstance(call, dict) else None
+            tool_args = call.get("args", {}) if isinstance(call, dict) else {}
+            call_record: dict[str, Any] = {"tool_name": tool_name, "tool_args": tool_args}
 
-        except Exception as e:
-            turn_record["tool_ok"] = False
-            turn_record["tool_error"] = str(e)
-            messages.append({"role": "assistant", "content": reply})
-            messages.append({"role": "user", "content": f"Tool execution failed: {e}"})
+            if not tool_name or tool_name not in registered_names:
+                call_record["tool_ok"] = False
+                call_record["tool_error"] = f"Tool '{tool_name}' is not recognized."
+                observation_content.append(
+                    {"type": "text", "text": f"Error: Tool '{tool_name}' is not recognized."}
+                )
+                calls_this_turn.append(call_record)
+                continue
 
+            tool_call_count += 1
+            try:
+                tool_out = execute_tool_call(registry, tool_name, tool_args, base_image)
+
+                if isinstance(tool_out, Image.Image):
+                    observation_content.append({"type": "image", "image": tool_out})
+                    observation_content.append({"type": "text", "text": f"Result of {tool_name}:"})
+                else:
+                    from dental_agent.utils.serialization import to_jsonable
+                    observation_content.append({
+                        "type": "text",
+                        "text": f"Result of {tool_name}: {json.dumps(to_jsonable(tool_out))}",
+                    })
+
+                call_record["tool_ok"] = True
+                any_ok = True
+
+            except Exception as e:
+                call_record["tool_ok"] = False
+                call_record["tool_error"] = str(e)
+                observation_content.append(
+                    {"type": "text", "text": f"Tool '{tool_name}' execution failed: {e}"}
+                )
+
+            calls_this_turn.append(call_record)
+
+        turn_record["tool_calls_this_turn"] = calls_this_turn
+        turn_record["status"] = "tool_executed" if any_ok else "tool_all_failed"
         turns.append(turn_record)
+        messages.append({"role": "assistant", "content": reply})
+        messages.append({"role": "user", "content": observation_content})
 
-    format_ok = bool(final_answer is not None and isinstance(final_answer, dict))
+    # A valid multi-finding answer is a non-empty list (see prompts.py: "A
+    # patient may have multiple findings; your final answer must be a list
+    # covering all of them"), not just a single dict -- this previously only
+    # accepted a dict, meaning every correctly-formatted multi-finding answer
+    # would have been scored as a format failure.
+    format_ok = bool(
+        final_answer is not None
+        and (
+            isinstance(final_answer, dict)
+            or (isinstance(final_answer, list) and len(final_answer) > 0)
+        )
+    )
 
     trajectory = AgentTrajectory(
         image_id=image_id,

@@ -19,7 +19,7 @@ def combine_reward(
     trajectory: Mapping[str, Any],
     ground_truth: Mapping[str, Any],
     weights: RewardWeights | Mapping[str, float] | None = None,
-    max_tool_calls: int = 4,
+    max_tool_calls: int = 50,
 ) -> tuple[float, dict[str, float]]:
     """Compute total composite reward R_total = sum(w_i * R_i).
 
