@@ -15,7 +15,30 @@ checking that a given mirror's redistribution terms actually allow it.
 find_local_tufts_dir() expects you've already requested access, downloaded,
 and extracted the archive yourself; point TUFTS_LOCAL_DIR at it.
 
-Tufts' native annotations are NOT DENTEX-shaped. Multiple independent public
+Verified facts about Tufts (not guessed) come from a peer-reviewed systematic
+review of public dental imaging datasets: Uribe et al., "Publicly Available
+Dental Image Datasets for Artificial Intelligence," J Dent Res 2024;103(13):
+1365-1374 (PMC11633071) -- see dataset_catalog.py for the fuller entry. Per
+that review: 1,000 images, JPEG, 840x1615, registration required, 2
+annotators, ground truth by expert decision, annotation type classified as
+"label." That review is itself a useful citation for why this module doesn't
+guess at annotation format: it explicitly found that "the methods used to
+establish labels were often unclear and inconsistent" across the 16 public
+dental datasets it examined -- Tufts included, not a one-off problem with
+this specific dataset.
+
+Note a real discrepancy worth being honest about rather than silently
+resolving: that review classifies Tufts' annotation type as "label," while
+independent web sources (GitHub repos referencing the dataset) describe
+Expert/Radiographs/Segmentation/Student folders with per-tooth and
+per-abnormality *segmentation masks*. Both could be true at once (a review's
+single-category classification can understate a richer underlying format --
+the same review notes DENTEX's own richer box+category annotations under the
+same "label" category), or they could be describing different releases/
+components. Either way, the actual mask-vs-label question below isn't
+resolved by either secondary source -- it needs the real extracted files.
+
+Tufts' native annotations are NOT DENTEX-shaped either way. Multiple independent public
 descriptions of the dataset agree on the broad structure -- top-level
 Expert/Radiographs/Segmentation/Student folders, radiograph images under
 something like Radiographs/Images1, per-tooth segmentation masks under
