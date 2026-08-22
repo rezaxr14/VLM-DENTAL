@@ -16,6 +16,7 @@ from tqdm import tqdm
 from dental_agent.agent.loop import run_agent, run_agent_no_tools
 from dental_agent.tools.registry import ToolRegistry
 from dental_agent.model.backbone import load_model
+from dental_agent.data.dentex import dentex_row_to_fdi
 from dental_agent.evaluation.metrics import (
     compute_diagnostic_metrics,
     compute_evaluation_metrics,
@@ -41,10 +42,11 @@ def _prepare_eval_samples(
         matches = annots_df[annots_df["image_id"] == img_id]
         if not matches.empty:
             ann = matches.iloc[0]
+            quadrant, tooth_position = dentex_row_to_fdi(ann)
             ground_truths.append({
                 "image_id": img_id,
-                "quadrant": int(ann.get("category_id_1", 1)),
-                "tooth_position": int(ann.get("category_id_2", 1)),
+                "quadrant": quadrant,
+                "tooth_position": tooth_position,
                 "diagnosis": str(ann.get(diag_col, "Caries")).lower(),
             })
         else:
@@ -95,9 +97,10 @@ def run_h1_ablation(
         if anns.empty:
             continue
         ann0 = anns.iloc[0]
+        quadrant, tooth_position = dentex_row_to_fdi(ann0)
         ground_truth = {
-            "quadrant": int(ann0.get("category_id_1", 1)),
-            "tooth_position": int(ann0.get("category_id_2", 1)),
+            "quadrant": quadrant,
+            "tooth_position": tooth_position,
             "diagnosis": cat_lookup.get(ann0.get(diag_col), "Caries"),
         }
 
@@ -191,9 +194,10 @@ def compare_checkpoints(
             if anns.empty:
                 continue
             ann0 = anns.iloc[0]
+            quadrant, tooth_position = dentex_row_to_fdi(ann0)
             ground_truth = {
-                "quadrant": int(ann0.get("category_id_1", 1)),
-                "tooth_position": int(ann0.get("category_id_2", 1)),
+                "quadrant": quadrant,
+                "tooth_position": tooth_position,
                 "diagnosis": cat_lookup.get(ann0.get(diag_col), "Caries"),
             }
 

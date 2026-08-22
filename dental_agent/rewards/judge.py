@@ -15,6 +15,8 @@ from typing import Any, Mapping
 from PIL import Image
 import pandas as pd
 
+from dental_agent.data.dentex import dentex_row_to_fdi
+
 TRAJECTORY_JUDGE_SYSTEM_PROMPT = (
     "You are a strict verifier, not a rewriter. You will see an X-ray image, the KNOWN "
     "correct answer, and an agent's full reasoning + tool-call trace (not synthetic -- "
@@ -100,9 +102,10 @@ def evaluate_reasoning_grounding(
         if anns.empty:
             continue
         ann0 = anns.iloc[0]
+        quadrant, tooth_position = dentex_row_to_fdi(ann0)
         ground_truth = {
-            "quadrant": int(ann0.get("category_id_1", 1)),
-            "tooth_position": int(ann0.get("category_id_2", 1)),
+            "quadrant": quadrant,
+            "tooth_position": tooth_position,
             "diagnosis": cat_lookup.get(ann0.get(diag_col), "Caries"),
         }
 

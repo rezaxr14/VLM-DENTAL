@@ -24,6 +24,7 @@ from dental_agent.config import ProjectConfig, TrainingConfig
 from dental_agent.model.backbone import load_model, apply_lora
 from dental_agent.model.checkpoints import save_checkpoint
 from dental_agent.agent.loop import run_agent
+from dental_agent.data.dentex import dentex_row_to_fdi
 from dental_agent.rewards.composite import combine_reward
 from dental_agent.tools.registry import ToolRegistry
 
@@ -375,10 +376,25 @@ def train_grpo(
         # previously kept only the first and silently discarded the rest, so
         # even a perfectly multi-finding-aware reward_accuracy would never
         # have seen more than one finding per image. gt is now a list.
+        #
+        # +1 on both fields: DENTEX's raw category_id_1/category_id_2 are
+        # 0-indexed (quadrant 0-3, position 0-7) -- documented as a CRITICAL,
+        # must-not-skip conversion in .agents/rules/vlm_dental.md, and already
+        # applied in trace_generation.py's own ground-truth construction
+        # (fdi_quadrant = category_id_1 + 1). This function was building GRPO's
+        # ground truth from the same raw columns WITHOUT that conversion --
+        # meaning a model correctly trained on trace-gen's 1-indexed FDI
+        # convention (quadrant 1-4, position 1-8, exactly what prompts.py's
+        # examples and _hint_for_tooth's FDI-string parsing both expect) would
+        # score wrong on quadrant AND tooth_position (0.50 of R_accuracy's
+        # 1.0 weight) against this ground truth on every single sample, since
+        # 3 (correct, 1-indexed) never equals 2 (raw, 0-indexed) for the same
+        # real quadrant. Only the diagnosis term (a string lookup, unaffected
+        # by this indexing) was ever scoring correctly.
         gt = [
             {
-                "quadrant": int(row.get("category_id_1", 1)),
-                "tooth_position": int(row.get("category_id_2", 1)),
+                "quadrant": dentex_row_to_fdi(row)[0],
+                "tooth_position": dentex_row_to_fdi(row)[1],
                 "diagnosis": cat_lookup.get(row.get(diag_col), "Caries"),
             }
             for _, row in img_annots.iterrows()

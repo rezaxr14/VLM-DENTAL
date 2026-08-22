@@ -19,6 +19,7 @@ from tqdm import tqdm
 from dental_agent.agent.prompts import ZERO_SHOT_PROMPT
 from dental_agent.agent.parsing import parse_agent_json
 from dental_agent.training.api_pool import call_llm
+from dental_agent.data.dentex import dentex_row_to_fdi
 from dental_agent.rewards.components import reward_accuracy
 from dental_agent.evaluation.metrics import compute_evaluation_metrics
 from dental_agent.utils.serialization import to_jsonable
@@ -40,8 +41,12 @@ def majority_class_baseline_metrics(
     if train_annots.empty:
         train_annots = annots_df
 
-    majority_quadrant = int(train_annots["category_id_1"].mode().iloc[0]) if "category_id_1" in train_annots else 1
-    majority_tooth = int(train_annots["category_id_2"].mode().iloc[0]) if "category_id_2" in train_annots else 1
+    # +1: same DENTEX 0-index quirk fixed throughout this codebase (see
+    # dentex_row_to_fdi's docstring) -- .mode() on the raw column returns a
+    # 0-indexed value; this baseline's constant "prediction" needs to be in
+    # the same 1-indexed FDI space reward_accuracy compares against below.
+    majority_quadrant = int(train_annots["category_id_1"].mode().iloc[0]) + 1 if "category_id_1" in train_annots else 1
+    majority_tooth = int(train_annots["category_id_2"].mode().iloc[0]) + 1 if "category_id_2" in train_annots else 1
 
     cat_lookup = (
         dict(zip(categories_df["id"], categories_df["name"]))
@@ -60,9 +65,10 @@ def majority_class_baseline_metrics(
         if anns.empty:
             continue
         ann0 = anns.iloc[0]
+        quadrant, tooth_position = dentex_row_to_fdi(ann0)
         gt = {
-            "quadrant": int(ann0.get("category_id_1", 1)),
-            "tooth_position": int(ann0.get("category_id_2", 1)),
+            "quadrant": quadrant,
+            "tooth_position": tooth_position,
             "diagnosis": cat_lookup.get(ann0.get(diag_col), "Caries"),
         }
         fake_results.append(to_jsonable({
@@ -122,9 +128,10 @@ def run_zero_shot_baseline(
         if anns.empty:
             continue
         ann0 = anns.iloc[0]
+        quadrant, tooth_position = dentex_row_to_fdi(ann0)
         ground_truth = {
-            "quadrant": int(ann0.get("category_id_1", 1)),
-            "tooth_position": int(ann0.get("category_id_2", 1)),
+            "quadrant": quadrant,
+            "tooth_position": tooth_position,
             "diagnosis": cat_lookup.get(ann0.get(diag_col), "Caries"),
         }
 

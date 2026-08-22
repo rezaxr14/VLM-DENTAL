@@ -28,6 +28,8 @@ from torchvision.models.detection import fasterrcnn_mobilenet_v3_large_fpn
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 from tqdm import tqdm
 
+from dental_agent.data.dentex import dentex_row_to_fdi
+
 from dental_agent.tools.fdi import tool_fdi_label
 
 
@@ -70,8 +72,7 @@ class DentexDetectionDataset(Dataset):
             if w <= 0 or h <= 0:
                 continue
             boxes.append([float(x), float(y), float(x + w), float(y + h)])
-            quad = int(ann.get("category_id_1", 1))
-            tooth = int(ann.get("category_id_2", 1))
+            quad, tooth = dentex_row_to_fdi(ann)
             labels.append((quad - 1) * 8 + tooth)  # 1-32; 0 reserved for background
 
         image_tensor = torchvision.transforms.functional.to_tensor(image)
@@ -246,8 +247,7 @@ def visualize_detector_predictions(
     gt_anns = annots_df[annots_df["image_id"] == image_id]
     for _, ann in gt_anns.iterrows():
         x, y, w, h = ann["bbox"]
-        quad = int(ann.get("category_id_1", 1))
-        tooth = int(ann.get("category_id_2", 1))
+        quad, tooth = dentex_row_to_fdi(ann)
         fdi = tool_fdi_label(quad, tooth)
         draw.rectangle([x, y, x + w, y + h], outline="lime", width=2)
         draw.text((x, y + h + 2), f"gt {fdi}", fill="lime")
@@ -295,8 +295,7 @@ def evaluate_stage0_detector(
         gt_anns = annots_df[annots_df["image_id"] == image_id]
         gt_boxes = [
             (
-                int(g.get("category_id_1", 1)),
-                int(g.get("category_id_2", 1)),
+                *dentex_row_to_fdi(g),
                 [g["bbox"][0], g["bbox"][1], g["bbox"][0] + g["bbox"][2], g["bbox"][1] + g["bbox"][3]],
             )
             for _, g in gt_anns.iterrows()

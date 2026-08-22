@@ -22,6 +22,37 @@ from PIL import Image
 from tqdm import tqdm
 
 
+def dentex_row_to_fdi(row: Any, default: int = 0) -> tuple[int, int]:
+    """Convert one DENTEX annotation row's raw category_id_1/category_id_2
+    into proper 1-indexed FDI (quadrant 1-4, tooth_position 1-8).
+
+    THE SINGLE SOURCE OF TRUTH for the "0-Index Quirk" (documented as
+    CRITICAL in .agents/rules/vlm_dental.md): DENTEX's raw JSON labels
+    category_id_1/category_id_2 as 0-indexed (quadrant 0-3, position 0-7),
+    but every prompt, tool, and reward in this codebase is written against
+    1-indexed FDI notation (quadrant 1-4, position 1-8) -- prompts.py's
+    worked examples, _hint_for_tooth's FDI-string parsing, reward_accuracy's
+    quadrant/tooth_position comparison, all of it.
+
+    This function exists because that +1 conversion was implemented once,
+    correctly, in trace_generation.py -- and then re-implemented, incorrectly
+    (i.e. omitted), by hand in seven other files (ablations.py, baselines.py,
+    batch_runner.py, judge.py, detector.py, test_aim1_trace.py) that each
+    built their own ground-truth dict directly from the raw columns without
+    knowing the conversion was needed. The result: every one of those files'
+    ground truth fed straight into reward_accuracy/combine_reward with
+    quadrant and tooth_position off by one from what a correctly-trained
+    model actually outputs -- meaning a perfectly correct answer would score
+    as wrong on both fields (0.50 of R_accuracy's 1.0 weight) in the GRPO
+    reward, the H1/H2 ablation studies, the baseline comparisons, and the
+    batch evaluation runner, every single time. Only the diagnosis-category
+    term (a string lookup, unaffected by this indexing) was ever scoring
+    correctly in any of them. Call this function instead of reconstructing
+    the +1 by hand, so this can't happen a ninth time.
+    """
+    return int(row.get("category_id_1", default)) + 1, int(row.get("category_id_2", default)) + 1
+
+
 # ---------------------------------------------------------------------------
 # Resilient Download Helpers
 # ---------------------------------------------------------------------------

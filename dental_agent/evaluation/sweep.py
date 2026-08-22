@@ -17,6 +17,7 @@ import pandas as pd
 from dental_agent.config import ProjectConfig, TrainingConfig, RewardWeights
 from dental_agent.training.grpo import train_grpo
 from dental_agent.agent.loop import run_agent
+from dental_agent.data.dentex import dentex_row_to_fdi
 from dental_agent.rewards.composite import combine_reward
 from dental_agent.tools.registry import ToolRegistry
 
@@ -62,10 +63,18 @@ def sweep_reward_weights(
             # Every row is a real finding -- .iloc[0] previously kept only the
             # first and discarded the rest (same root cause fixed in
             # train_grpo). ground_truth is now a list.
+            #
+            # dentex_row_to_fdi applies the DENTEX 0-index quirk conversion --
+            # this eval sweep previously had the identical bug (raw 0-indexed
+            # category_id_1/category_id_2 used directly against a model
+            # trained on trace_gen's 1-indexed FDI convention), meaning
+            # quadrant+position accuracy (0.50 of R_accuracy) would have
+            # scored wrong for a correct answer in every evaluation run using
+            # this function, not just training.
             ground_truth = [
                 {
-                    "quadrant": int(row.get("category_id_1", 1)),
-                    "tooth_position": int(row.get("category_id_2", 1)),
+                    "quadrant": dentex_row_to_fdi(row)[0],
+                    "tooth_position": dentex_row_to_fdi(row)[1],
                     "diagnosis": cat_lookup.get(row.get(diag_col), "Caries"),
                 }
                 for _, row in anns.iterrows()

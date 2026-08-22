@@ -11,7 +11,7 @@ import time
 from PIL import Image
 
 from dental_agent.config import load_config, load_env
-from dental_agent.data.dentex import load_dentex_dataset
+from dental_agent.data.dentex import load_dentex_dataset, dentex_row_to_fdi
 from dental_agent.training.api_pool import get_gemini_pool, call_llm
 from dental_agent.training.trace_generation import (
     generate_trace,
@@ -51,10 +51,11 @@ def main() -> None:
     anns = annots_df[annots_df["image_id"] == target_img_id]
     ann0 = anns.iloc[0]
     cat_lookup = dict(zip(cats_df["id"], cats_df["name"])) if not cats_df.empty else {}
+    quadrant, tooth_position = dentex_row_to_fdi(ann0)
 
     ground_truth = {
-        "quadrant": int(ann0.get("category_id_1", 1)),
-        "tooth_position": int(ann0.get("category_id_2", 1)),
+        "quadrant": quadrant,
+        "tooth_position": tooth_position,
         "diagnosis": cat_lookup.get(ann0.get("category_id_3"), "Caries"),
         "bbox": list(ann0.get("bbox", [0, 0, 50, 50])),
     }
