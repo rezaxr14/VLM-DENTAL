@@ -36,17 +36,44 @@ class DatasetEntry:
     modality: str
     n_images: int
     country: str
-    license: str  # as reported by the review; "unspecified" means the review found no license
-    annotation_type: str  # Label / Pixel level / Box / unspecified -- the review's own categories
+    license: str  # as reported by source; "unspecified" means no license was found
+    annotation_type: str  # Label / Pixel level / Box / unspecified
     registration_required: bool
     url: str
+    has_diagnosis_labels: bool  # False = tooth identification/segmentation only, no pathology
+    source_note: str = ""  # where this entry's facts came from, beyond the Uribe review
     notes: str = ""
 
 
-# Panoramic-radiograph datasets only (this project's modality) from the
-# review's Table 1. CBCT, cephalometric, 3D intraoral scan, and oral-pathology
-# / non-tooth-detection datasets from the same table are omitted here since
-# they're a different modality or task -- see the paper directly for those.
+# ---------------------------------------------------------------------------
+# has_diagnosis_labels matters more than it might look like a minor filter
+# field. DENTEX is still the only panoramic dataset found so far that pairs
+# tooth position with an actual pathology label (caries/deep caries/
+# periapical lesion/impaction) in the way this project's reward and trace-gen
+# pipeline need. Every other dataset catalogued below that's usable at all is
+# a tooth-IDENTIFICATION dataset (segmentation, instance masks, FDI
+# numbering) with no diagnosis signal -- useful for a DIFFERENT purpose than
+# DENTEX: generalizing locate_tooth's grounding accuracy across more images
+# and imaging equipment, not generating more SFT/GRPO diagnosis traces.
+#
+# This isn't a guess -- there's a direct, real precedent for exactly this
+# split-purpose combination: Merlin et al., BMC Oral Health 2024
+# (10.1186/s12903-024-04129-5) trained a two-stage pipeline combining a
+# tooth-instance-segmentation dataset (OdontoAI) with DENTEX specifically
+# because DENTEX alone wasn't enough for grounding generalization and
+# OdontoAI alone has no diagnosis labels -- the same gap this project is in.
+# So "which dataset should we add next" has two different right answers
+# depending on which pipeline stage you're trying to improve: locate_tooth's
+# generalization (any dataset below, diagnosis-labeled or not) vs. trace
+# generation for SFT/GRPO (currently: DENTEX only, until a second
+# diagnosis-labeled dataset turns up).
+# ---------------------------------------------------------------------------
+
+# Panoramic-radiograph datasets only (this project's modality). The core 8
+# come from the Uribe et al. 2024 systematic review (see module docstring);
+# entries with a source_note came from targeted follow-up search on
+# specific candidates, since that review's cutoff (screened through early
+# 2024) predates several of these.
 PANORAMIC_DATASETS: list[DatasetEntry] = [
     DatasetEntry(
         name="DENTEX",
@@ -57,9 +84,10 @@ PANORAMIC_DATASETS: list[DatasetEntry] = [
         annotation_type="label (quadrant/enumeration/diagnosis; this project also uses its box coordinates directly)",
         registration_required=False,
         url="https://zenodo.org/records/7812323",
-        notes="Primary dataset already in use (dentex.py). The review's 'label' "
-              "categorization understates it somewhat -- DENTEX also ships COCO-style "
-              "bounding boxes, which is what this project's grounding tool trains on.",
+        has_diagnosis_labels=True,
+        notes="Primary dataset already in use (dentex.py). Still the only panoramic dataset "
+              "found so far pairing tooth position with real pathology labels (caries/deep "
+              "caries/periapical lesion/impaction) in this project's exact format.",
     ),
     DatasetEntry(
         name="Tufts Panoramic Dataset",
@@ -67,11 +95,15 @@ PANORAMIC_DATASETS: list[DatasetEntry] = [
         n_images=1000,
         country="United States",
         license="unspecified",
-        annotation_type="label (per this review; independent web sources describe additional "
+        annotation_type="label (per Uribe et al. 2024); independent web sources describe additional "
                          "per-tooth/abnormality segmentation masks -- see tufts.py's module "
-                         "docstring for why that discrepancy isn't resolved by guessing)",
+                         "docstring for why that discrepancy isn't resolved by guessing",
         registration_required=True,
         url="https://tdd.ece.tufts.edu/",
+        has_diagnosis_labels=True,
+        source_note="Uribe et al. 2024 lists this dataset's research areas as caries, oral "
+                     "pathology, and endodontics -- diagnosis-relevant, but the exact category "
+                     "taxonomy is unconfirmed (same caveat as the annotation-type discrepancy).",
         notes="In progress (tufts.py). 2 annotators, ground truth by expert decision, JPEG, "
               "840x1615.",
     ),
@@ -82,14 +114,14 @@ PANORAMIC_DATASETS: list[DatasetEntry] = [
         country="Iran",
         license="CC BY-SA 4.0",
         annotation_type="unspecified in the review's annotation-type field, but the dataset "
-                         "ships an _annotations.csv (image size + description per image) -- a "
-                         "concrete, standard format worth checking directly rather than a mask "
-                         "convention to infer",
+                         "ships an _annotations.csv (image size + description per image)",
         registration_required=False,
         url="https://www.kaggle.com/datasets/imtkaggleteam/dental-radiography",
-        notes="Second-largest panoramic candidate after DENTEX. Share-alike license -- fine to "
-              "use, but downstream re-releases (e.g. a combined trace-gen dataset) would need "
-              "to carry the same license forward.",
+        has_diagnosis_labels=False,
+        notes="Second-largest panoramic candidate after DENTEX, and a standard CSV rather than "
+              "a mask convention -- but no confirmed diagnosis taxonomy; 'description per image' "
+              "could be free text, not categorical. Verify before assuming this feeds diagnosis "
+              "trace-gen rather than grounding only.",
     ),
     DatasetEntry(
         name="Panoramic Dental Xray Dataset",
@@ -97,15 +129,19 @@ PANORAMIC_DATASETS: list[DatasetEntry] = [
         n_images=180,
         country="Tunisia",
         license="CC BY 4.0",
-        annotation_type="pixel level, via VGG Image Annotator (VIA) -- a well-documented, "
-                         "standard tool with a known JSON export schema, not a bespoke format",
+        annotation_type="pixel level, via VGG Image Annotator (VIA)",
         registration_required=False,
-        url="https://data.mendeley.com/datasets/73n3kz2k4k/2",
-        notes="Most permissively licensed panoramic dataset in the review (plain CC BY, no "
-              "share-alike or non-commercial restriction). VIA's export format is well-known "
-              "enough to write a confident parser for, unlike Tufts' undocumented masks -- a "
-              "genuinely strong candidate for the next loader after Tufts, license and format "
-              "considered together.",
+        url="https://data.mendeley.com/datasets/73n3kz2k4k/3",
+        has_diagnosis_labels=False,
+        source_note="Corrected after direct follow-up -- the Mendeley listing (v3) describes "
+                     "three parts: 107 images with tooth-instance-segmentation annotations, 60 "
+                     "images labeled by 8 tooth-TYPE classes (canine, incisor, molar, premolar "
+                     "variants -- morphological type, not FDI quadrant+position), and 54 "
+                     "unannotated high-resolution images. No pathology/diagnosis labels found "
+                     "in any part.",
+        notes="Most permissively licensed panoramic dataset found (plain CC BY). Still a strong "
+              "candidate for expanding locate_tooth's training corpus specifically -- not for "
+              "diagnosis trace-gen, contrary to this entry's earlier framing in this file.",
     ),
     DatasetEntry(
         name="Panoramic-Caries-Segmentation",
@@ -116,9 +152,10 @@ PANORAMIC_DATASETS: list[DatasetEntry] = [
         annotation_type="pixel level (caries-specific)",
         registration_required=False,
         url="https://github.com/Zzz512/MLUA",
-        notes="Small, but directly caries-focused and ships a README per the review's "
-              "'additional information' field -- worth a look for caries-specific "
-              "augmentation even at this size.",
+        has_diagnosis_labels=True,
+        notes="Small, but directly caries-focused and ships a README -- worth a look for "
+              "caries-specific augmentation even at this size, though likely binary "
+              "(caries/not) rather than DENTEX's 4-class taxonomy; needs checking.",
     ),
     DatasetEntry(
         name="TK_Tooth_Number_Code",
@@ -129,10 +166,48 @@ PANORAMIC_DATASETS: list[DatasetEntry] = [
         annotation_type="label (tooth numbering specifically)",
         registration_required=False,
         url="https://github.com/tanjidakabir/TK_Tooth_Number_Code",
+        has_diagnosis_labels=False,
         notes="Ships a README, model description, mask file, and several xlsx files describing "
-              "the data (per the review) -- tabular ground truth is far more tractable to parse "
-              "confidently than raw pixel masks, and tooth-numbering-specific data is directly "
-              "relevant to generalizing locate_tooth/fdi_label across datasets.",
+              "the data -- tabular ground truth, tractable to parse. Numbering-only, no "
+              "diagnosis: a grounding-tool candidate, not a trace-gen one.",
+    ),
+    DatasetEntry(
+        name="DNS (Detection, Numbering, and Segmentation)",
+        modality="panoramic",
+        n_images=543,
+        country="unspecified",
+        license="available upon request to the authors",
+        annotation_type="pixel level + COCO-format boxes, with FDI tooth numbering",
+        registration_required=True,
+        url="https://github.com/IvisionLab/dns-panoramic-images-v2",
+        has_diagnosis_labels=False,
+        source_note="Found via targeted follow-up search, not in the Uribe et al. 2024 review. "
+                     "Derived from the UFBA-UESC dental dataset; multiple follow-up papers "
+                     "(TNDRS, orthodontic-appliance extensions) have extended it further. "
+                     "Access is upon-request, similar constraint to Tufts, not a free download.",
+        notes="Real FDI numbering in COCO format is exactly the shape locate_tooth/fdi_label "
+              "need -- a strong grounding-tool candidate if access is granted, but no "
+              "diagnosis/pathology labels, so it wouldn't feed trace generation.",
+    ),
+    DatasetEntry(
+        name="TL-pano",
+        modality="panoramic",
+        n_images=197,
+        country="Brazil",
+        license="restricted -- non-commercial research use only",
+        annotation_type="pixel level via VIA, with FDI tooth numbers AND quadrant sub-labels",
+        registration_required=True,
+        url="https://zenodo.org/records/15038971",
+        has_diagnosis_labels=False,
+        source_note="Found via targeted follow-up search, published Oct 2025, not in the Uribe "
+                     "et al. 2024 review (predates it). Explicitly built as a *supporting* "
+                     "dataset meant to complement caries/bone-loss-labeled datasets, not to "
+                     "provide diagnosis labels itself.",
+        notes="Directly relevant to fdi_label's quadrant+position output shape (VIA sub-labels "
+              "for both), and hosted on Zenodo rather than gated behind a request form -- but "
+              "the non-commercial license needs checking against how this project's outputs "
+              "(a trained model, published traces) would actually be used/distributed before "
+              "committing to it.",
     ),
     DatasetEntry(
         name="Panoramic Dental X-rays With Segmented Mandibles",
@@ -143,6 +218,7 @@ PANORAMIC_DATASETS: list[DatasetEntry] = [
         annotation_type="pixel level (mandible only, not per-tooth)",
         registration_required=False,
         url="https://data.mendeley.com/datasets/hxt48yk462/2",
+        has_diagnosis_labels=False,
         notes="Segments the mandible as a whole, not individual teeth -- not useful for "
               "locate_tooth/diagnosis training as-is, listed for completeness.",
     ),
@@ -155,6 +231,7 @@ PANORAMIC_DATASETS: list[DatasetEntry] = [
         annotation_type="unspecified",
         registration_required=False,
         url="https://zenodo.org/records/4457648",
+        has_diagnosis_labels=False,
         notes="Thin documentation in the review (no annotation type or ground-truth method "
               "reported) -- lower priority until more is known.",
     ),
@@ -163,8 +240,9 @@ PANORAMIC_DATASETS: list[DatasetEntry] = [
 
 def summarize() -> str:
     """Quick human-readable summary for a notebook cell or REPL check."""
-    lines = [f"{len(PANORAMIC_DATASETS)} panoramic datasets (Uribe et al. 2024):"]
+    lines = [f"{len(PANORAMIC_DATASETS)} panoramic datasets:"]
     for d in PANORAMIC_DATASETS:
         reg = "registration required" if d.registration_required else "no registration"
-        lines.append(f"  - {d.name}: {d.n_images} images, {d.country}, {d.license}, {reg}")
+        diag = "has diagnosis labels" if d.has_diagnosis_labels else "grounding only, no diagnosis"
+        lines.append(f"  - {d.name}: {d.n_images} images, {d.country}, {d.license}, {reg}, {diag}")
     return "\n".join(lines)
