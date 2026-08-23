@@ -244,7 +244,7 @@ def download_tufts_slice(
 ) -> dict[int, Path | None]:
     """Download only the given image_ids from a lightweight per-image HF repo
     (same mechanism as DENTEX, once Tufts images have actually been uploaded
-    there by scripts/upload_tufts_images_to_hf.py -- see hf_dataset_utils.py).
+    there by scripts/upload_dataset_images_to_hf.py --dataset tufts -- see hf_dataset_utils.py).
     """
     if repo_id is None:
         repo_id = os.environ.get("TUFTS_IMAGES_REPO")

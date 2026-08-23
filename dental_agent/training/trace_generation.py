@@ -383,7 +383,7 @@ def verify_pending(
         print(f"No unverified trace file found at {unverified_path}")
         return {"pending": 0, "verified": 0, "rejected": 0}
 
-    verified_ids: set[int] = set()
+    verified_ids: set[tuple[str, int]] = set()
     if verified_path.exists():
         with open(verified_path, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
@@ -393,7 +393,10 @@ def verify_pending(
                 try:
                     record = json.loads(line)
                     if "image_id" in record:
-                        verified_ids.add(int(record["image_id"]))
+                        # .get("dataset", "dentex"): every trace record before this
+                        # field existed was DENTEX-only, so that's the correct
+                        # default for old files, not just an arbitrary fallback.
+                        verified_ids.add((record.get("dataset", "dentex"), int(record["image_id"])))
                 except Exception:
                     pass
 
@@ -406,8 +409,9 @@ def verify_pending(
             try:
                 record = json.loads(line)
                 img_id = int(record.get("image_id", -1))
+                record_dataset = record.get("dataset", "dentex")
                 status = record.get("status", "")
-                if img_id not in verified_ids and status == "unverified":
+                if (record_dataset, img_id) not in verified_ids and status == "unverified":
                     pending.append(record)
             except Exception:
                 pass
@@ -427,6 +431,7 @@ def verify_pending(
         image_path = record.get("image_path", "")
         ground_truth = record.get("ground_truth", [])
         trajectory = record.get("trajectory", {})
+        dataset_name = record.get("dataset", "dentex")
 
         if not trajectory or not os.path.exists(str(image_path)):
             return False, image_id, "Skipped (no trajectory or image)"
@@ -440,6 +445,7 @@ def verify_pending(
                 trajectory["image_id"] = image_id
                 trajectory["image_path"] = image_path
                 trajectory["ground_truth"] = ground_truth
+                trajectory["dataset"] = dataset_name
                 
                 with file_lock:
                     verified_path.parent.mkdir(parents=True, exist_ok=True)

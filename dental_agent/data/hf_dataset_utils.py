@@ -1,7 +1,7 @@
 """
 Dataset-agnostic HuggingFace helpers: the "upload once, download only the
 images a given slice actually needs" mechanism DENTEX already used
-(dentex.py's download_dentex_slice / upload_dentex_images_to_hf.py), pulled
+(dentex.py's download_dentex_slice / scripts/upload_dataset_images_to_hf.py), pulled
 out here so Tufts and any future dataset can reuse the identical mechanism
 instead of each dataset module carrying its own copy.
 

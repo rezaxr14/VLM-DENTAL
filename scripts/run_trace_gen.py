@@ -146,15 +146,46 @@ def print_banner(mode: str, completed_count: int, total_images: int) -> None:
 # ---------------------------------------------------------------------------
 
 def run_generate(args: argparse.Namespace, cfg: Any) -> None:
-    """Run the LangGraph generation loop, writing unverified traces."""
-    output_path = Path(args.output or DEFAULT_UNVERIFIED)
+    """Dispatches to _run_generate_for_dataset once per comma-separated
+    --dataset name (default: a single "dentex", unchanged behavior). Each
+    dataset gets its own output file, since resumability tracking
+    (load_completed_ids) keys on numeric image id -- letting two datasets
+    share one output file would risk a false "already done" skip if they
+    happen to have images with the same numeric id (exactly the collision
+    prepare_yolo_dataset.py's dataset_tag exists to prevent on the YOLO
+    side; the fix here is the same idea, applied by giving each dataset
+    its own file rather than tagging records within a shared one)."""
+    dataset_list = [d.strip() for d in args.dataset.split(",") if d.strip()]
+    if not dataset_list:
+        dataset_list = ["dentex"]
 
-    # Load dataset -- dispatches on --dataset (default: dentex, unchanged
+    explicit_output = args.output  # None unless the user passed --output themselves
+    for dataset_name in dataset_list:
+        if explicit_output:
+            # User gave an explicit path -- honor it exactly as before, even
+            # if it means multiple datasets share one file (their choice).
+            output_path = Path(explicit_output)
+        elif len(dataset_list) > 1:
+            output_path = Path(str(DEFAULT_UNVERIFIED).replace(".jsonl", f"_{dataset_name}.jsonl"))
+        else:
+            # Single dataset, no explicit output -- exactly today's default,
+            # unchanged, so existing single-dataset invocations are unaffected.
+            output_path = Path(DEFAULT_UNVERIFIED)
+
+        if len(dataset_list) > 1:
+            print(f"\n{'=' * 70}\nDataset: {dataset_name}\n{'=' * 70}")
+        _run_generate_for_dataset(args, cfg, dataset_name, output_path)
+
+
+def _run_generate_for_dataset(args: argparse.Namespace, cfg: Any, dataset_name: str, output_path: Path) -> None:
+    """Run the LangGraph generation loop for one dataset, writing unverified traces."""
+
+    # Load dataset -- dispatches on dataset_name (default: dentex, unchanged
     # behavior). tufts currently raises NotImplementedError with a clear
     # message until its tooth-position/diagnosis mapping is filled in
     # (see dental_agent/data/tufts.py's module docstring) -- that's
     # intentional, not a bug in this dispatch.
-    if args.dataset == "tufts":
+    if dataset_name == "tufts":
         imgs_df, annots_df, cats_df = load_tufts_dataset(data_dir=cfg.data_dir)
     else:
         imgs_df, annots_df, cats_df = load_dentex_dataset(
@@ -169,13 +200,13 @@ def run_generate(args: argparse.Namespace, cfg: Any) -> None:
         slice_ids = get_slice_ids(eligible_imgs["id"].tolist(), args.total_slices, args.slice_index, args.slice_seed)
         eligible_imgs = eligible_imgs[eligible_imgs["id"].isin(slice_ids)]
 
-    if args.dataset == "tufts":
+    if dataset_name == "tufts":
         repo_id = os.environ.get("TUFTS_IMAGES_REPO")
     else:
         repo_id = os.environ.get("DENTEX_IMAGES_REPO")
     if repo_id:
         print(f"Fetching targeted images from {repo_id}...")
-        if args.dataset == "tufts":
+        if dataset_name == "tufts":
             from dental_agent.data.tufts import download_tufts_slice as _download_slice
         else:
             from dental_agent.data.dentex import download_dentex_slice as _download_slice
@@ -254,6 +285,12 @@ def run_generate(args: argparse.Namespace, cfg: Any) -> None:
                 print(f"  [SKIP] No valid image/annotations for ID {image_id}", flush=True)
                 continue
 
+            # Tagged so verify_pending (shared across datasets) can key
+            # dedup on (dataset, image_id) rather than bare image_id --
+            # without this, a DENTEX image already verified would silently
+            # cause a same-numbered Tufts image to be skipped as "already
+            # done" forever, since both datasets number from a low integer.
+            result["dataset"] = dataset_name
             append_trace(output_path, result)
             status = result.get("status", "unknown")
 
@@ -309,7 +346,7 @@ def run_generate(args: argparse.Namespace, cfg: Any) -> None:
     print("=" * 70 + "\n")
 
     print("NEXT STEP: Run verification to promote traces:")
-    print(f"  python scripts/run_trace_gen.py --mode verify --split {args.split}")
+    print(f"  python scripts/run_trace_gen.py --mode verify --dataset {dataset_name} --split {args.split}")
     print("=" * 70 + "\n")
 
 
@@ -318,8 +355,33 @@ def run_generate(args: argparse.Namespace, cfg: Any) -> None:
 # ---------------------------------------------------------------------------
 
 def run_verify(args: argparse.Namespace, cfg: Any) -> None:
-    """Read unverified traces and verify them via external API verifiers."""
-    unverified_path = Path(args.output or DEFAULT_UNVERIFIED)
+    """Dispatches to _run_verify_for_dataset once per comma-separated
+    --dataset name, each reading its own unverified file (matching what
+    run_generate wrote per dataset) -- but all writing into the SAME
+    shared verified_path. Verified traces are self-contained (each record
+    carries its own image_path and ground truth), so combining them from
+    multiple datasets into one file for SFT training is safe; only the
+    unverified/resumability-tracking side needed to stay per-dataset."""
+    dataset_list = [d.strip() for d in args.dataset.split(",") if d.strip()]
+    if not dataset_list:
+        dataset_list = ["dentex"]
+
+    explicit_output = args.output
+    for dataset_name in dataset_list:
+        if explicit_output:
+            unverified_path = Path(explicit_output)
+        elif len(dataset_list) > 1:
+            unverified_path = Path(str(DEFAULT_UNVERIFIED).replace(".jsonl", f"_{dataset_name}.jsonl"))
+        else:
+            unverified_path = Path(DEFAULT_UNVERIFIED)
+
+        if len(dataset_list) > 1:
+            print(f"\n{'=' * 70}\nDataset: {dataset_name}\n{'=' * 70}")
+        _run_verify_for_dataset(args, cfg, unverified_path)
+
+
+def _run_verify_for_dataset(args: argparse.Namespace, cfg: Any, unverified_path: Path) -> None:
+    """Read one dataset's unverified traces and verify them via external API verifiers."""
     verified_path = Path(DEFAULT_VERIFIED)
 
     # Count totals for banner
@@ -414,10 +476,12 @@ def parse_args() -> argparse.Namespace:
         "--dataset",
         type=str,
         default="dentex",
-        choices=["dentex", "tufts"],
-        help="Which dataset to generate traces from. Defaults to dentex (unchanged behavior). "
-             "tufts currently raises NotImplementedError until its tooth-position/diagnosis "
-             "mapping is filled in -- see dental_agent/data/tufts.py.",
+        help="Which dataset(s) to generate traces from. Comma-separated for multiple in one "
+             "run (e.g. --dataset dentex,tufts) -- each gets its own output file, since "
+             "resumability tracking keys on numeric image id and two datasets could otherwise "
+             "collide. Defaults to dentex (unchanged behavior). tufts currently raises "
+             "NotImplementedError until its tooth-position/diagnosis mapping is filled in -- "
+             "see dental_agent/data/tufts.py.",
     )
     parser.add_argument(
         "--k",

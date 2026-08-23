@@ -3,20 +3,66 @@ import json
 import os
 import shutil
 from pathlib import Path
+from typing import Callable
 
 import pandas as pd
 import yaml
 from sklearn.model_selection import KFold
 from tqdm import tqdm
 
-from dental_agent.data.dentex import load_dentex_dataset
+from dental_agent.data.dentex import load_dentex_dataset, dentex_row_to_fdi
+
+# Which loader + FDI-conversion function each supported dataset uses.
+# quadrant_position_fn takes one annotation row and returns (quadrant,
+# tooth_position) already in proper FDI (1-4, 1-8) form. This is
+# deliberately NOT the same function for every dataset: DENTEX's raw
+# category_id_1/category_id_2 are 0-indexed (the documented "0-Index
+# Quirk"), an artifact of DENTEX's own JSON encoding -- NOT a universal
+# convention. A dataset whose own loader already outputs correct 1-indexed
+# FDI values (as tufts.py's will, once its annotation mapping lands) must
+# NOT be run through dentex_row_to_fdi a second time, or it'd be double-
+# incremented. Add a new dataset by adding one entry here with its own
+# loader and its own (possibly identity) conversion function -- don't
+# hardcode a new dataset's quirks into convert_single_image itself.
+DATASET_LOADERS: dict[str, dict] = {
+    "dentex": {
+        "load": load_dentex_dataset,
+        "quadrant_position_fn": dentex_row_to_fdi,
+    },
+    # "tufts": {
+    #     "load": load_tufts_dataset,
+    #     "quadrant_position_fn": lambda row: (int(row["category_id_1"]), int(row["category_id_2"])),
+    # },
+    # Uncomment once dental_agent/data/tufts.py's tooth-position mapping is
+    # implemented (currently raises NotImplementedError by design -- see
+    # that module's docstring). tufts.py's own loader should hand back
+    # already-correct FDI values, so its conversion function is the
+    # identity, not another +1.
+}
 
 
-def convert_single_image(img_row, annots_df, images_out, labels_out):
+def convert_single_image(
+    img_row,
+    annots_df,
+    images_out,
+    labels_out,
+    quadrant_position_fn: Callable = dentex_row_to_fdi,
+    dataset_tag: str | None = None,
+):
     """Convert a single image's annotations to YOLO format.
 
     Returns the destination stem (without extension) if annotations were written,
     or None if the image has no valid tooth annotations.
+
+    quadrant_position_fn: converts one annotation row to (quadrant,
+    tooth_position) in proper FDI form -- dataset-specific, see
+    DATASET_LOADERS above. Defaults to DENTEX's conversion for backward
+    compatibility with existing call sites.
+
+    dataset_tag: if given, guarantees collision-free filenames across
+    datasets (e.g. "dentex_123" vs "tufts_123" for the same numeric image
+    id) instead of relying on the source folder name happening to be
+    unique, which was the previous, DENTEX-only-safe assumption.
     """
     img_id = img_row["id"]
     local_path = Path(img_row["local_path"])
@@ -34,10 +80,7 @@ def convert_single_image(img_row, annots_df, images_out, labels_out):
         if pd.isna(ann.get("category_id_1")) or pd.isna(ann.get("category_id_2")):
             continue
 
-        # DENTEX's category_id_1/category_id_2 are 0-indexed (quadrant 0-3, position 0-7) --
-        # convert to FDI (1-4, 1-8) before using them.
-        quadrant = int(ann["category_id_1"]) + 1
-        position = int(ann["category_id_2"]) + 1
+        quadrant, position = quadrant_position_fn(ann)
 
         # Map FDI (Quadrant 1-4, Position 1-8) to YOLO Class (0-31)
         if not (1 <= quadrant <= 4 and 1 <= position <= 8):
@@ -69,9 +112,18 @@ def convert_single_image(img_row, annots_df, images_out, labels_out):
     if not yolo_lines:
         return None
 
-    # Create a unique destination stem to prevent cross-folder collisions
-    folder_prefix = local_path.parent.parent.name
-    dest_stem = f"{folder_prefix}_{local_path.stem}" if folder_prefix else f"img_{img_id}_{local_path.stem}"
+    # Create a unique destination stem to prevent collisions. With an
+    # explicit dataset_tag (multi-dataset runs), that tag plus the numeric
+    # image id is guaranteed unique regardless of source folder naming --
+    # two datasets can both have an image with id=5 without colliding.
+    # Without one (single-dataset runs, unchanged from before), fall back
+    # to the source folder name, which was only ever guaranteed unique
+    # within DENTEX's own folder structure.
+    if dataset_tag:
+        dest_stem = f"{dataset_tag}_{img_id}_{local_path.stem}"
+    else:
+        folder_prefix = local_path.parent.parent.name
+        dest_stem = f"{folder_prefix}_{local_path.stem}" if folder_prefix else f"img_{img_id}_{local_path.stem}"
 
     dest_img_path = images_out / f"{dest_stem}{local_path.suffix}"
     if not dest_img_path.exists():
@@ -84,8 +136,14 @@ def convert_single_image(img_row, annots_df, images_out, labels_out):
     return dest_stem
 
 
-def convert_to_yolo_format(output_dir: str | Path, split: str = "train", data_dir: str = "data"):
-    """Convert DENTEX COCO annotations to YOLOv8 txt format (static split mode).
+def convert_to_yolo_format(output_dir: str | Path, split: str = "train", data_dir: str = "data", datasets: list[str] | None = None):
+    """Convert one or more datasets' annotations to YOLOv8 txt format (static split mode).
+
+    datasets: names from DATASET_LOADERS to combine (default: ["dentex"], unchanged
+    behavior from before this was generalized). Each dataset is loaded and converted
+    independently, tagged with its own name for collision-free filenames, then merged
+    into the same images_out/labels_out -- so "run YOLO over all of them" just means
+    passing more names here once their loaders exist.
 
     Output structure:
         output_dir/
@@ -97,6 +155,7 @@ def convert_to_yolo_format(output_dir: str | Path, split: str = "train", data_di
                 val/
             dataset.yaml
     """
+    datasets = datasets or ["dentex"]
     output_dir = Path(output_dir)
     images_out = output_dir / "images" / split
     labels_out = output_dir / "labels" / split
@@ -104,22 +163,41 @@ def convert_to_yolo_format(output_dir: str | Path, split: str = "train", data_di
     images_out.mkdir(parents=True, exist_ok=True)
     labels_out.mkdir(parents=True, exist_ok=True)
 
-    print(f"Loading {split} split from DENTEX (combine_enumeration_splits={split == 'train'})...")
-    try:
-        images_df, annots_df, _ = load_dentex_dataset(
-            data_dir=data_dir,
-            split_name=split,
-            combine_enumeration_splits=(split == "train"),
-        )
-    except Exception as e:
-        print(f"Failed to load split '{split}': {e}")
-        return
+    total_written = 0
+    for dataset_name in datasets:
+        if dataset_name not in DATASET_LOADERS:
+            print(f"Skipping unknown dataset '{dataset_name}' -- not in DATASET_LOADERS.")
+            continue
+        loader_spec = DATASET_LOADERS[dataset_name]
 
-    valid_images = images_df[images_df["local_path"].notna()].copy()
-    print(f"Found {len(valid_images)} valid images for split '{split}'. Processing...")
+        print(f"Loading {split} split from {dataset_name} (combine_enumeration_splits={split == 'train'})...")
+        try:
+            if dataset_name == "dentex":
+                images_df, annots_df, _ = loader_spec["load"](
+                    data_dir=data_dir, split_name=split, combine_enumeration_splits=(split == "train"),
+                )
+            else:
+                images_df, annots_df, _ = loader_spec["load"](data_dir=data_dir)
+        except Exception as e:
+            print(f"Failed to load '{dataset_name}' split '{split}': {e}")
+            continue
 
-    for _, img_row in tqdm(valid_images.iterrows(), total=len(valid_images)):
-        convert_single_image(img_row, annots_df, images_out, labels_out)
+        valid_images = images_df[images_df["local_path"].notna()].copy()
+        print(f"Found {len(valid_images)} valid images in {dataset_name} for split '{split}'. Processing...")
+
+        written = 0
+        for _, img_row in tqdm(valid_images.iterrows(), total=len(valid_images), desc=dataset_name):
+            result = convert_single_image(
+                img_row, annots_df, images_out, labels_out,
+                quadrant_position_fn=loader_spec["quadrant_position_fn"],
+                dataset_tag=dataset_name,
+            )
+            if result is not None:
+                written += 1
+        print(f"{dataset_name}: {written} images written.")
+        total_written += written
+
+    print(f"Total across {len(datasets)} dataset(s): {total_written} images.")
 
 
 def create_dataset_yaml(output_dir: str | Path, val_subdir: str = "images/validation"):
@@ -148,43 +226,79 @@ def prepare_cv_folds(
     n_folds: int = 5,
     data_dir: str = "data",
     seed: int = 42,
+    datasets: list[str] | None = None,
 ):
-    """Create k-fold cross-validation splits from DENTEX training data.
+    """Create k-fold cross-validation splits from the combined training pool.
 
-    - The 1339 training images are split into k folds via KFold.
-    - The 50 validation images are held out permanently as a separate test set.
+    - datasets (default ["dentex"], unchanged behavior from before this was
+      generalized): which named datasets (from DATASET_LOADERS) contribute
+      to the TRAINING pool that gets K-fold split.
+    - The held-out TEST set is always DENTEX's own 50 official validation
+      images, regardless of `datasets` -- deliberately never mixed with
+      other datasets. This is what keeps locate_tooth's reported numbers
+      comparable to the official DENTEX challenge leaderboard; adding more
+      training data should make the tool better, not change what it's
+      being measured against.
     - Each fold k gets: fold_k/{images,labels}/{train,val}/ + dataset.yaml
     - The held-out set goes to: test/{images,labels}/ + dataset.yaml
     """
+    datasets = datasets or ["dentex"]
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # --- Load training pool (1339 images) ---
-    print(f"Loading training split from DENTEX (combine_enumeration_splits=True)...")
-    train_images_df, train_annots_df, _ = load_dentex_dataset(
-        data_dir=data_dir,
-        split_name="train",
-        combine_enumeration_splits=True,
-    )
-    train_images_df = train_images_df[train_images_df["local_path"].notna()].copy()
-    print(f"Training pool: {len(train_images_df)} images")
+    # --- Load training pool, combined across every requested dataset ---
+    # Each entry is (dataset_name, images_df, annots_df, quadrant_position_fn).
+    # Kept as separate DataFrames per dataset (not concatenated into one) so
+    # numeric image ids from different sources can never collide -- a
+    # combined pool is built below using (dataset_name, id) compound keys.
+    train_pools: list[tuple[str, pd.DataFrame, pd.DataFrame, Callable]] = []
+    for dataset_name in datasets:
+        if dataset_name not in DATASET_LOADERS:
+            print(f"Skipping unknown dataset '{dataset_name}' -- not in DATASET_LOADERS.")
+            continue
+        loader_spec = DATASET_LOADERS[dataset_name]
+        print(f"Loading training pool from {dataset_name}...")
+        try:
+            if dataset_name == "dentex":
+                images_df, annots_df, _ = loader_spec["load"](
+                    data_dir=data_dir, split_name="train", combine_enumeration_splits=True,
+                )
+            else:
+                images_df, annots_df, _ = loader_spec["load"](data_dir=data_dir)
+        except Exception as e:
+            print(f"Failed to load '{dataset_name}' training pool: {e}")
+            continue
+        images_df = images_df[images_df["local_path"].notna()].copy()
+        print(f"  {dataset_name} training pool: {len(images_df)} images")
+        train_pools.append((dataset_name, images_df, annots_df, loader_spec["quadrant_position_fn"]))
 
-    # --- Load held-out validation set (50 images) ---
-    print(f"Loading validation split from DENTEX (held-out test set)...")
+    if not train_pools:
+        print("No datasets loaded successfully -- nothing to do.")
+        return
+
+    # --- Load DENTEX's held-out validation set (50 images) -- ALWAYS DENTEX-only ---
+    print(f"Loading validation split from DENTEX (held-out test set, never mixed with other datasets)...")
     val_images_df, val_annots_df, _ = load_dentex_dataset(
         data_dir=data_dir,
         split_name="validation",
         combine_enumeration_splits=False,
     )
     val_images_df = val_images_df[val_images_df["local_path"].notna()].copy()
-    print(f"Held-out test set: {len(val_images_df)} images")
+    print(f"Held-out test set: {len(val_images_df)} images (DENTEX only)")
 
-    # --- Create k-fold splits ---
-    image_ids = train_images_df["id"].unique()
+    # --- Build a combined (dataset_name, image_id) pool for K-fold splitting ---
+    combined_keys = [
+        (dataset_name, img_id)
+        for dataset_name, images_df, _, _ in train_pools
+        for img_id in images_df["id"].unique()
+    ]
     kf = KFold(n_splits=n_folds, shuffle=True, random_state=seed)
-    fold_ids = list(kf.split(image_ids))
+    fold_ids = list(kf.split(combined_keys))
 
-    fold_summary = {"n_folds": n_folds, "seed": seed, "folds": [], "test_count": len(val_images_df)}
+    fold_summary = {
+        "n_folds": n_folds, "seed": seed, "datasets": datasets, "folds": [],
+        "test_count": len(val_images_df),
+    }
 
     for fold_idx, (train_idx, val_idx) in enumerate(fold_ids):
         print(f"\n--- Fold {fold_idx + 1}/{n_folds} ---")
@@ -198,26 +312,27 @@ def prepare_cv_folds(
         for d in [train_img_dir, train_lbl_dir, val_img_dir, val_lbl_dir]:
             d.mkdir(parents=True, exist_ok=True)
 
-        # Get image IDs for this fold's train/val splits
-        train_ids = set(image_ids[train_idx])
-        val_ids = set(image_ids[val_idx])
+        train_keys = {combined_keys[i] for i in train_idx}
+        val_keys = {combined_keys[i] for i in val_idx}
 
-        fold_train_df = train_images_df[train_images_df["id"].isin(train_ids)]
-        fold_val_df = train_images_df[train_images_df["id"].isin(val_ids)]
-
-        # Convert train images
         train_count = 0
-        for _, img_row in tqdm(fold_train_df.iterrows(), total=len(fold_train_df), desc=f"Fold {fold_idx} train"):
-            result = convert_single_image(img_row, train_annots_df, train_img_dir, train_lbl_dir)
-            if result is not None:
-                train_count += 1
-
-        # Convert val images
         val_count = 0
-        for _, img_row in tqdm(fold_val_df.iterrows(), total=len(fold_val_df), desc=f"Fold {fold_idx} val"):
-            result = convert_single_image(img_row, train_annots_df, val_img_dir, val_lbl_dir)
-            if result is not None:
-                val_count += 1
+        for dataset_name, images_df, annots_df, qp_fn in train_pools:
+            fold_train_ids = {img_id for (dn, img_id) in train_keys if dn == dataset_name}
+            fold_val_ids = {img_id for (dn, img_id) in val_keys if dn == dataset_name}
+
+            fold_train_df = images_df[images_df["id"].isin(fold_train_ids)]
+            fold_val_df = images_df[images_df["id"].isin(fold_val_ids)]
+
+            for _, img_row in tqdm(fold_train_df.iterrows(), total=len(fold_train_df), desc=f"Fold {fold_idx} train ({dataset_name})"):
+                result = convert_single_image(img_row, annots_df, train_img_dir, train_lbl_dir, quadrant_position_fn=qp_fn, dataset_tag=dataset_name)
+                if result is not None:
+                    train_count += 1
+
+            for _, img_row in tqdm(fold_val_df.iterrows(), total=len(fold_val_df), desc=f"Fold {fold_idx} val ({dataset_name})"):
+                result = convert_single_image(img_row, annots_df, val_img_dir, val_lbl_dir, quadrant_position_fn=qp_fn, dataset_tag=dataset_name)
+                if result is not None:
+                    val_count += 1
 
         # Generate dataset.yaml for this fold
         create_dataset_yaml(fold_dir, val_subdir="images/val")
@@ -239,7 +354,7 @@ def prepare_cv_folds(
 
     test_count = 0
     for _, img_row in tqdm(val_images_df.iterrows(), total=len(val_images_df), desc="Test set"):
-        result = convert_single_image(img_row, val_annots_df, test_img_dir, test_lbl_dir)
+        result = convert_single_image(img_row, val_annots_df, test_img_dir, test_lbl_dir, quadrant_position_fn=dentex_row_to_fdi, dataset_tag="dentex")
         if result is not None:
             test_count += 1
 
@@ -255,7 +370,7 @@ def prepare_cv_folds(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Prepare YOLO dataset from DENTEX.")
+    parser = argparse.ArgumentParser(description="Prepare YOLO dataset from one or more datasets.")
     parser.add_argument(
         "--mode",
         choices=["train", "cv"],
@@ -264,16 +379,27 @@ if __name__ == "__main__":
     )
     parser.add_argument("--folds", type=int, default=5, help="Number of CV folds (only used with --mode cv)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for KFold shuffle")
+    parser.add_argument(
+        "--datasets",
+        type=str,
+        default="dentex",
+        help="Comma-separated dataset names from DATASET_LOADERS to combine (default: dentex only, "
+             "unchanged behavior). e.g. --datasets dentex,tufts once tufts.py's annotation mapping "
+             "is implemented. The held-out CV test set (--mode cv) is always DENTEX's own 50 "
+             "official validation images regardless of this flag -- see prepare_cv_folds' docstring.",
+    )
     args = parser.parse_args()
+    dataset_list = [d.strip() for d in args.datasets.split(",") if d.strip()]
+    dir_suffix = "_".join(dataset_list) if dataset_list != ["dentex"] else "dentex"
 
     if args.mode == "train":
-        yolo_dir = Path("data/yolo_dentex")
-        print("Preparing YOLO Dataset (static split mode)...")
-        convert_to_yolo_format(yolo_dir, split="validation")
-        convert_to_yolo_format(yolo_dir, split="train")
+        yolo_dir = Path(f"data/yolo_{dir_suffix}")
+        print(f"Preparing YOLO Dataset (static split mode) for {dataset_list}...")
+        convert_to_yolo_format(yolo_dir, split="validation", datasets=dataset_list)
+        convert_to_yolo_format(yolo_dir, split="train", datasets=dataset_list)
         create_dataset_yaml(yolo_dir, val_subdir="images/validation")
         print(f"\nDone! Dataset ready at {yolo_dir}/dataset.yaml")
     else:
-        yolo_dir = Path("data/yolo_dentex_cv")
-        print(f"Preparing YOLO Dataset ({args.folds}-fold cross-validation mode)...")
-        prepare_cv_folds(yolo_dir, n_folds=args.folds, seed=args.seed)
+        yolo_dir = Path(f"data/yolo_{dir_suffix}_cv")
+        print(f"Preparing YOLO Dataset ({args.folds}-fold cross-validation mode) for {dataset_list}...")
+        prepare_cv_folds(yolo_dir, n_folds=args.folds, seed=args.seed, datasets=dataset_list)
