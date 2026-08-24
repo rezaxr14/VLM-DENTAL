@@ -551,6 +551,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Only display current pool status and progress without processing",
     )
+    parser.add_argument(
+        "--ignore-429",
+        action="store_true",
+        help="Ignore 429 rate limit errors and retry up to 10 times",
+    )
     args = parser.parse_args()
     if args.total_slices > 1 and not (1 <= args.slice_index <= args.total_slices):
         parser.error('slice_index must be >= 1 and <= total_slices')
@@ -578,6 +583,8 @@ def main() -> None:
     args = parse_args()
     
     import os
+    if args.ignore_429:
+        os.environ["IGNORE_429"] = "true"
     import dental_agent.training.trace_generation as tg
 
     if args.generator_provider:

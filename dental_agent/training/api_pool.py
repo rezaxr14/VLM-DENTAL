@@ -437,34 +437,55 @@ def call_llm(
     "Internal server error". Every other failure (429 rate-limited, 413 too-large,
     anything else) keeps the original hard-stop-no-retries behavior, since retrying
     those unchanged just fails the same way again and burns quota for nothing.
+    (Exception: if IGNORE_429 is set in env, allows up to 10 retries for 429 errors.)
     """
-    try:
-        return _call_llm_once(
-            provider, model, system_prompt, user_content, image=image,
-            max_tokens=max_tokens, temperature=temperature,
-            response_mime_type=response_mime_type, role=role, **kwargs,
-        )
-    except Exception as e:
-        msg = str(e)
-        status_code = getattr(getattr(e, "response", None), "status_code", None) or getattr(e, "status_code", None)
-        msg_lower = msg.lower()
-        is_5xx = (
-            "internal server error" in msg_lower
-            or "unavailable" in msg_lower  # Gemini: "503 UNAVAILABLE. ... high demand ..."
-            or any(f"{code} " in msg or f"{code}." in msg or msg.strip().startswith(str(code))
-                   for code in (500, 502, 503, 504))
-            or (isinstance(status_code, int) and 500 <= status_code < 600)
-        )
-        if not is_5xx:
-            raise RuntimeError(f"{msg}: Hard stop on API errors per rule. No retries allowed. Exiting.")
-
-        print(f"  [retry] {provider}: transient 5xx-class error, retrying once in 5s...", flush=True)
-        time.sleep(5)
+    retries_429 = 0
+    retries_5xx = 0
+    max_429_retries = 10
+    
+    while True:
         try:
             return _call_llm_once(
                 provider, model, system_prompt, user_content, image=image,
                 max_tokens=max_tokens, temperature=temperature,
                 response_mime_type=response_mime_type, role=role, **kwargs,
             )
-        except Exception as e2:
-            raise RuntimeError(f"{e2}: Hard stop after one retry. No further retries allowed. Exiting.")
+        except Exception as e:
+            msg = str(e)
+            status_code = getattr(getattr(e, "response", None), "status_code", None) or getattr(e, "status_code", None)
+            msg_lower = msg.lower()
+            
+            is_5xx = (
+                "internal server error" in msg_lower
+                or "unavailable" in msg_lower  # Gemini: "503 UNAVAILABLE. ... high demand ..."
+                or any(f"{code} " in msg or f"{code}." in msg or msg.strip().startswith(str(code))
+                       for code in (500, 502, 503, 504))
+                or (isinstance(status_code, int) and 500 <= status_code < 600)
+            )
+            
+            is_429 = (
+                "429" in msg or
+                "rate limit" in msg_lower or
+                "too many requests" in msg_lower or
+                (isinstance(status_code, int) and status_code == 429)
+            )
+            
+            if is_429 and os.environ.get("IGNORE_429", "false").lower() == "true":
+                if retries_429 < max_429_retries:
+                    print(f"  [retry] {provider}: 429 Rate Limit Hit (attempt {retries_429+1}/{max_429_retries}). Sleeping 5s before retrying...", flush=True)
+                    time.sleep(5)
+                    retries_429 += 1
+                    continue
+                else:
+                    raise RuntimeError(f"{msg}: Hard stop on API errors per rule. 429 Max retries ({max_429_retries}) exceeded. Exiting.")
+            
+            if not is_5xx:
+                raise RuntimeError(f"{msg}: Hard stop on API errors per rule. No retries allowed. Exiting.")
+
+            if retries_5xx == 0:
+                print(f"  [retry] {provider}: transient 5xx-class error, retrying once in 5s...", flush=True)
+                time.sleep(5)
+                retries_5xx += 1
+                continue
+            
+            raise RuntimeError(f"{msg}: Hard stop after one retry. No further retries allowed. Exiting.")
