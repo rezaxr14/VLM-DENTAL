@@ -216,9 +216,10 @@ def _run_generate_for_dataset(args: argparse.Namespace, cfg: Any, dataset_name: 
             if pid in local_paths_map and local_paths_map[pid] is not None:
                 return str(local_paths_map[pid])
             return row["local_path"]
-        # Use .copy() to avoid SettingWithCopyWarning
-        eligible_imgs = eligible_imgs.copy()
-        eligible_imgs["local_path"] = eligible_imgs.apply(_update_path, axis=1)
+        # Update the original imgs_df so downstream functions like generate_only see the new paths
+        imgs_df["local_path"] = imgs_df.apply(_update_path, axis=1)
+        # Re-filter eligible_imgs based on the updated imgs_df
+        eligible_imgs = imgs_df[imgs_df["id"].isin(eligible_imgs["id"])]
         
     eligible_imgs = eligible_imgs[eligible_imgs["local_path"].notna() & (eligible_imgs["local_path"] != "None")]
 
