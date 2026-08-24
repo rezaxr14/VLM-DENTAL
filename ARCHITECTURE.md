@@ -59,7 +59,12 @@ This is the heart of the project containing all reusable logic. It is imported b
 - `judge.py`: **LLM-as-a-judge.** Takes a trajectory's textual reasoning, prompts a powerful API model to grade its subjective clinical quality, and outputs a qualitative score.
 
 ### `dental_agent/data/` (Dataset Handling)
-- `dentex.py`: **The DENTEX loader.** Takes the raw DENTEX JSON/image dataset files from disk, and outputs clean pandas DataFrames ready for training.
+- `dentex.py`: **The DENTEX loader.** Takes the raw DENTEX JSON/image dataset files from disk, and outputs clean pandas DataFrames ready for training. Also owns `dentex_row_to_fdi()` -- the single source of truth for DENTEX's 0-indexed-to-FDI conversion (see `roadmap.md` and `.agents/rules/vlm_dental.md` Rule 1 -- this function existing and being centrally called is a direct fix for a real, previously-silent scoring bug).
+- `dataset_catalog.py`: **The prioritization reference.** A transcription of a peer-reviewed systematic review (Uribe et al. 2024) of 16 public dental imaging datasets, each flagged with `has_diagnosis_labels` -- the load-bearing distinction between "feeds diagnosis trace-gen" (DENTEX, so far) and "grounding-only, expands `locate_tooth`'s training corpus" (everything else). Read this module's docstring before adding a new dataset.
+- `tufts.py`: **Tufts Panoramic Dataset loader (in progress, blocked).** Image discovery implemented; tooth-position and diagnosis-category mapping are deliberate `NotImplementedError` hard stops pending real file access -- see `roadmap.md`'s Datasets section.
+- `tunisia_panoramic.py`: **Tunisia Panoramic Dental Xray Dataset loader (in progress).** Image discovery, VIA2 JSON parsing, and bbox-from-region geometry implemented and tested; FDI-position mapping (`_region_to_fdi`) is a deliberate `NotImplementedError` hard stop -- see `roadmap.md`'s Datasets section.
+- `hf_dataset_utils.py`: **Shared per-image HF upload/download layer.** Dataset-agnostic "upload once, download only the image IDs a given slice needs" mechanism used by DENTEX, Tufts, and Tunisia alike, so each new dataset loader doesn't reimplement this.
+- `slicing.py`: **Cross-dataset seeding/slicing utilities** for building consistent train/eval subsets across multiple combined datasets.
 - `preprocessing.py`: **The image cleaner.** Takes raw X-ray images, applies resizing and normalization, and outputs standardized image arrays.
 - `splits.py`: **The divider.** Takes the full dataset DataFrames, ensures images are safely split without data leakage, and outputs isolated train, validation, and test subsets.
 - `statistics.py`: **The analyzer.** Takes dataset DataFrames, calculates class distributions (e.g., Caries vs Impacted teeth), and outputs statistical summaries.
@@ -106,7 +111,8 @@ These are the executable scripts you run from the terminal. They wire the core p
 
 ### Dataset & Model Training
 - **`download_dataset.py`**: Takes hardcoded URLs, automates downloading, and outputs extracted multi-GB datasets to disk.
-- **`prepare_yolo_dataset.py`**: Takes DENTEX COCO annotations, converts bounding box coordinates, and outputs YOLO-formatted text files for Ultralytics training.
+- **`upload_dataset_images_to_hf.py`**: Bundles one dataset's images into a COCO-shaped `train.json` + image files and uploads them to a lightweight per-image HF repo (via a `DATASET_BUNDLERS` registry -- `dentex`/`tufts`/`tunisia`), so downstream training can `hf_dataset_utils.py`-download only the image IDs a given slice actually needs instead of the full multi-GB archive.
+- **`prepare_yolo_dataset.py`**: Converts one or more datasets' annotations (via a `DATASET_LOADERS` registry -- DENTEX live, Tufts/Tunisia pending their loaders' open verification questions, see `roadmap.md`) into YOLO-formatted text files for Ultralytics training. Trains a 32-class detector, one class per FDI (quadrant, position) pair (`class_idx = (quadrant-1)*8 + (position-1)`) -- not a single-class "is this a tooth" detector, which matters for what kind of annotation a new dataset needs to supply.
 - **`train_grounding_tool.py`**: **(Phase 2)** Takes the YOLO dataset, triggers 5-fold cross-validation YOLOv8m training, and outputs the trained model weights to `data/models/grounding_tool_cv_best/`.
 - **`train_sft.py`** / **`run_sft.py`**: **(Phase 3)** Takes the verified JSONL traces (`train_cot_traces.jsonl`) and base Qwen model, runs the supervised training loop with `QwenVLDataCollator`, and outputs a fine-tuned LoRA adapter.
   - `--dataset_path PATH`: Path to traces JSONL (default: `data/traces/train_cot_traces.jsonl`).

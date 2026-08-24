@@ -121,11 +121,41 @@ def _prepare_tufts_bundle(temp_dir_path: Path, cfg):
     return eligible_imgs, "jpg"
 
 
+def _prepare_tunisia_bundle(temp_dir_path: Path, cfg):
+    """Writes a fresh COCO-shaped train.json built from Tunisia's own
+    DataFrames -- same approach as _prepare_tufts_bundle, since there's no
+    pre-existing DENTEX-style JSON to copy. Will raise NotImplementedError,
+    same as load_tunisia_dataset itself, until tunisia_panoramic.py's
+    region-to-FDI mapping is filled in -- see that module's docstring.
+    Note: this dataset has has_diagnosis_labels=False (dataset_catalog.py)
+    -- the resulting train.json will never carry a diagnosis category,
+    only tooth-position ground truth for locate_tooth.
+    """
+    from dental_agent.data.tunisia_panoramic import load_tunisia_dataset
+
+    print("Loading Tunisia (Panoramic Dental Xray Dataset) locally...")
+    imgs_df, annots_df, cats_df = load_tunisia_dataset(data_dir=cfg.data_dir)
+
+    coco_json = {
+        "images": imgs_df.to_dict(orient="records"),
+        "annotations": annots_df.to_dict(orient="records"),
+        "categories": cats_df.to_dict(orient="records"),
+    }
+    with open(temp_dir_path / "train.json", "w") as f:
+        json.dump(coco_json, f)
+
+    valid_imgs = imgs_df[imgs_df["local_path"].notna()]
+    annotated_ids = set(annots_df["image_id"].unique())
+    eligible_imgs = valid_imgs[valid_imgs["id"].isin(annotated_ids)]
+    return eligible_imgs, "jpg"
+
+
 # Add a new dataset by adding one entry here, pointing at a new bundler
 # function above -- not a new copy of main()'s staging/upload logic below.
 DATASET_BUNDLERS = {
     "dentex": _prepare_dentex_bundle,
     "tufts": _prepare_tufts_bundle,
+    "tunisia": _prepare_tunisia_bundle,
 }
 
 
@@ -133,8 +163,11 @@ def main():
     parser = argparse.ArgumentParser(description="Upload a dataset's images to Hugging Face Hub")
     parser.add_argument(
         "--dataset", type=str, required=True, choices=list(DATASET_BUNDLERS.keys()),
-        help="Which dataset to upload. tufts will raise NotImplementedError until its "
-             "annotation mapping is filled in -- see dental_agent/data/tufts.py.",
+        help="Which dataset to upload. tufts and tunisia will both raise NotImplementedError "
+             "until their annotation mapping is filled in -- see dental_agent/data/tufts.py "
+             "and dental_agent/data/tunisia_panoramic.py respectively. tunisia additionally "
+             "has has_diagnosis_labels=False (dataset_catalog.py): its bundle will never "
+             "carry a diagnosis category, regardless of the mapping question.",
     )
     parser.add_argument("--repo-id", type=str, required=True, help="HF Dataset Repo ID (e.g. rezaxr14/dentex-train-images)")
     args = parser.parse_args()

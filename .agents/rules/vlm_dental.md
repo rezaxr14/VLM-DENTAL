@@ -9,9 +9,11 @@ When working on the `VLM-DENTAL` repository, adhere strictly to the following ru
 ## 1. DENTEX "0-Index" Quirk (CRITICAL)
 The DENTEX JSON labels map `category_id_1` to quadrants and `category_id_2` to tooth positions using a **0-indexed system** (Quadrant: 0=Upper Right ... 3=Lower Right. Position: 0 to 7).
 
-**Rule:** The LLM and all Agent Prompts explicitly demand the use of **FDI Two-Digit Notation** (Quadrants 1-4, Positions 1-8). 
+**Rule:** The LLM and all Agent Prompts explicitly demand the use of **FDI Two-Digit Notation** (Quadrants 1-4, Positions 1-8).
 - **DO NOT** pass 0-indexed quadrants to the Verifier or LLM. It will reject perfectly valid traces.
-- `trace_generation.py` handles the translation automatically. DO NOT remove that logic.
+- **`dentex_row_to_fdi(row)` in `dental_agent/data/dentex.py` is the single source of truth for this conversion.** It used to be implemented once (in `trace_generation.py`) and then hand-re-implemented, incorrectly, in seven other files (`ablations.py`, `baselines.py`, `batch_runner.py`, `judge.py`, `detector.py`, `test_aim1_trace.py`, and one more) that built ground truth straight from the raw 0-indexed columns without the +1. That silently scored a correct model answer as wrong on 50% of `R_accuracy`'s weight across the GRPO reward, ablations, baselines, and batch eval, for an unknown period, because the code ran fine — it just computed something quietly wrong. All eight files now call `dentex_row_to_fdi()` instead.
+- **DO NOT hand-write `+ 1` (or any other index-shift arithmetic) against `category_id_1`/`category_id_2` anywhere in this codebase.** Import and call `dentex_row_to_fdi()`. This is exactly the pattern that caused the bug above — a second hand-rolled copy of "the same" logic that silently drifted from the original.
+- This conversion is DENTEX-specific, not universal. Other dataset loaders (Tufts, Tunisia, and any future one) are expected to hand back already-correct 1-indexed FDI values directly — `dentex_row_to_fdi()` must NOT be applied to their output, or it will double-increment and reintroduce a version of the same bug in the opposite direction. This is why `prepare_yolo_dataset.py`'s `DATASET_LOADERS` registry gives each dataset its own `quadrant_position_fn` rather than hardcoding one conversion for all of them.
 
 ## 2. Tool Registration & Image Arguments
 All AI diagnostic tools simulate a radiologist's workstation. 
@@ -59,3 +61,16 @@ The LangGraph loop (`langgraph_loop.py`) runs tool calls dynamically and for rea
 
 ## 11. STRICT NO GIT PUSH RULE (CRITICAL)
 - **Rule:** NEVER UNDER ANY CIRCUMSTANCES run `git push` or `git commit`. DO NOT assume you should push changes even if you generated a model or wrote a script. The user must manually handle all git pushes. Your job is only to write code locally.
+
+## 12. Dataset Annotation Semantics: Honest Stop, Not a Guess (CRITICAL)
+This project trains a medical diagnostic pipeline. A wrong label that looks
+plausible is worse than no label, because nothing downstream catches it —
+the code runs, the model trains, the numbers look reasonable, and the error
+only surfaces (if ever) as unexplained underperformance much later. Rule 1
+above is the concrete example of exactly this failure mode already having
+happened once for real.
+
+- **Rule:** When writing or extending a dataset loader (`dental_agent/data/*.py`), if a label's meaning, numbering convention, or category mapping is not confirmed directly against the real annotation file or its published documentation, do NOT guess or infer it from a plausible-sounding secondary source. Raise `NotImplementedError` with a docstring explaining exactly what to check and why, and implement everything else in the loader that IS independently verifiable (file discovery, parsing a published/standard annotation format, geometric bbox computation from a polygon, etc.).
+- **Rule:** Keep the verifiable and unverifiable parts of a loader separable. Don't let one unresolved semantic question block code that doesn't actually depend on it — see `dental_agent/data/tunisia_panoramic.py` for the pattern: VIA JSON parsing and bbox-from-region geometry are fully implemented and tested, because they follow a published, dataset-independent format; only `_region_to_fdi` (a dataset-specific semantic mapping) hard-stops.
+- **Rule:** A dataset with `has_diagnosis_labels=False` in `dental_agent/data/dataset_catalog.py` must never be wired into anything that expects a diagnosis category to exist (e.g. `category_id_3`, `R_accuracy`'s diagnosis term). It can only ever expand `locate_tooth`'s grounding training data. Check this flag before assuming a new dataset feeds trace-gen.
+- Established precedent: `dental_agent/data/tufts.py` (mask-instance-to-FDI-position and abnormality-to-diagnosis-category mappings) and `dental_agent/data/tunisia_panoramic.py` (`_region_to_fdi`) both follow this pattern deliberately. If you're asked to "just fill in" one of these NotImplementedError stops, verify against the real file first — see each function's docstring for exactly what to check.

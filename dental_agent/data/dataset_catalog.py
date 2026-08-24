@@ -19,8 +19,11 @@ Tufts.
 
 This module holds only what's actually citable from that review -- name,
 modality, size, license, annotation type/tool, and whether registration is
-required. It does NOT include a loader for every entry; dentex.py and
-tufts.py are the only two with actual code. Entries here are a prioritization
+required. It does NOT include a loader for every entry; dentex.py, tufts.py,
+and tunisia_panoramic.py are the only three with actual code (and of those,
+only dentex.py currently returns usable annotations end-to-end -- the other
+two each have one open, honestly-flagged verification question blocking
+them, see their own module docstrings). Entries here are a prioritization
 aid for "what to scaffold next," not a claim that all of them are ready to
 use.
 """
@@ -141,7 +144,11 @@ PANORAMIC_DATASETS: list[DatasetEntry] = [
                      "in any part.",
         notes="Most permissively licensed panoramic dataset found (plain CC BY). Still a strong "
               "candidate for expanding locate_tooth's training corpus specifically -- not for "
-              "diagnosis trace-gen, contrary to this entry's earlier framing in this file.",
+              "diagnosis trace-gen, contrary to this entry's earlier framing in this file. "
+              "In progress (tunisia_panoramic.py): image discovery, VIA JSON parsing, and "
+              "bbox-from-region geometry are implemented; region-to-FDI mapping is the one "
+              "open question blocking category_id_1/category_id_2 construction -- see that "
+              "module's _region_to_fdi docstring for exactly what to verify.",
     ),
     DatasetEntry(
         name="Panoramic-Caries-Segmentation",

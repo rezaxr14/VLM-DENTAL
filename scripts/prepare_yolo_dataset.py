@@ -38,6 +38,19 @@ DATASET_LOADERS: dict[str, dict] = {
     # that module's docstring). tufts.py's own loader should hand back
     # already-correct FDI values, so its conversion function is the
     # identity, not another +1.
+    #
+    # "tunisia": {
+    #     "load": load_tunisia_dataset,
+    #     "quadrant_position_fn": lambda row: (int(row["category_id_1"]), int(row["category_id_2"])),
+    # },
+    # Uncomment once dental_agent/data/tunisia_panoramic.py's region-to-FDI
+    # mapping is implemented (currently raises NotImplementedError by
+    # design -- see that module's _region_to_fdi docstring). Same identity
+    # (not +1) reasoning as tufts above. IMPORTANT, unlike tufts: this
+    # dataset has has_diagnosis_labels=False in dataset_catalog.py -- it
+    # can only ever expand locate_tooth's grounding training corpus here,
+    # never feed diagnosis trace-gen. Don't wire it into anything that
+    # expects category_id_3 (diagnosis) to exist.
 }
 
 
@@ -384,9 +397,11 @@ if __name__ == "__main__":
         type=str,
         default="dentex",
         help="Comma-separated dataset names from DATASET_LOADERS to combine (default: dentex only, "
-             "unchanged behavior). e.g. --datasets dentex,tufts once tufts.py's annotation mapping "
-             "is implemented. The held-out CV test set (--mode cv) is always DENTEX's own 50 "
-             "official validation images regardless of this flag -- see prepare_cv_folds' docstring.",
+             "unchanged behavior). e.g. --datasets dentex,tufts or --datasets dentex,tunisia once "
+             "the respective loader's annotation mapping is implemented (both currently raise "
+             "NotImplementedError by design). The held-out CV test set (--mode cv) is always "
+             "DENTEX's own 50 official validation images regardless of this flag -- see "
+             "prepare_cv_folds' docstring.",
     )
     args = parser.parse_args()
     dataset_list = [d.strip() for d in args.datasets.split(",") if d.strip()]
