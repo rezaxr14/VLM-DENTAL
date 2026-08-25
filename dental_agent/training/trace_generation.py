@@ -25,6 +25,7 @@ import pandas as pd
 from dental_agent.agent.langgraph_loop import run_trace_gen
 from dental_agent.agent.parsing import parse_agent_json
 from dental_agent.agent.prompts import build_agent_system_prompt
+from dental_agent.data.dentex import dentex_row_to_fdi
 from dental_agent.tools.registry import ToolRegistry
 from dental_agent.training.api_pool import (
     call_llm,
@@ -91,10 +92,7 @@ def _format_ground_truth(anns: pd.DataFrame, cat_lookup: dict[int, str], diag_co
         diag_name = cat_lookup.get(diag_id) or fallback_map.get(diag_id, "unknown")
 
         # Convert DENTEX 0-indexed categories to standard FDI notation
-        # DENTEX quadrant (0-3) -> FDI (1-4)
-        # DENTEX position (0-7) -> FDI (1-8)
-        fdi_quadrant = int(ann.get("category_id_1", 0)) + 1
-        fdi_position = int(ann.get("category_id_2", 0)) + 1
+        fdi_quadrant, fdi_position = dentex_row_to_fdi(ann)
 
         findings.append({
             "quadrant": fdi_quadrant,

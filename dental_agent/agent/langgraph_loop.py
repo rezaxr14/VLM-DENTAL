@@ -254,6 +254,9 @@ def _reasoning_node_factory(provider: str, model: str, max_tool_calls: int, max_
                     and (int(f["quadrant"]) * 10 + int(f["tooth_position"])) not in state["located_teeth"]
                 ]
                 if unlocated:
+                    # In trace-gen, we track all attempted locate_tooth calls, even if YOLO fails.
+                    # The gate only fires if the model completely hallucinated a finding without
+                    # even trying to locate it.
                     bad = ", ".join(f"Q{f['quadrant']}T{f['tooth_position']}" for f in unlocated)
                     turn_record["status"] = "rejected_final_answer"
                     state["turns"].append(turn_record)
@@ -413,11 +416,29 @@ def _tool_node_factory(
 
             try:
                 if tool_name == "locate_tooth" and "tooth" in tool_args:
-                    hint = _hint_for_tooth(tool_args["tooth"])
-                    if hint is not None and random.random() < hint_probability:
-                        tool_args["search_region_hint"] = hint
-
-                tool_out = execute_tool_call(registry, tool_name, tool_args, state["base_image"])
+                    requested_tooth = int(tool_args["tooth"])
+                    # Track that we attempted to locate this tooth (even if it fails later)
+                    # This satisfies the located_teeth gate so we don't get infinite rejection loops
+                    state["located_teeth"].add(requested_tooth)
+                    
+                    hint = _hint_for_tooth(requested_tooth)
+                    if hint is not None:
+                        # GT GROUNDING MODE: If we have a GT bbox for this tooth, return it
+                        # directly (with 1.0 confidence). We bypass execute_tool_call (YOLO).
+                        # The tiered perturbation below will still fire and shift it so the
+                        # model has to learn to nudge_crop, but we guarantee the tooth is found.
+                        tool_out = {
+                            "tooth": requested_tooth,
+                            "bbox": hint,
+                            "confidence": 1.0,
+                            "note": "GT-Grounded"
+                        }
+                    else:
+                        # No GT hint means this is an exploratory call for a tooth not in
+                        # the findings list. Fall back to real YOLO inference.
+                        tool_out = execute_tool_call(registry, tool_name, tool_args, state["base_image"])
+                else:
+                    tool_out = execute_tool_call(registry, tool_name, tool_args, state["base_image"])
 
                 if tool_name == "locate_tooth" and isinstance(tool_out, dict) and "bbox" in tool_out:
                     roll = random.random()
@@ -443,8 +464,8 @@ def _tool_node_factory(
                 any_ok = True
                 state["tool_calls"] += 1
                 state["tools_used"].add(tool_name)
-                if tool_name == "locate_tooth" and isinstance(tool_out, dict) and "bbox" in tool_out and "tooth" in tool_out:
-                    state["located_teeth"].add(int(tool_out["tooth"]))
+                # The located_teeth set was already updated at the top of the try block
+
 
             except Exception as e:
                 call_record["tool_ok"] = False

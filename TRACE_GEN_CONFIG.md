@@ -15,12 +15,11 @@ and adjust, rather than re-deriving the reasoning from scratch.
 - (Superseded number, do not use: mAP50 ≈ 0.647 from an earlier training run — still
   incorrectly referenced in figures/visualization_prompts.md as of this file's writing.)
 
-## Trace-gen hint mechanism (search_region_hint)
+## Trace-gen hint mechanism and Ground-Truth Grounding
 
-- `hint_probability = 1.0` — search_region_hint is always applied when ground truth
-  exists for the requested tooth. This gives the real detector the best chance of a
-  correct result; it is NOT a synthetic "perfect answer" injection — what's shown is
-  still real (hint-narrowed) YOLO inference, which can occasionally still miss.
+- During trace generation, `locate_tooth` operates in **Ground-Truth Grounding mode**: if the requested tooth has a known ground-truth bounding box, the tool returns it directly (bypassing the real YOLO detector), guaranteeing the tooth is found. The tiered perturbation below is then applied to this perfect box before showing it to the model, preserving the need for `nudge_crop` without suffering YOLO's recall failures.
+- If the model requests a tooth that is *not* in the ground truth (an exploratory call), the tool falls back to real YOLO inference.
+- `hint_probability = 1.0` — when falling back to YOLO, the GT bbox (if any) is passed as a `search_region_hint` to give the detector the best chance.
 
 ## Trace-gen perturbation mechanism (what the model is actually shown)
 
