@@ -358,7 +358,7 @@ def _tool_node_factory(
 
     def _hint_for_tooth(fdi_number: int) -> list[float] | None:
         """Look up this trace's ground truth for a bbox matching the requested FDI
-        tooth, for locate_tooth's search_region_hint (Section 2c) -- privileged,
+        tooth, for locate_tooth's Ground-Truth Grounding bypass -- privileged,
         pipeline-internal only, never derived from anything the model said."""
         fdi_str = str(fdi_number)
         if len(fdi_str) != 2:

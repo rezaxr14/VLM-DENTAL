@@ -88,22 +88,7 @@ hand-rolled copy of the same logic.
 - **Bulletproof Parsing Engine** (`parsing.py`): Intelligently parses mixed
   XML/JSON outputs, repairs truncated API responses, and recovers from
   broken outputs without killing the trajectory loop.
-- **Self-Correcting Grounding (`nudge_crop`):** An 8th tool letting the
-  agent shift/rescale a bounding box it was already given, instead of
-  blindly trusting `locate_tooth`. `locate_tooth`'s `search_region_hint` is
-  always applied when ground truth exists (`hint_probability=1.0`) — but
-  this only narrows *where the real detector searches*, it does not hand
-  over the answer. What the model is actually *shown* is then
-  independently tier-perturbed: **clean 45% / small offset 25% (12–28% of
-  box size) / large offset 30% (45–75% of box size)**, applied only to the
-  displayed bbox, never to what's logged internally as ground truth. Tier
-  probabilities and offset ranges are fixed/configured rather than derived
-  from the real detector's current accuracy — **deliberately**, so today's
-  traces don't silently go stale as the grounding tool improves later; a
-  trace teaching "here's when to trust vs. correct a detection" stays valid
-  regardless of how good `locate_tooth` gets. Full numbers in
-  `TRACE_GEN_CONFIG.md`; full reasoning in `_tool_node_factory`'s docstring
-  (`langgraph_loop.py`).
+- **Self-Correcting Grounding**: We can't let traces succeed by blindly trusting `locate_tooth`. `locate_tooth` uses **Ground-Truth Grounding** during trace generation when ground truth exists for the requested tooth (guaranteeing it is found) — but what the model is actually *shown* is intentionally perturbed independently of this (45% clean, 25% small offset, 30% large offset). This forces the LLM to use `nudge_crop` based on genuine visual judgment rather than as a scripted step, preventing trace demonstrations from going stale as the grounding tool improves. Full numbers in `TRACE_GEN_CONFIG.md`; full reasoning in `_tool_node_factory`'s docstring (`langgraph_loop.py`).
 - **Shared Tool Dispatch** (`dental_agent/agent/tool_dispatch.py`):
   Trace-gen's LangGraph loop and GRPO's rollout loop (`loop.py`) each used
   to carry their own copy of "which tools need the image, and which image"
@@ -122,7 +107,8 @@ hand-rolled copy of the same logic.
   unused — could pull a "mirror" crop from the wrong jaw for boxes near the
   vertical midline), and `enhance_contrast` (existed as a working function
   for a while but was never actually registered — the same
-  built-but-unreachable pattern `locate_abnormal_teeth` still has) is now
+  built-but-unreachable pattern `locate_abnormal_teeth` used to have, before
+  it was removed entirely rather than wired in, see §7 below) is now
   wired into the registry.
 
 ### 3. The FDI 0-Index Bug Fix (CRITICAL — read this even if you skip everything else)
@@ -195,6 +181,17 @@ direction.
   return `None` on the new normalized shape rather than raising — a
   footgun worth knowing about if you're writing new code that inspects a
   parsed agent turn.
+- **Removed a dead, misleadingly-named config field.** `config.py` used to
+  define `grpo_max_tool_calls: int = 4`, but nothing else in the codebase
+  ever read it (confirmed via grep). Every actual `max_tool_calls` default
+  live at runtime (`grpo.py`, `agent/loop.py`, `training/trace_generation.py`,
+  `rewards/composite.py`, `run_trace_gen`) is consistently **50** — the
+  number `R_efficiency`'s complexity-scaled reference budget above was
+  designed against, not 4. Same built-but-unreachable shape as
+  `enhance_contrast` before it got wired in above, and `locate_abnormal_teeth`
+  (removed entirely — see §8 below). Removed rather than left stale; if
+  GRPO's tool-call budget ever needs to be config-driven, re-add it wired
+  to an actual call site, with 50 as the default.
 
 ### 5. SFT Training Pipeline (Phase 3)
 - **Multi-Modal Collator** (`QwenVLDataCollator`): parses complex,
@@ -222,7 +219,41 @@ the Datasets section below: it means any dataset feeding this tool's
 training data must carry a real per-tooth position/identity label, not
 just an anonymous "here's a tooth" box.
 
-### 8. Proposal Positioning — DONE
+### 8. `locate_abnormal_teeth` Removed Entirely
+This tool never actually ran in practice — it was a conditionally-registered
+8th tool wrapping a learned Faster R-CNN specialist detector
+(`tool_locate_abnormal_teeth_learned` in `dental_agent/training/detector.py`)
+whose backing checkpoint was never trained (no `train_stage0_detector` run
+ever produced one), so every `ToolRegistry.create_default()` call site in
+the codebase passed no `grounding_tool` and the tool silently never
+registered. **Decision: it's gone, not finished.** The agent locates and
+corrects abnormal-tooth grounding via `locate_tooth` (the real, live,
+trained YOLO detector — §7 above) plus `nudge_crop`'s self-correction loop
+(§2 above), not a second, separate learned detector backend. Removed:
+`tool_locate_abnormal_teeth_learned`, `train_stage0_detector`, and
+`visualize_detector_predictions` from `detector.py`; the `grounding_tool`
+parameter and conditional registration block from `registry.py`;
+`scripts/run_detector.py` and `dental_agent/cli.py`'s `train_detector`
+command (both existed solely to call the now-removed training function);
+and `evaluate_stage0_detector`, which turned out to call
+`tool_locate_abnormal_teeth_learned` directly and hardcode its
+quadrant/tooth_position output shape into its correctness check — so it
+wasn't the reusable generic evaluator it looked like, and removing the tool
+without also removing this would have left a broken import.
+
+**What's deliberately kept in `detector.py` despite this**:
+`build_stage0_detector`, `detection_collate_fn`, the dataset classes, and
+`compute_iou` — because `dental_agent/evaluation/diagnosis_baseline.py`
+genuinely reuses them to train and evaluate a plain supervised object
+detector directly on diagnosis labels, which is the paper's **"prior
+supervised detector"** comparison baseline (a real, still-needed part of
+the evaluation plan — see the core hypothesis at the top of this document).
+That baseline has nothing to do with `locate_abnormal_teeth` beyond sharing
+some Faster R-CNN plumbing; don't confuse the two if you're asked to touch
+either again. See `detector.py`'s own module docstring for the fully
+detailed breakdown of what's kept vs. removed and exactly why.
+
+### 9. Proposal Positioning — DONE
 `dentex-agentic-vlm-proposal.md`'s §3.5/§3.7/§9 have been rewritten to
 directly address the two concurrent systems that most threaten an
 unqualified "first" claim: **OralGPT-Plus** (CVPR 2026, code public) and
@@ -248,17 +279,25 @@ re-checking it against those same two papers.
 
 - **Dataset Trace Generation — the actual bottleneck.** `scripts/run_trace_gen.py`
   on Colab/Kaggle builds the synthetic dataset of expert demonstrations,
-  driven by a locally-hosted Qwen/Qwen3.5-9B via the real LangGraph
-  tool-execution loop (including self-correcting grounding, tiered
-  perturbation, all of §2 above). The trace file committed to this repo
-  (`data/traces/train_cot_traces.jsonl.old`) has 108 traces, but those
-  **predate the real-tool-execution rewrite** — they were generated under
-  the old `<fake_tool_call>`-narration paradigm this codebase has since
-  moved away from (see `.agents/rules/vlm_dental.md` Rule 3: don't
-  reintroduce that paradigm). No post-rewrite `train_cot_traces.jsonl` is
-  currently committed to the repo. This is the real bottleneck right now —
-  not the training code, which is built out and tested ahead of having
-  volume to run it on.
+  driven by a frontier LLM (primarily **Gemini 3.5 Flash Lite** or an
+  NVIDIA NIM-hosted model, routed through `api_pool.py`'s provider pool —
+  not a single hardcoded model; a self-hosted Qwen/Qwen3.5-9B via local
+  vLLM is also a supported provider option but not the primary one in
+  practice) as generator, with a different-family API model as verifier,
+  via the real LangGraph tool-execution loop (including self-correcting
+  grounding, tiered perturbation, all of §2 above). **This is a distinct
+  role from Qwen/Qwen3.5-9B's role elsewhere in this project** — Qwen3.5-9B
+  is the model actually being trained (SFT then GRPO, see Phase 5/6 below),
+  not (primarily) the model generating its own training data; don't
+  conflate the two when reading or writing about this pipeline. The trace
+  file committed to this repo (`data/traces/train_cot_traces.jsonl.old`)
+  has 108 traces, but those **predate the real-tool-execution rewrite** —
+  they were generated under the old `<fake_tool_call>`-narration paradigm
+  this codebase has since moved away from (see `.agents/rules/vlm_dental.md`
+  Rule 3: don't reintroduce that paradigm). No post-rewrite
+  `train_cot_traces.jsonl` is currently committed to the repo. This is the
+  real bottleneck right now — not the training code, which is built out
+  and tested ahead of having volume to run it on.
 - **Tunisia dataset loader — Phase 1 done, Phase 2 blocked on one
   verification step.** See "Datasets" below for full detail; short version:
   image discovery + VIA parsing + bbox geometry work today, FDI-position
@@ -386,25 +425,6 @@ See "Datasets" above. This is a ~30-second file inspection, not an
 engineering task — the engineering (loader, bundler, slicer) is already
 done and waiting on it.
 
-### Next after that: An Unused Config Field Worth Resolving
-`dental_agent/config.py` defines `grpo_max_tool_calls: int = 4`, but nothing
-else in the codebase reads it — grep confirms zero other references. Every
-actual `max_tool_calls` default that's live at runtime (`grpo.py`,
-`loop.py`, `trace_generation.py`, `rewards/composite.py`, `run_trace_gen`)
-is consistently **50**, and `R_efficiency`'s complexity-scaled reference
-budget (Reward Redesign section above) was designed against that real
-number. So this isn't currently causing incorrect behavior — but it's the
-same built-but-unreachable shape as `enhance_contrast` before it got wired
-in (§2 above) and `locate_abnormal_teeth` still has: a config field that
-*looks* load-bearing (its name says exactly what it should do) but silently
-isn't connected to anything, which is exactly the kind of thing that either
-gets "fixed" by someone assuming it works and then confused when changing
-it does nothing, or gets wired in later at the stale value of 4 by someone
-assuming it must have been deliberately set low. Resolve by either wiring
-it into `run_grpo.py`'s actual call chain (updating its default to 50 for
-consistency first) or removing it if it's genuinely dead — don't leave a
-field that claims to control tool-call budget silently not doing so.
-
 ### Scale Trace Generation (the real bottleneck — see "Currently In Progress")
 Run `run_trace_gen.py` at real volume on Colab/Kaggle to replace the 108
 pre-rewrite legacy traces with real, post-rewrite ones. Nothing else in
@@ -420,8 +440,9 @@ look if diagnosis-side data becomes the bottleneck again.
 
 ### Phase 3: Execute Supervised Fine-Tuning
 Once trace generation has real volume, run `VLM_Dental_Colab_SFT.ipynb` to
-teach the base Qwen-VL model how to use tools and reason like the Teacher
-VLM.
+teach the base Qwen-VL model how to use tools and reason like the frontier
+LLM teacher that generated its training traces (see "Currently In
+Progress" above for which models that actually is).
 
 ### Phase 4: Baseline Agent Evaluation
 - Create `scripts/run_eval.py` to test the SFT model.
