@@ -38,11 +38,7 @@ from dental_agent.training.detector import (
     DentalDetectionDataset,
     detection_collate_fn,
     build_stage0_detector,
-    train_stage0_detector,
-    tool_locate_abnormal_teeth_learned,
-    visualize_detector_predictions,
     compute_iou,
-    evaluate_stage0_detector,
 )
 
 __all__ = [
@@ -72,9 +68,5 @@ __all__ = [
     "DentalDetectionDataset",
     "detection_collate_fn",
     "build_stage0_detector",
-    "train_stage0_detector",
-    "tool_locate_abnormal_teeth_learned",
-    "visualize_detector_predictions",
     "compute_iou",
-    "evaluate_stage0_detector",
 ]

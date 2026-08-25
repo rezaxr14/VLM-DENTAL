@@ -40,17 +40,18 @@ The LangGraph loop (`langgraph_loop.py`) runs tool calls dynamically and for rea
 
 ## 6. Decoupled Generation & Verification Pipeline
 - **Rule:** Trace generation and verification are two independent phases that run at different speeds.
-  - **Generation** writes raw traces to `train_cot_traces_unverified.jsonl` as fast as hardware allows (no rate limit when using local vLLM).
+  - **Generation** writes raw traces to `train_cot_traces_unverified.jsonl` as fast as the active provider allows -- in practice primarily **Gemini 3.5 Flash Lite** or an NVIDIA NIM-hosted model via `api_pool.py`'s provider pool (rate-limited per that provider's RPM/RPD caps), or, when `GENERATOR_PROVIDER=local`, a self-hosted Qwen/Qwen3.5-9B via vLLM with no rate limit -- but local is an available option, not the primary path in practice.
   - **Verification** reads the unverified file, verifies via external APIs (rate-limited by `ProviderPool`), and promotes passing traces to `train_cot_traces.jsonl`.
 - **Rule:** Both phases must support resume — tracking processed image IDs so they can be interrupted and restarted without data loss.
 - **Rule:** When `GENERATOR_PROVIDER=local`, the generator must NOT be stalled by verifier rate limits.
 
 ## 7. Unified Backbone & Modular Notebook Architecture
-- **Rule:** `Qwen/Qwen3.5-9B` is the standard, unified backbone for all pipeline stages: Aim 1 Trace Generation (local vLLM teacher), Stage 1 SFT (QLoRA student), and Stage 2 GRPO (dual-adapter RL policy).
+- **Rule:** `Qwen/Qwen3.5-9B` is the standard, unified backbone that is actually TRAINED across Stage 1 SFT (QLoRA student) and Stage 2 GRPO (dual-adapter RL policy). It is a SEPARATE role from the frontier-LLM trace-generation teacher pool (primarily Gemini 3.5 Flash Lite / NVIDIA NIM via `api_pool.py`, see Rule 6) -- Qwen3.5-9B via local vLLM is one available generation provider too, but not the primary one in practice, and the two roles sharing a model family in that case is incidental, not a design requirement. Do not assume or write code that assumes Qwen3.5-9B is "the" trace-generation model.
 - **Rule:** The monolithic `dentex_agentic_vlm_starter.ipynb` is deprecated (`deprecated_dentex_agentic_vlm_starter.ipynb`) and preserved solely for historical reference. All new workflows and experiments must use the modular `dental_agent/` library and dedicated notebooks in `notebooks/` (`VLM_Dental_Colab_TraceGen.ipynb`, `VLM_Dental_Colab_SFT.ipynb`, `VLM_Dental_Colab_GRPO.ipynb`).
 
-## 8. No Retries on API Errors (CRITICAL)
-- **Rule:** If the generator or verifier hits a 429 Rate Limit, or ANY API error, we DO NOT retry. We stop immediately and exit. Retrying on 429s risks getting our API keys banned. `call_llm` must fail fast on these errors.
+## 8. No Retries on API Errors, Except an Explicit 429 Opt-In (CRITICAL)
+- **Rule:** By default, if the generator or verifier hits a 429 Rate Limit, or ANY API error, we DO NOT retry. We stop immediately and exit. Retrying on 429s risks getting our API keys banned. `call_llm` must fail fast on these errors.
+- **Exception:** setting `IGNORE_429=true` in the environment opts into up to 10 retries specifically for 429 errors, 5s apart, before hard-stopping (see `dental_agent/training/api_pool.py`'s `call_llm`). This is an explicit, deliberate opt-in for situations where a temporary rate limit is expected and tolerable (e.g. a long, paced batch run) -- it is NOT a default, and does not change the no-retry rule for any other error type (5xx still gets exactly one retry as before; everything else, including a 429 with `IGNORE_429` unset, still hard-stops immediately).
 
 ## 9. Version Control Etiquette (CRITICAL)
 - **Rule:** NEVER automatically `git commit` or `git push` changes unless the user explicitly commands it. Always assume the user wants to review the code locally or in an implementation plan first before writing commits to the repository's history.

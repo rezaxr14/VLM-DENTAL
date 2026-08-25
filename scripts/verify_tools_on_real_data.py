@@ -64,7 +64,7 @@ def verify_on_real_images(
         w, h = orig_img.size
         print(f"Image dimensions: {w} x {h} px")
 
-        # 1. Test locate_abnormal_teeth (Real YOLO Grounding Tool)
+        # 1. Locate a tooth with locate_tooth (the real, trained YOLO grounding tool)
         result = tool_locate_tooth(orig_img, 38) # Look for tooth 38
         print(f"Grounding tool result: {result}")
 

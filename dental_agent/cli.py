@@ -120,24 +120,6 @@ def train_grpo_cmd(ctx: click.Context, group_size: int, epochs_per_batch: int) -
 
 
 @cli.command()
-@click.option("--epochs", default=5, help="Detector training epochs.")
-@click.option("--output", "-o", default="checkpoints/stage0_detector.pt", help="Checkpoint output path.")
-@click.pass_context
-def train_detector(ctx: click.Context, epochs: int, output: str) -> None:
-    """Stage 0: Train Faster R-CNN specialist tooth detector."""
-    cfg = ctx.obj["config"]
-    images_df, annots_df, _ = load_dentex_dataset(cfg.persist_dir)
-
-    from dental_agent.training.detector import train_stage0_detector
-    train_stage0_detector(
-        images_df=images_df,
-        annots_df=annots_df,
-        output_path=output,
-        epochs=epochs,
-    )
-
-
-@cli.command()
 @click.option("--checkpoint-tag", default=None, help="Specific checkpoint tag to evaluate.")
 @click.option("--limit", default=None, type=int, help="Sample limit for fast evaluation.")
 @click.option("--output-report", default="experiments/evaluation_report.md", help="Path for report.")

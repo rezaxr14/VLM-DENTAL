@@ -38,12 +38,12 @@ This is the heart of the project containing all reusable logic. It is imported b
   - **`GeneratorPool`**: Same architecture but for external-API generation when no local GPU is available. Uses separate env vars (`GENERATOR_COOLDOWN_SECONDS`, default 60s; `GENERATOR_RPD_LIMIT`, default 50). State persists to `data/generator_pool_state.json`. Bypassed entirely when `GENERATOR_PROVIDER=local`.
   - Also contains `APISessionPool` (cached OpenAI-compatible clients), `call_llm()` (universal caller supporting `auto_verifier` and `auto_generator` routing), and `verify_local_server_health()`.
 - `trace_generation.py`: **The dataset synthesizer (decoupled pipeline).** Two operational modes:
-  - **Generate**: `generate_interactive_trajectory()` → drives a locally-hosted Qwen/Qwen3.5-9B (or external API) through a real LangGraph tool-execution loop (ground-truth-directed), outputs raw trajectory dicts to `train_cot_traces_unverified.jsonl`.
+  - **Generate**: `generate_interactive_trajectory()` → drives a frontier LLM (primarily Gemini 3.5 Flash Lite or an NVIDIA NIM-hosted model via `api_pool.py`'s provider pool; a self-hosted Qwen/Qwen3.5-9B via local vLLM is also a supported provider but not the primary one in practice) through a real LangGraph tool-execution loop (ground-truth-directed), outputs raw trajectory dicts to `train_cot_traces_unverified.jsonl`.
   - **Verify**: `verify_pending()` → reads unverified traces, runs cross-family verification via `ProviderPool`, promotes passing traces to `train_cot_traces.jsonl`.
   - Also contains `build_trace_example()` (canonical per-image pipeline) and `run_aim1_batch()` (batch wrapper with retry).
 - `sft.py`: **The supervised trainer.** Takes the generated JSONL traces and base model architecture, formats them using a multi-modal collator, and outputs fine-tuned Qwen model weights.
 - `grpo.py`: **The RL algorithm.** Takes the SFT model weights and new training data, implements Group Relative Policy Optimization (computing KL-divergence penalties and dual-adapter memory swapping), and outputs highly-optimized RL model weights.
-- `detector.py`: **The YOLO trainer.** Takes COCO/YOLO formatted datasets, runs the Ultralytics training loop, and outputs a trained `.pt` bounding-box model.
+- `detector.py`: **Faster R-CNN detector architecture (torchvision, not YOLO/Ultralytics).** Originally built both to train an FDI-position grounding detector (backing a `locate_abnormal_teeth` tool) and to supply a reusable detector architecture for the diagnosis-baseline comparison. The former use was removed entirely -- the project decided the agent finds and corrects abnormal-tooth grounding via `locate_tooth` (the actual, live YOLO detector -- trained by `scripts/train_grounding_tool.py`, a *different* file despite the similar subject matter) + `nudge_crop`'s self-correction loop, not a second learned detector backend. What remains here (`build_stage0_detector`, `detection_collate_fn`, the dataset classes, `compute_iou`) is kept because `dental_agent/evaluation/diagnosis_baseline.py` reuses it for the paper's "prior supervised detector" comparison baseline. See this module's own docstring and `roadmap.md`'s changelog for the full removal reasoning.
 - `rewards.py`: **Training feedback connector.** Takes the current policy outputs during RL training, routes them through the reward functions, and outputs the loss gradients.
 
 ### `dental_agent/model/` (VLM Backbone)
@@ -122,7 +122,7 @@ These are the executable scripts you run from the terminal. They wire the core p
 - **`run_eval.py`**: **(Phase 4)** Takes a trained model and test set, runs the evaluation pipelines, and outputs final accuracy metrics.
 
 ### Utilities
-- **`run_detector.py`** & **`verify_tools_on_real_data.py`**: Takes local images, runs tool functions, and outputs visualized results to manually verify tools are working.
+- **`verify_tools_on_real_data.py`**: Takes local images, runs tool functions, and outputs visualized results to manually verify tools are working.
 - **`export_agent.py`**: Takes trained LoRA weights and the base model, merges them into a single structure, and outputs deployment-ready weights.
 - **`export_prompt_demo.py`**: Generates example prompt formatting demonstrations for documentation.
 

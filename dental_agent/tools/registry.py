@@ -80,10 +80,7 @@ class ToolRegistry:
         return tool.func(**kwargs)
 
     @classmethod
-    def create_default(
-        cls,
-        grounding_tool: Optional[Callable[[int], list[dict[str, Any]]]] = None,
-    ) -> "ToolRegistry":
+    def create_default(cls) -> "ToolRegistry":
         """Instantiate a registry populated with default diagnostic tools."""
         registry = cls()
         
@@ -156,24 +153,23 @@ class ToolRegistry:
             schema={"factor": 1.5},
         )
 
-        # 7. locate_abnormal_teeth (optional grounding backend) -- still last/optional:
-        # its backing Faster R-CNN detector has never been trained (no checkpoint
-        # exists anywhere on disk), so grounding_tool is never actually passed in by
-        # any current call site. Deferred, not wired up -- see trace_generation.py's
-        # ToolRegistry.create_default() call sites, all of which still pass none.
-        if grounding_tool is not None:
-            registry.register(
-                name="locate_abnormal_teeth",
-                func=grounding_tool,
-                description="Specialist detector returning candidate bounding boxes and FDI positions for abnormal teeth.",
-                schema={"image_id": 0},
-            )
-
         # 8. nudge_crop -- lets the agent correct a bbox it was already given
         # (from locate_tooth or a prior nudge_crop) when the detector's box
         # doesn't actually center the tooth it asked for. Data-only, like
         # locate_tooth: returns adjusted coordinates, not an image -- pair
         # with zoom_crop on the returned bbox to see the corrected region.
+        # This tool -- not a separate learned abnormality-locator -- is how the
+        # agent handles a bad/uncertain grounding result. A previous
+        # `locate_abnormal_teeth` optional 8th tool (a never-trained Faster
+        # R-CNN specialist detector, wired up but with no checkpoint ever
+        # produced) was removed entirely: the project decided the agent should
+        # find and correct abnormal-tooth grounding via locate_tooth +
+        # nudge_crop's self-correction loop, not a second, separate detector
+        # backend. See roadmap.md's changelog for this removal and
+        # dental_agent/training/detector.py's module docstring for what
+        # remains of that module (the parts still used by the diagnosis
+        # baseline detector are kept; the parts that existed only to serve
+        # locate_abnormal_teeth are not).
         from dental_agent.tools.nudge import tool_nudge_crop
 
         registry.register(

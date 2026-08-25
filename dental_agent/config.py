@@ -86,7 +86,15 @@ class TrainingConfig:
     grpo_epochs_per_batch: int = 1
     grpo_clip_eps: float = 0.2
     grpo_kl_beta: float = 0.04
-    grpo_max_tool_calls: int = 4
+    # NOTE: a grpo_max_tool_calls field used to live here (default 4) but was
+    # never actually read anywhere -- every real max_tool_calls default at
+    # runtime (grpo.py, agent/loop.py, training/trace_generation.py,
+    # rewards/composite.py, run_trace_gen) is consistently 50, and
+    # R_efficiency's complexity-scaled reference budget was designed against
+    # that real number, not 4. Removed rather than wired in or left stale --
+    # see roadmap.md's changelog for this cleanup. If GRPO's tool-call budget
+    # ever needs to be config-driven, add it back wired to an actual call
+    # site, with 50 as the default to match everywhere else, not 4.
 
     # Stage 0 (grounding detector)
     detector_epochs: int = 1
