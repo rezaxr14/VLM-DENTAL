@@ -454,6 +454,8 @@ def call_llm(
             msg = str(e)
             status_code = getattr(getattr(e, "response", None), "status_code", None) or getattr(e, "status_code", None)
             msg_lower = msg.lower()
+
+            ignore_all_errors = os.environ.get("IGNORE_API_ERRORS", "false").lower() == "true"
             
             is_5xx = (
                 "internal server error" in msg_lower
@@ -470,6 +472,15 @@ def call_llm(
                 (isinstance(status_code, int) and status_code == 429)
             )
             
+            if ignore_all_errors:
+                if retries_429 < max_429_retries:
+                    print(f"  [retry] {provider}: API Error Hit (attempt {retries_429+1}/{max_429_retries}). Sleeping 5s before retrying...", flush=True)
+                    time.sleep(5)
+                    retries_429 += 1
+                    continue
+                else:
+                    raise RuntimeError(f"{msg}: Hard stop on API errors per rule. Max retries ({max_429_retries}) exceeded. Exiting.")
+
             if is_429 and os.environ.get("IGNORE_429", "false").lower() == "true":
                 if retries_429 < max_429_retries:
                     print(f"  [retry] {provider}: 429 Rate Limit Hit (attempt {retries_429+1}/{max_429_retries}). Sleeping 5s before retrying...", flush=True)
