@@ -323,22 +323,12 @@ def _reasoning_node_factory(provider: str, model: str, max_tool_calls: int, max_
 def _tool_node_factory(
     registry: ToolRegistry,
     ground_truth: list[dict[str, Any]] | None = None,
-    hint_probability: float = 1.0,
     perturb_small_probability: float = 0.25,
     perturb_big_probability: float = 0.30,
     perturb_small_range: tuple[float, float] = (0.12, 0.28),
     perturb_big_range: tuple[float, float] = (0.45, 0.75),
 ):
-    """hint_probability: chance search_region_hint is applied when ground truth
-    exists for the requested tooth. Defaults to 1.0 (always) -- the hint gives
-    locate_tooth's real underlying detector the best chance of a correct result.
-    Even at 1.0 this is NOT literally the ground-truth box -- it's the hint
-    NARROWING where the real detector searches; what gets shown is still real
-    (hint-assisted) YOLO inference, which is usually very accurate within that
-    narrowed window but is not synthetically guaranteed to be. The hint is not
-    the mechanism that teaches accept-vs-nudge either way (see below).
-
-    perturb_small_probability / perturb_big_probability: independent chances
+    """perturb_small_probability / perturb_big_probability: independent chances
     that, once locate_tooth returns a bbox, a synthetic offset is applied to
     what the model is SHOWN (never to what's logged internally as true_bbox).
     Two tiers, not one: "small" (12-28% of box size) is a genuine judgment
@@ -499,7 +489,6 @@ def build_trace_gen_graph(
     model: str = "Qwen/Qwen3.5-9B",
     max_tool_calls: int = 8,
     max_tokens: int | None = None,
-    hint_probability: float = 1.0,
     perturb_small_probability: float = 0.25,
     perturb_big_probability: float = 0.30,
 ):
@@ -509,7 +498,6 @@ def build_trace_gen_graph(
     graph.add_node("reasoning", _reasoning_node_factory(provider, model, max_tool_calls, max_tokens=max_tokens))
     graph.add_node("tools", _tool_node_factory(
         registry, ground_truth=ground_truth or [],
-        hint_probability=hint_probability,
         perturb_small_probability=perturb_small_probability,
         perturb_big_probability=perturb_big_probability,
     ))
@@ -532,7 +520,6 @@ def run_trace_gen(
     max_turns: int = 8,
     max_tool_calls: int = 50,
     max_tokens_per_turn: int | None = None,
-    hint_probability: float = 1.0,
     perturb_small_probability: float = 0.25,
     perturb_big_probability: float = 0.30,
 ) -> tuple[dict[str, Any] | None, str | None]:
@@ -596,7 +583,6 @@ def run_trace_gen(
     app = build_trace_gen_graph(
         registry, ground_truth=ground_truth, provider=provider, model=model,
         max_tool_calls=max_tool_calls, max_tokens=max_tokens_per_turn,
-        hint_probability=hint_probability,
         perturb_small_probability=perturb_small_probability,
         perturb_big_probability=perturb_big_probability,
     )

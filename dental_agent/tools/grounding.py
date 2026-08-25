@@ -37,7 +37,7 @@ class ToothGrounder:
             cls._instance = cls()
         return cls._instance
         
-    def locate_tooth(self, image: Image.Image, fdi_number: int, search_region_hint: list[float] | None = None) -> Dict[str, Any]:
+    def locate_tooth(self, image: Image.Image, fdi_number: int) -> Dict[str, Any]:
         if self.model is None:
             return {"error": f"Grounding model not found at {self.model_path}. Train it first using scripts/train_grounding_tool.py"}
             
@@ -58,28 +58,8 @@ class ToothGrounder:
             
         target_class_idx = (quadrant - 1) * 8 + (position - 1)
 
-        # Optional search-region assist: at P~0.588, most false positives come from
-        # the detector latching onto a similar-looking tooth elsewhere in the full
-        # image. When a hint region is available (trace-generation time only -- this
-        # is never derived from anything the model itself said, so it doesn't leak
-        # into the conversation), crop to an area several times the hint's size and
-        # run inference on that instead, then translate the result back to full-image
-        # coordinates. With no hint, falls back to full-image search unchanged.
-        offset_x, offset_y = 0.0, 0.0
-        search_image = image
-        if search_region_hint is not None and len(search_region_hint) == 4:
-            hx, hy, hw, hh = search_region_hint
-            pad_mult = 2.5  # search several times the hint's own size, not just the hint itself
-            crop_x0 = max(0.0, hx - hw * (pad_mult - 1) / 2)
-            crop_y0 = max(0.0, hy - hh * (pad_mult - 1) / 2)
-            crop_x1 = min(float(image.width), hx + hw * (1 + (pad_mult - 1) / 2))
-            crop_y1 = min(float(image.height), hy + hh * (1 + (pad_mult - 1) / 2))
-            if crop_x1 > crop_x0 and crop_y1 > crop_y0:
-                search_image = image.crop((crop_x0, crop_y0, crop_x1, crop_y1))
-                offset_x, offset_y = crop_x0, crop_y0
-
-        # Run inference
-        results = self.model.predict(search_image, verbose=False, conf=0.25)
+        # Run inference on the full image
+        results = self.model.predict(image, verbose=False, conf=0.25)
         
         if not results or len(results) == 0:
             return {"error": "Model failed to return any predictions."}
@@ -102,11 +82,10 @@ class ToothGrounder:
         if best_box is None:
             return {"error": f"Tooth {fdi_number} not found in this radiograph."}
             
-        # Convert xywh (center format) to xywh (top-left format for crop/zoom tools),
-        # translate back to full-image coordinates if a cropped search was used
+        # Convert xywh (center format) to xywh (top-left format for crop/zoom tools)
         cx, cy, w, h = best_box.tolist()
-        x_min = (cx - (w / 2)) + offset_x
-        y_min = (cy - (h / 2)) + offset_y
+        x_min = (cx - (w / 2))
+        y_min = (cy - (h / 2))
 
         # Pad the box for margin: at P~0.588 a fair number of detections are a bit
         # off, so give downstream zoom_crop some slack to still contain the true
@@ -127,20 +106,13 @@ class ToothGrounder:
             "bbox": [round(x_min, 1), round(y_min, 1), round(w, 1), round(h, 1)]
         }
 
-def tool_locate_tooth(image: Image.Image, tooth: int | str, search_region_hint: list[float] | None = None) -> Dict[str, Any]:
+def tool_locate_tooth(image: Image.Image, tooth: int | str) -> Dict[str, Any]:
     """
     Locates a specific tooth using a trained YOLOv8 model and returns its bounding box.
 
     Args:
         image: The panoramic radiograph (PIL.Image)
         tooth: The FDI tooth number to locate (e.g., 38 for lower-left 3rd molar).
-        search_region_hint: [x, y, w, h], PIPELINE-INTERNAL ONLY -- never part of the
-            registry schema exposed to the model, and never derived from anything the
-            model itself said. Set by _tool_node during trace generation when this
-            trace's ground truth has an entry for the requested tooth, to narrow the
-            detector's search and improve effective precision. Absent at real
-            inference time and for any tooth without a matching ground-truth entry,
-            in which case this falls back to an unconstrained full-image search.
 
     Returns:
         Dictionary containing the bounding box [x, y, w, h] of the tooth, or an error message.
@@ -161,4 +133,4 @@ def tool_locate_tooth(image: Image.Image, tooth: int | str, search_region_hint: 
         return {"error": "Argument 'tooth' must be an integer (e.g., 38)."}
 
     grounder = ToothGrounder.get_instance()
-    return grounder.locate_tooth(image, tooth, search_region_hint=search_region_hint)
+    return grounder.locate_tooth(image, tooth)
