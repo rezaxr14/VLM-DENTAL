@@ -20,6 +20,19 @@ Usage:
     python scripts/run_trace_gen.py --mode verify
     python scripts/run_trace_gen.py --mode generate --max-images 10
     python scripts/run_trace_gen.py --status-only
+
+Running multiple parallel Colab/Kaggle workers (see dental_agent/training/git_sync.py
+for the mechanics, and .gitattributes for the merge=union rule this relies on):
+    # Colab instance 1 of 3 (--slice-seed MUST match across all instances):
+    python scripts/run_trace_gen.py --mode generate --total-slices 3 --slice-index 1 \
+        --slice-seed 42 --git-sync-every 5
+    # Colab instance 2 of 3:
+    python scripts/run_trace_gen.py --mode generate --total-slices 3 --slice-index 2 \
+        --slice-seed 42 --git-sync-every 5
+    # Colab instance 3 of 3:
+    python scripts/run_trace_gen.py --mode generate --total-slices 3 --slice-index 3 \
+        --slice-seed 42 --git-sync-every 5
+Requires GITHUB_TOKEN set in .env on each instance (already documented there).
 """
 
 from __future__ import annotations
@@ -56,6 +69,7 @@ from dental_agent.training.trace_generation import (
     generate_only,
     verify_pending,
 )
+from dental_agent.training.git_sync import sync_and_push
 from dental_agent.utils.serialization import to_jsonable
 
 
@@ -249,6 +263,7 @@ def _run_generate_for_dataset(args: argparse.Namespace, cfg: Any, dataset_name: 
 
     generated_in_session = 0
     failed_in_session = 0
+    since_last_sync = 0
     session_start_time = time.time()
 
     for idx, img_record in enumerate(todo_images, start=1):
@@ -303,6 +318,22 @@ def _run_generate_for_dataset(args: argparse.Namespace, cfg: Any, dataset_name: 
                 reason = result.get("failure_reason", "unknown")
                 print(f"  [FAIL] {reason} ({elapsed:.1f}s)", flush=True)
 
+            since_last_sync += 1
+            if args.git_sync_every > 0 and since_last_sync >= args.git_sync_every:
+                slice_tag = f"slice {args.slice_index}/{args.total_slices} " if args.total_slices > 1 else ""
+                try:
+                    sync_and_push(
+                        [output_path],
+                        f"trace-gen: {slice_tag}dataset={dataset_name} +{since_last_sync} traces "
+                        f"(session total {generated_in_session + failed_in_session})",
+                    )
+                except Exception as e:
+                    # A sync hiccup should never take down an otherwise-healthy
+                    # generation session -- local progress is already safely on
+                    # disk regardless of push success (see append_trace above).
+                    print(f"  [git-sync] unexpected error, continuing generation: {e}", flush=True)
+                since_last_sync = 0
+
             if idx < len(todo_images) and args.pacing_delay > 0:
                 time.sleep(args.pacing_delay)
 
@@ -331,6 +362,21 @@ def _run_generate_for_dataset(args: argparse.Namespace, cfg: Any, dataset_name: 
     # Session Summary
     total_time = time.time() - session_start_time
     total_generated = len(load_completed_ids(output_path, only_successful=True))
+
+    if args.git_sync_every > 0:
+        # Final sync regardless of the since_last_sync counter, so a session
+        # ending mid-interval (RPD exhaustion, Ctrl-C, or just finishing with
+        # a remainder under the threshold) never leaves work stranded only
+        # on this Colab instance's local disk.
+        slice_tag = f"slice {args.slice_index}/{args.total_slices} " if args.total_slices > 1 else ""
+        try:
+            sync_and_push(
+                [output_path],
+                f"trace-gen: {slice_tag}dataset={dataset_name} session end "
+                f"(+{generated_in_session + failed_in_session} this session)",
+            )
+        except Exception as e:
+            print(f"  [git-sync] unexpected error during final sync: {e}", flush=True)
 
     from dental_agent.training.api_pool import _TRACKER
     generator_provider = os.environ.get("GENERATOR_PROVIDER", "local")
@@ -414,6 +460,24 @@ def _run_verify_for_dataset(args: argparse.Namespace, cfg: Any, unverified_path:
 
     total_time = time.time() - session_start
     total_verified = len(load_completed_ids(verified_path))
+
+    if args.git_sync_every > 0 and result["verified"] > 0:
+        # verify_pending runs to completion in one call with no natural
+        # per-record hook, unlike generate mode's per-image loop -- so
+        # --git-sync-every is a simple on/off flag here (any nonzero value),
+        # not a fine-grained interval. verified_path is the SAME shared file
+        # across all datasets/workers (see run_verify's docstring) -- still
+        # safe for the same reason as the per-worker unverified files:
+        # verify_pending only ever appends newly-promoted lines, never edits
+        # existing ones, so concurrent verify-mode workers' pushes are pure
+        # appends too (see .gitattributes' merge=union rule).
+        try:
+            sync_and_push(
+                [verified_path],
+                f"trace-verify: +{result['verified']} verified, +{result['rejected']} rejected this run",
+            )
+        except Exception as e:
+            print(f"  [git-sync] unexpected error during sync: {e}", flush=True)
     
     from dental_agent.training.api_pool import _TRACKER
     verifier_provider = os.environ.get("VERIFIER_PROVIDER", "local")
@@ -445,6 +509,20 @@ def parse_args() -> argparse.Namespace:
         help="Which slice (1-indexed) this run processes. Must be between 1 and --total-slices.")
     parser.add_argument("--slice-seed", type=int, default=42,
         help="Seed for the random slice partition. Keep identical across all parallel Colab instances.")
+    parser.add_argument("--git-sync-every", type=int, default=0,
+        help="Push generated/verified traces to the shared git repo every N traces (default: 0 = "
+             "disabled, no git operations attempted). Designed for running --total-slices > 1 "
+             "across multiple parallel Colab/Kaggle instances: each worker pulls in the others' "
+             "already-pushed traces before pushing its own, safely, since --slice-index guarantees "
+             "disjoint image IDs per worker (concurrent appends to the same file, never edits to "
+             "the same line -- see dental_agent/training/git_sync.py and .gitattributes' merge=union "
+             "rule for exactly why this is safe rather than assumed). In generate mode this is a "
+             "periodic checkpoint interval (every N images); in verify mode it's a simple on/off "
+             "flag -- sync once after the verify pass completes, regardless of the number given. "
+             "Requires GITHUB_TOKEN in .env (already documented there) to authenticate the push; "
+             "without it, sync attempts will fail (loudly, but non-fatally -- generation continues, "
+             "just without a successful push) since the repo's origin remote is normally "
+             "unauthenticated for write access.")
     parser.add_argument("--generator-provider", type=str, default=None,
         help="Override the GENERATOR_PROVIDER from .env (e.g. 'groq', 'nvidia', 'local')")
     parser.add_argument("--generator-model", type=str, default=None,

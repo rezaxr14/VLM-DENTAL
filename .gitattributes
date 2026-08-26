@@ -1,0 +1,24 @@
+# data/traces/*.jsonl are append-only logs, and dental_agent/training/git_sync.py
+# (used by scripts/run_trace_gen.py's --git-sync-every) relies on that: multiple
+# parallel Colab/Kaggle workers, each assigned a disjoint slice of image IDs
+# (see --total-slices/--slice-index/--slice-seed), each append lines for
+# DIFFERENT image_ids to the SAME shared file and sync back concurrently.
+#
+# Verified by hand (see git_sync.py's module docstring) that WITHOUT this
+# line, git's default merge strategy reports a spurious conflict even for
+# two workers' genuinely non-overlapping appends -- both sides modify the
+# same "end of file" region relative to the same common ancestor, and a
+# plain 3-way merge can't tell "these are just two independent appends,
+# keep both" from a real conflict. `merge=union` is git's own built-in
+# named merge driver for exactly this shape of file (take the union of
+# both sides' added lines, no manual resolution, no external driver script
+# needed) -- this is not a homegrown workaround.
+#
+# This does NOT catch a duplicate image_id ending up in the file twice
+# (e.g. from operator error -- two workers accidentally given the same
+# --slice-index): union merge has no concept of what a "duplicate" means
+# for this file's content, it just unions lines. That's a real, separate
+# risk this attribute doesn't address -- see roadmap.md's entry on
+# git_sync.py for how that's handled instead (a duplicate-image_id check,
+# not relying on git to catch it).
+data/traces/*.jsonl merge=union

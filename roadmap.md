@@ -73,9 +73,41 @@ hand-rolled copy of the same logic.
   storage routing (ephemeral disk for heavy datasets, Google Drive for
   outputs/weights).
 - **API Key Management:** `api_pool.py` with strict rate pacing, daily
-  limits, and fail-fast exhaustion (deliberately **no retry-on-429** — see
-  `.agents/rules/vlm_dental.md` Rule 8 — because retrying a 429 risks
-  getting the API key banned outright, which is worse than one failed run).
+  limits, and fail-fast exhaustion. **No retry on 429 or any API error by
+  default** — see `.agents/rules/vlm_dental.md` Rule 8 — because retrying a
+  429 risks getting the API key banned outright, which is worse than one
+  failed run. `IGNORE_429=true` opts into up to 10 retries specifically for
+  429s (5s apart) for situations where a temporary rate limit is expected
+  and tolerable; this is an explicit opt-in, not a default, and doesn't
+  change the no-retry behavior for any other error type.
+- **Parallel Colab/Kaggle trace-gen workers:** `--total-slices`/
+  `--slice-index`/`--slice-seed` (`scripts/run_trace_gen.py`, pre-existing)
+  give each worker a disjoint, non-overlapping set of image IDs to process.
+  New: `--git-sync-every` + `dental_agent/training/git_sync.py` let each
+  worker periodically pull in the other workers' already-pushed traces and
+  push its own, so N Colab instances can genuinely run in parallel and
+  converge on one shared trace file instead of each accumulating an
+  isolated, never-synced local copy. This is NOT git's default merge
+  behavior for concurrent appends to the same file — verified by hand (see
+  `git_sync.py`'s module docstring) that a plain 3-way merge reports a
+  spurious conflict even for two workers' genuinely disjoint appends, since
+  both sides modify the same "end of file" region relative to the same
+  common ancestor. `.gitattributes`' `merge=union` rule (git's own built-in
+  named merge driver for exactly this shape of file) is what actually makes
+  this safe, not a custom conflict resolver — `git_sync.py` still detects
+  and aborts on a REAL conflict (e.g. from editing a non-union-attributed
+  path) rather than ever attempting automatic resolution on training data.
+  One real gap union merge doesn't cover: a duplicate image_id ending up in
+  the file twice from operator error (e.g. two workers accidentally given
+  the same `--slice-index`) merges silently, since union merge has no
+  concept of what counts as a semantic duplicate for this file's content —
+  `check_for_duplicate_ids` runs automatically after every successful sync
+  and warns (non-fatally) if this happens, but does not fix it. See
+  `run_trace_gen.py`'s module docstring for a full parallel-worker usage
+  example. Not yet exercised at real multi-worker scale on actual Colab
+  infrastructure — validated so far via a local two-worker simulation
+  against a throwaway bare repo (both the intended disjoint-append case and
+  a deliberately-forced duplicate-id case), not a live multi-Colab run.
 
 ### 2. Autonomous Trace Generation (Phase 1)
 - **Interactive Teacher Loop:** A real LangGraph agent loop

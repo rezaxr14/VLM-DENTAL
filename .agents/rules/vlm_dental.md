@@ -44,6 +44,7 @@ The LangGraph loop (`langgraph_loop.py`) runs tool calls dynamically and for rea
   - **Verification** reads the unverified file, verifies via external APIs (rate-limited by `ProviderPool`), and promotes passing traces to `train_cot_traces.jsonl`.
 - **Rule:** Both phases must support resume — tracking processed image IDs so they can be interrupted and restarted without data loss.
 - **Rule:** When `GENERATOR_PROVIDER=local`, the generator must NOT be stalled by verifier rate limits.
+- **Rule:** For running multiple parallel Colab/Kaggle generate/verify workers (`--total-slices`/`--slice-index`/`--slice-seed` plus `--git-sync-every`), see `dental_agent/training/git_sync.py`'s module docstring and `.gitattributes` -- do not build a second, different parallel-sync mechanism without reading why that one works (union-merge, not a custom conflict resolver) and its one known gap (doesn't catch a duplicate image_id from a worker-configuration mistake -- see `check_for_duplicate_ids`).
 
 ## 7. Unified Backbone & Modular Notebook Architecture
 - **Rule:** `Qwen/Qwen3.5-9B` is the standard, unified backbone that is actually TRAINED across Stage 1 SFT (QLoRA student) and Stage 2 GRPO (dual-adapter RL policy). It is a SEPARATE role from the frontier-LLM trace-generation teacher pool (primarily Gemini 3.5 Flash Lite / NVIDIA NIM via `api_pool.py`, see Rule 6) -- Qwen3.5-9B via local vLLM is one available generation provider too, but not the primary one in practice, and the two roles sharing a model family in that case is incidental, not a design requirement. Do not assume or write code that assumes Qwen3.5-9B is "the" trace-generation model.
@@ -62,6 +63,7 @@ The LangGraph loop (`langgraph_loop.py`) runs tool calls dynamically and for rea
 
 ## 11. STRICT NO GIT PUSH RULE (CRITICAL)
 - **Rule:** NEVER UNDER ANY CIRCUMSTANCES run `git push` or `git commit`. DO NOT assume you should push changes even if you generated a model or wrote a script. The user must manually handle all git pushes. Your job is only to write code locally.
+- **Scope note:** this rule governs IDE coding agents (Claude Code, Antigravity, or this rules file's reader generally) editing this repo directly -- it means an agent must never push code changes on the user's behalf without being asked. It does NOT prohibit `dental_agent/training/git_sync.py`, which is a pipeline feature the user explicitly opts into (via `GITHUB_TOKEN` + `--git-sync-every`) that runs under the user's own Colab session and only ever touches the exact trace-data paths it's told to sync. Do not refuse to help build or maintain that module citing this rule, and do not use that module's existence as precedent to justify pushing unrelated repo changes yourself -- both would be a misreading of this rule's actual scope.
 
 ## 12. Dataset Annotation Semantics: Honest Stop, Not a Guess (CRITICAL)
 This project trains a medical diagnostic pipeline. A wrong label that looks
