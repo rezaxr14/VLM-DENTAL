@@ -44,6 +44,7 @@ class TraceGenState(TypedDict):
     turns: list[dict[str, Any]]
     tool_calls: int
     final_answer: Any
+    pending_final_answer: Any  # stash for multi-blob models (e.g. minimax)
     status: str  # "running" | "needs_tool" | "done" | "error"
     error: str | None
     consecutive_parse_errors: int
@@ -74,7 +75,7 @@ def _provider_env(provider: str, suffix: str, code_default: int) -> int:
     return int(val) if val else code_default
 
 
-def _reasoning_node_factory(provider: str, model: str, max_tool_calls: int, max_tokens: int | None = None, context_trim_threshold: int | None = None):
+def _reasoning_node_factory(provider: str, model: str, max_tool_calls: int, min_turns: int = 7, max_tokens: int | None = None, context_trim_threshold: int | None = None):
     if max_tokens is not None:
         resolved_max_tokens = max_tokens
     else:
@@ -230,13 +231,11 @@ def _reasoning_node_factory(provider: str, model: str, max_tool_calls: int, max_
             # Always strip final_answer so the tool_calls branch runs this turn.
             parsed = {k: v for k, v in parsed.items() if k != "final_answer"}
 
-        # Only consume the stash once MIN_TURNS_BEFORE_FINAL turns have been completed.
-        # 7 matches the minimum turns enforced in the Colab notebook.
-        MIN_TURNS_BEFORE_FINAL = 7
+        # Only consume the stash once min_turns turns have been completed.
         if (
             "final_answer" not in parsed
             and state.get("pending_final_answer") is not None
-            and len(state["turns"]) >= MIN_TURNS_BEFORE_FINAL
+            and len(state["turns"]) >= min_turns
         ):
             parsed = {"final_answer": state.pop("pending_final_answer")}
 
@@ -509,25 +508,28 @@ def build_trace_gen_graph(
     provider: str = "local",
     model: str = "Qwen/Qwen3.5-9B",
     max_tool_calls: int = 8,
+    min_turns: int = 7,
     max_tokens: int | None = None,
     perturb_small_probability: float = 0.25,
     perturb_big_probability: float = 0.30,
 ):
     """Build and compile the LangGraph for ground-truth-directed, real-tool-execution generation."""
     graph = StateGraph(TraceGenState)
-    
-    graph.add_node("reasoning", _reasoning_node_factory(provider, model, max_tool_calls, max_tokens=max_tokens))
+
+    graph.add_node("reasoning", _reasoning_node_factory(
+        provider, model, max_tool_calls, min_turns=min_turns, max_tokens=max_tokens
+    ))
     graph.add_node("tools", _tool_node_factory(
         registry, ground_truth=ground_truth or [],
         perturb_small_probability=perturb_small_probability,
         perturb_big_probability=perturb_big_probability,
     ))
-    
+
     graph.set_entry_point("reasoning")
-    
+
     graph.add_conditional_edges("reasoning", _route, {"reasoning": "reasoning", "tools": "tools", END: END})
     graph.add_conditional_edges("tools", _route, {"reasoning": "reasoning", END: END})
-    
+
     return graph.compile()
 
 
@@ -539,6 +541,7 @@ def run_trace_gen(
     provider: str = "local",
     model: str = "Qwen/Qwen3.5-9B",
     max_turns: int = 8,
+    min_turns: int = 7,
     max_tool_calls: int = 50,
     max_tokens_per_turn: int | None = None,
     perturb_small_probability: float = 0.25,
@@ -604,7 +607,7 @@ def run_trace_gen(
 
     app = build_trace_gen_graph(
         registry, ground_truth=ground_truth, provider=provider, model=model,
-        max_tool_calls=max_tool_calls, max_tokens=max_tokens_per_turn,
+        max_tool_calls=max_tool_calls, min_turns=min_turns, max_tokens=max_tokens_per_turn,
         perturb_small_probability=perturb_small_probability,
         perturb_big_probability=perturb_big_probability,
     )
