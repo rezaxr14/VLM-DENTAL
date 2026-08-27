@@ -21,6 +21,7 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
+import pandas as pd
 
 repo_root = str(Path(__file__).resolve().parent.parent)
 if repo_root not in sys.path:
@@ -77,20 +78,34 @@ def _prepare_dentex_bundle(temp_dir_path: Path, cfg):
     print(f"Copying annotations JSON ({json_path.name}) to temp folder as train.json...")
     shutil.copy2(json_path, temp_dir_path / "train.json")
 
+    valid_imgs = imgs_df[imgs_df["local_path"].notna()]
+    annotated_ids = set(annots_df["image_id"].unique())
+    train_eligible = valid_imgs[valid_imgs["id"].isin(annotated_ids)]
+
     val_json_path = dentex_path / "validation_triple.json"
     if not val_json_path.exists():
         val_candidates = sorted(dentex_path.rglob("*validation_triple*.json"))
         if val_candidates:
             val_json_path = val_candidates[0]
+    
+    val_eligible = pd.DataFrame()
     if val_json_path.exists():
         print(f"Copying validation JSON ({val_json_path.name}) to temp folder as validation_triple.json...")
         shutil.copy2(val_json_path, temp_dir_path / "validation_triple.json")
+        try:
+            val_imgs_df, val_annots_df, _ = load_dentex_dataset(
+                data_dir=cfg.data_dir, split_name="validation"
+            )
+            val_valid = val_imgs_df[val_imgs_df["local_path"].notna()]
+            val_annot_ids = set(val_annots_df["image_id"].unique())
+            val_eligible = val_valid[val_valid["id"].isin(val_annot_ids)]
+            print(f"Found {len(val_eligible)} validation images to include in upload bundle.")
+        except Exception as e:
+            print(f"Warning: Could not load validation split images for bundling: {e}")
     else:
         print(f"WARNING: No validation_triple.json found under {dentex_path}. The HF repo will only support training splits.")
 
-    valid_imgs = imgs_df[imgs_df["local_path"].notna()]
-    annotated_ids = set(annots_df["image_id"].unique())
-    eligible_imgs = valid_imgs[valid_imgs["id"].isin(annotated_ids)]
+    eligible_imgs = pd.concat([train_eligible, val_eligible]).drop_duplicates(subset=["id"]) if not val_eligible.empty else train_eligible
     return eligible_imgs, "png"
 
 
