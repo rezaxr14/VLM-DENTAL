@@ -1,14 +1,34 @@
 """
 Aim 1: Synthetic Expert Diagnostic Demonstration Trace Generation & Cross-Family Verification (§15, §16).
 
-Generation is ground-truth-directed (the model is told the correct diagnosis and given
-ground-truth bounding boxes as a hint for where to look — kept deliberately, see
-AGENT_HANDOVER.md §3) but now runs through a real LangGraph agent loop
-(dental_agent/agent/langgraph_loop.py) against a locally-hosted Qwen/Qwen3.5-9B
-(served via vLLM inside the Kaggle/Colab session). Every tool call the model makes
-executes for real against the source image — this replaces the earlier scheme where
-tool outputs were pre-computed and the model was told to narrate a fake tool call
-(`<fake_tool_call>`) around them.
+Generation is ground-truth-directed -- the model is told which finding(s) exist
+(quadrant, tooth position, diagnosis) as a directive, but NOT given ground-truth
+bounding boxes directly: langgraph_loop.py's run_trace_gen deliberately drops
+bbox coordinates from that initial directive ("now that locate_tooth actually
+works, handing over exact coordinates just teaches copy-the-hint instead of
+genuine tool-mediated localization" -- see that function's own docstring), so
+the model still has to call locate_tooth (and verify/correct via nudge_crop) for
+real. Separately, locate_tooth's OWN tool-call-time behavior does use ground
+truth internally when it exists for the requested tooth (guaranteeing the box
+is found), but what the model is actually *shown* is independently
+tier-perturbed rather than handed over exact -- see AGENT_HANDOVER.md's tool
+section and TRACE_GEN_CONFIG.md for that separate mechanism's full numbers.
+
+This runs through a real LangGraph agent loop
+(dental_agent/agent/langgraph_loop.py) against a frontier LLM -- in practice
+primarily Gemini 3.5 Flash Lite or an NVIDIA NIM-hosted model, routed through
+api_pool.py's provider pool; a self-hosted Qwen/Qwen3.5-9B via local vLLM is
+also a supported provider but not the primary one in practice. Every tool call
+the model makes executes for real against the source image — this replaces
+the earlier scheme where tool outputs were pre-computed and the model was told
+to narrate a fake tool call (`<fake_tool_call>`) around them.
+
+generate_no_tools_trajectory (below) is a separate, single-turn, tool-free
+sibling of generate_interactive_trajectory -- for training baseline #3 in the
+proposal's evaluation plan (dentex-agentic-vlm-proposal.md §6), not a variant
+of the main generation path above. See its own docstring for why ground-truth
+conditioning has to work differently there (no grounding tool to narrow a
+search region through).
 """
 
 from __future__ import annotations
@@ -24,7 +44,7 @@ import pandas as pd
 
 from dental_agent.agent.langgraph_loop import run_trace_gen
 from dental_agent.agent.parsing import parse_agent_json
-from dental_agent.agent.prompts import build_agent_system_prompt
+from dental_agent.agent.prompts import build_agent_system_prompt, NO_TOOLS_COT_TEACHER_PROMPT
 from dental_agent.data.dentex import dentex_row_to_fdi
 from dental_agent.tools.registry import ToolRegistry
 from dental_agent.training.api_pool import (
@@ -139,6 +159,93 @@ def generate_interactive_trajectory(
         max_tool_calls=max_tool_calls,
         max_tokens_per_turn=max_tokens_per_turn,
     )
+
+
+def generate_no_tools_trajectory(
+    image: Image.Image,
+    ground_truth: list[dict[str, Any]],
+    provider: str = GENERATOR_PROVIDER,
+    model: str = GENERATOR_MODEL,
+    max_tokens: int = 2048,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Ground-truth-directed, SINGLE-TURN, TOOL-FREE trace generation -- for
+    training baseline #3 in the proposal's evaluation plan (dentex-agentic-vlm-
+    proposal.md §6: "Full agent without tool access (RL-tuned but reasoning over
+    the whole image only) — isolates the contribution of tools"). This produces
+    SFT training data for that baseline's Stage 1, structurally matching
+    generate_interactive_trajectory's output shape (same "messages"/"final_answer"/
+    "tool_calls"/"format_ok" keys) but via one direct API call instead of a
+    LangGraph tool-execution loop, since there is no tool orchestration to do.
+
+    Do NOT confuse this with:
+    - dental_agent.agent.prompts.NO_TOOLS_SYSTEM_PROMPT / dental_agent.agent.loop.py's
+      GRPO rollout usage of it -- that's the no-tools policy's live RL rollout
+      (Stage 2), already built, unrelated to generating SFT training data (Stage 1).
+    - dental_agent.agent.prompts.ZERO_SHOT_PROMPT / evaluation/baselines.py -- that's
+      baseline #1, a raw untrained model prompted at eval time, no training involved.
+
+    Ground-truth conditioning here works differently from the tool-based path:
+    generate_interactive_trajectory narrows locate_tooth's search region toward
+    the true location (a real detector still has to find and the model still has
+    to verify it via zoom_crop) while never revealing the bbox itself. There is no
+    equivalent narrowing mechanism without a grounding tool -- so this function
+    tells the model directly which finding(s) to cover (matching the same
+    "TEACHER DIRECTIVE" principle already used in langgraph_loop.py's run_trace_gen,
+    just applied here with no tool-verification step to preserve). This means the
+    reasoning it produces is closer to hindsight rationalization ("write the
+    reasoning that would justify this known answer") than genuine blind discovery
+    -- an intentional, documented tradeoff (the alternative, blind single-pass
+    generation with no conditioning, would tank yield the same way blind tool-based
+    generation would, per generate_interactive_trajectory's own docstring/proposal
+    §5.2) -- and the SAME cross-family verify_trace this module already uses for
+    tool-based traces is reused unmodified to check the reasoning stays visually
+    plausible and doesn't leak that it was told the answer, rather than trusting
+    the generator's self-restraint alone.
+    """
+    gen_provider, gen_model = (provider, model) if provider and model else _resolve_generator()
+    hint_text = "; ".join(
+        f"Q{f['quadrant']}T{f['tooth_position']}:{f['diagnosis']}" for f in ground_truth
+    )
+    directive = (
+        "TEACHER DIRECTIVE: You are generating an expert demonstration trace for SFT.\n"
+        f"This image has {len(ground_truth)} finding(s): {hint_text}\n\n"
+        "Write the clinical reasoning a radiologist would give for noticing these on "
+        "direct visual inspection, then give your final answer covering all of them."
+    )
+
+    try:
+        raw = call_llm(
+            gen_provider, gen_model, NO_TOOLS_COT_TEACHER_PROMPT, directive,
+            image=image, temperature=0.3, max_tokens=max_tokens,
+            response_mime_type="application/json", label="generate_no_tools_trajectory",
+            role="generator",
+        )
+    except Exception as e:
+        return None, f"generator call failed: {e}"
+
+    parsed = parse_agent_json(raw)
+    messages = [
+        {"role": "system", "content": NO_TOOLS_COT_TEACHER_PROMPT},
+        {"role": "user", "content": directive},
+        {"role": "assistant", "content": raw},
+    ]
+
+    if not parsed or not parsed.get("final_answer"):
+        return {
+            "turns": 1,
+            "tool_calls": [],
+            "final_answer": None,
+            "messages": messages,
+            "format_ok": False,
+        }, "no parseable final_answer in single-turn response"
+
+    return {
+        "turns": 1,
+        "tool_calls": [],
+        "final_answer": parsed["final_answer"],
+        "messages": messages,
+        "format_ok": True,
+    }, None
 
 
 def verify_trace(
@@ -352,6 +459,69 @@ def generate_only(
             "failure_reason": fail_reason,
             # Preserve whatever the model actually did before failing (successful
             # tool calls, partial reasoning turns) rather than losing it outright.
+            "partial_trajectory": to_jsonable(traj) if traj else None,
+        }
+
+    return {
+        "image_id": image_id,
+        "image_path": str(image_path),
+        "ground_truth": ground_truth,
+        "status": "unverified",
+        "trajectory": to_jsonable(traj),
+    }
+
+
+def generate_only_no_tools(
+    image_id: int,
+    images_df: pd.DataFrame,
+    annots_df: pd.DataFrame,
+    categories_df: pd.DataFrame | None = None,
+    diag_col: str = "category_id_3",
+    max_tokens: int = 2048,
+) -> dict[str, Any] | None:
+    """Tool-free sibling of generate_only -- for baseline #3's SFT training
+    data (dentex-agentic-vlm-proposal.md §6). Mirrors generate_only's exact
+    return shape (image_id/image_path/ground_truth/status/trajectory or
+    failure_reason) so it slots into the same append_trace/file-writing and
+    downstream verify_pending/SFT-loading code paths unchanged -- only the
+    generation step itself differs (one direct call via
+    generate_no_tools_trajectory, no LangGraph loop, no ToolRegistry).
+
+    Does NOT call the verifier -- same decoupled generate/verify split as
+    generate_only, and the same verify_pending function verifies these
+    traces too (see run_trace_gen.py's --no-tools flag, which points both
+    generate and verify at their own separate _no_tools-suffixed files
+    rather than mixing them into the main system's tool-based traces).
+    """
+    matches = images_df[images_df["id"] == image_id]
+    if matches.empty:
+        return None
+    row = matches.iloc[0]
+    image_path = row.get("local_path")
+    if not image_path or not os.path.exists(str(image_path)):
+        return None
+
+    image = Image.open(image_path).convert("RGB")
+    anns = annots_df[annots_df["image_id"] == image_id]
+    if anns.empty:
+        return None
+
+    cat_lookup = (
+        dict(zip(categories_df["id"], categories_df["name"]))
+        if categories_df is not None and len(categories_df)
+        else {}
+    )
+
+    ground_truth = _format_ground_truth(anns, cat_lookup, diag_col)
+
+    traj, fail_reason = generate_no_tools_trajectory(image, ground_truth, max_tokens=max_tokens)
+    if traj is None or traj.get("final_answer") is None:
+        return {
+            "image_id": image_id,
+            "image_path": str(image_path),
+            "ground_truth": ground_truth,
+            "status": "generation_failed",
+            "failure_reason": fail_reason,
             "partial_trajectory": to_jsonable(traj) if traj else None,
         }
 

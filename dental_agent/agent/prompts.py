@@ -1,5 +1,25 @@
 """
 System prompts, output schemas, and baseline prompts for dental diagnostic agents.
+
+Three "no tools" prompts exist here for three DIFFERENT purposes -- do not
+use one where another belongs, and do not merge them into one "generic
+no-tools prompt":
+  - `ZERO_SHOT_PROMPT`: for baseline #1 in the proposal's evaluation plan
+    (dentex-agentic-vlm-proposal.md §6) -- a raw, untrained frontier model
+    (GPT-4o, base Qwen3.5-9B) prompted directly at eval time, no CoT, no
+    training involved at all. Used by dental_agent/evaluation/baselines.py.
+  - `NO_TOOLS_SYSTEM_PROMPT`: for baseline #3's GRPO rollout loop
+    (dental_agent/agent/loop.py) -- final_answer only, no "thought" field,
+    used live during RL rollouts for the tool-free policy.
+  - `NO_TOOLS_COT_TEACHER_PROMPT`: for generating SFT training traces for
+    baseline #3's Stage 1 (proposal §6, baseline #3 needs the SAME SFT+RL
+    recipe as the main system to cleanly isolate tool contribution, not RL
+    from scratch with no SFT warm-start -- that would confound "no SFT"
+    with "no tools"). Has a "thought" field, matching the tool-based
+    traces' schema, since it's producing the same kind of SFT training
+    data, just without any tool_calls. See
+    dental_agent/training/trace_generation.py's
+    generate_no_tools_trajectory for how this gets used.
 """
 
 from __future__ import annotations
@@ -51,6 +71,44 @@ NO_TOOLS_SYSTEM_PROMPT = (
     '<1-8>, "diagnosis": "<Caries|Deep Caries|Periapical Lesion|Impacted Tooth>", '
     '"confidence": <0-1>}, ...]}. Do not include any other text outside the JSON object.'
 )
+
+
+NO_TOOLS_COT_TEACHER_PROMPT = """You are an expert dental radiologist AI analyzing a panoramic dental X-ray (OPG).
+
+You do NOT have access to any tools -- no zoom, no windowing, no grounding, no
+correction. You are given the single full-resolution image and must reason about
+it directly, then commit to a diagnosis, in ONE turn.
+
+You will be told which finding(s) a case has (quadrant, tooth position, diagnosis)
+as a directive for generating a training demonstration -- this is standard practice
+for building this kind of dataset (an expert reviewer already confirmed the answer;
+your job is to write the clinical reasoning a radiologist would give for noticing
+it on first read of the image, not to discover it blind). Because there is no tool
+output to point at, ground everything you say in what is actually visible in the
+image at the described tooth's approximate anatomical location (quadrant and
+position tell you roughly where to look) -- describe plausible, specific visual
+findings (radiolucency, density change, structural irregularity) rather than vague
+assertions, and do not describe anything you cannot actually justify from a
+panoramic X-ray's visual information.
+
+GUIDELINES:
+1. Never mention in your reasoning that a diagnosis or directive was given to you.
+   Reason as first-look clinical analysis, in your own words, as if you noticed
+   this on visual inspection of the image yourself.
+2. Describe the approximate anatomical region you are examining (e.g. "the
+   lower-left first molar region") before describing what you observe there --
+   a real radiologist orients themselves before describing a finding.
+3. A case may have multiple findings; cover all of them in one coherent pass over
+   the image, in your final answer's list.
+4. Structure your entire response as EXACTLY ONE valid JSON object, no markdown,
+   no commentary outside it.
+
+RESPONSE FORMAT:
+{"thought": "<clinical reasoning covering all findings>", "final_answer": [{"quadrant": <1-4>, "tooth_position": <1-8>, "diagnosis": "<Caries|Deep Caries|Periapical Lesion|Impacted Tooth>", "confidence": <0.0-1.0>}, ...]}
+
+EXAMPLE:
+{"thought": "Examining the lower-left first molar region, there's a radiolucent area at the root apex consistent with a periapical lesion -- the surrounding bone density looks reduced compared to the contralateral side. Moving to the upper-right third molar region, the enamel surface shows a dark radiolucent defect typical of caries.", "final_answer": [{"quadrant": 3, "tooth_position": 6, "diagnosis": "Periapical Lesion", "confidence": 0.85}, {"quadrant": 1, "tooth_position": 8, "diagnosis": "Caries", "confidence": 0.82}]}
+"""
 
 
 ZERO_SHOT_PROMPT = (

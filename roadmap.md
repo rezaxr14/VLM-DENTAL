@@ -140,8 +140,40 @@ hand-rolled copy of the same logic.
   vertical midline), and `enhance_contrast` (existed as a working function
   for a while but was never actually registered — the same
   built-but-unreachable pattern `locate_abnormal_teeth` used to have, before
-  it was removed entirely rather than wired in, see §7 below) is now
+  it was removed entirely rather than wired in, see §8 below) is now
   wired into the registry.
+- **No-tools SFT trace generation** (`--no-tools` flag, `generate_no_tools_trajectory`/
+  `generate_only_no_tools` in `trace_generation.py`): generates SFT training
+  data for baseline #3 in the proposal's evaluation plan
+  (dentex-agentic-vlm-proposal.md §6: "Full agent without tool access...
+  isolates the contribution of tools"). Baseline #3 needs the SAME SFT+RL
+  recipe as the main system, just with tools removed from the environment —
+  otherwise "no SFT warm-start" and "no tools" would be confounded variables
+  and the ablation wouldn't cleanly isolate tool contribution. This is a
+  single-turn, ground-truth-directed generation (a new
+  `NO_TOOLS_COT_TEACHER_PROMPT` in `prompts.py`, with a `"thought"` field
+  matching the tool-based traces' schema) via one direct API call — no
+  LangGraph loop, no `ToolRegistry`, since there's no tool orchestration to
+  do. Do not confuse this with the two OTHER "no tools" prompts already in
+  `prompts.py`: `ZERO_SHOT_PROMPT` (baseline #1, a raw untrained model
+  prompted at eval time, no training involved) and the existing
+  `NO_TOOLS_SYSTEM_PROMPT` (baseline #3's own GRPO-rollout-time prompt in
+  `agent/loop.py`, final_answer only, no `"thought"` field — a different,
+  already-built piece for the RL stage, not the SFT-data-generation gap this
+  fills). Ground-truth conditioning here necessarily works differently from
+  the tool-based path (no grounding tool to narrow a search region through
+  without revealing the answer) — the model is told directly which
+  finding(s) to cover and asked to write the reasoning a radiologist would
+  give for noticing them on inspection, which is closer to hindsight
+  rationalization than genuine blind discovery. That's an intentional,
+  documented tradeoff (see `generate_no_tools_trajectory`'s docstring) — the
+  alternative, blind single-pass generation with no conditioning at all,
+  would tank yield the same way blind tool-based generation would. The same
+  cross-family `verify_trace`/`verify_pending` already used for tool-based
+  traces verifies these too, completely unmodified — it only ever inspected
+  `trajectory["messages"]` against `ground_truth`, nothing tool-specific.
+  Reads/writes separate `_no_tools`-suffixed files (both unverified and
+  verified) so these never mix into the main system's SFT training set.
 
 ### 3. The FDI 0-Index Bug Fix (CRITICAL — read this even if you skip everything else)
 DENTEX's raw JSON labels `category_id_1`/`category_id_2` as **0-indexed**

@@ -33,6 +33,12 @@ for the mechanics, and .gitattributes for the merge=union rule this relies on):
     python scripts/run_trace_gen.py --mode generate --total-slices 3 --slice-index 3 \
         --slice-seed 42 --git-sync-every 5
 Requires GITHUB_TOKEN set in .env on each instance (already documented there).
+
+Generating baseline #3's no-tools SFT training data (dentex-agentic-vlm-
+proposal.md §6) instead of the main tool-based traces -- same --dataset,
+--total-slices etc. all still apply, reads/writes separate _no_tools files:
+    python scripts/run_trace_gen.py --mode generate --no-tools
+    python scripts/run_trace_gen.py --mode verify --no-tools
 """
 
 from __future__ import annotations
@@ -67,6 +73,7 @@ from dental_agent.training.api_pool import (
 import dental_agent.training.trace_generation as tg
 from dental_agent.training.trace_generation import (
     generate_only,
+    generate_only_no_tools,
     verify_pending,
 )
 from dental_agent.training.git_sync import sync_and_push
@@ -186,6 +193,15 @@ def run_generate(args: argparse.Namespace, cfg: Any) -> None:
             # unchanged, so existing single-dataset invocations are unaffected.
             output_path = Path(DEFAULT_UNVERIFIED)
 
+        if args.no_tools and not explicit_output:
+            # Separate file from the main tool-based traces -- these feed
+            # baseline #3's SFT stage (proposal §6), never the main system's,
+            # so they must never land in the same file. Suffix applied after
+            # the dataset-name suffix above (if any), not instead of it, so
+            # --no-tools with multiple --dataset names still gets one file
+            # per dataset, just also tagged _no_tools.
+            output_path = Path(str(output_path).replace(".jsonl", "_no_tools.jsonl"))
+
         if len(dataset_list) > 1:
             print(f"\n{'=' * 70}\nDataset: {dataset_name}\n{'=' * 70}")
         _run_generate_for_dataset(args, cfg, dataset_name, output_path)
@@ -284,17 +300,26 @@ def _run_generate_for_dataset(args: argparse.Namespace, cfg: Any, dataset_name: 
                     time.sleep(5)
 
             t0 = time.time()
-            result = generate_only(
-                image_id=image_id,
-                images_df=imgs_df,
-                annots_df=annots_df,
-                categories_df=cats_df,
-                max_turns=args.max_turns,
-                max_tool_calls=args.max_tool_calls,
-                max_tokens_per_turn=args.max_tokens,
-                min_turns=args.min_turns,
-                turns_per_finding_buffer=args.turns_per_finding_buffer,
-            )
+            if args.no_tools:
+                result = generate_only_no_tools(
+                    image_id=image_id,
+                    images_df=imgs_df,
+                    annots_df=annots_df,
+                    categories_df=cats_df,
+                    max_tokens=args.max_tokens or 2048,
+                )
+            else:
+                result = generate_only(
+                    image_id=image_id,
+                    images_df=imgs_df,
+                    annots_df=annots_df,
+                    categories_df=cats_df,
+                    max_turns=args.max_turns,
+                    max_tool_calls=args.max_tool_calls,
+                    max_tokens_per_turn=args.max_tokens,
+                    min_turns=args.min_turns,
+                    turns_per_finding_buffer=args.turns_per_finding_buffer,
+                )
             elapsed = time.time() - t0
 
             if result is None:
@@ -422,6 +447,11 @@ def run_verify(args: argparse.Namespace, cfg: Any) -> None:
         else:
             unverified_path = Path(DEFAULT_UNVERIFIED)
 
+        if args.no_tools and not explicit_output:
+            # Must match run_generate's --no-tools suffixing exactly, or
+            # verify mode would read the wrong (or a nonexistent) file.
+            unverified_path = Path(str(unverified_path).replace(".jsonl", "_no_tools.jsonl"))
+
         if len(dataset_list) > 1:
             print(f"\n{'=' * 70}\nDataset: {dataset_name}\n{'=' * 70}")
         _run_verify_for_dataset(args, cfg, unverified_path)
@@ -430,6 +460,14 @@ def run_verify(args: argparse.Namespace, cfg: Any) -> None:
 def _run_verify_for_dataset(args: argparse.Namespace, cfg: Any, unverified_path: Path) -> None:
     """Read one dataset's unverified traces and verify them via external API verifiers."""
     verified_path = Path(DEFAULT_VERIFIED)
+    if args.no_tools:
+        # Separate verified file too -- baseline #3's SFT data must never
+        # mix with the main system's (see run_generate's --no-tools handling
+        # and generate_only_no_tools's docstring). verify_pending itself
+        # doesn't care which trace kind it's verifying (see that function's
+        # docstring in trace_generation.py) -- only the file it's pointed at
+        # needs to be kept separate, which this achieves.
+        verified_path = Path(str(verified_path).replace(".jsonl", "_no_tools.jsonl"))
 
     # Count totals for banner
     unverified_ids = load_completed_ids(unverified_path)
@@ -509,6 +547,18 @@ def parse_args() -> argparse.Namespace:
         help="Which slice (1-indexed) this run processes. Must be between 1 and --total-slices.")
     parser.add_argument("--slice-seed", type=int, default=42,
         help="Seed for the random slice partition. Keep identical across all parallel Colab instances.")
+    parser.add_argument("--no-tools", action="store_true",
+        help="Generate/verify SFT training traces for baseline #3 (dentex-agentic-vlm-"
+             "proposal.md §6: 'Full agent without tool access... isolates the contribution "
+             "of tools') instead of the main tool-based system: single-turn, no LangGraph "
+             "tool loop, no ToolRegistry -- see dental_agent/training/trace_generation.py's "
+             "generate_no_tools_trajectory. Reads/writes separate _no_tools-suffixed files "
+             "(both unverified and verified) so these never mix into the main system's SFT "
+             "training set. Does NOT affect --mode verify's use of verify_pending, which is "
+             "reused unmodified for both trace kinds. Do not confuse this with baseline #1's "
+             "ZERO_SHOT_PROMPT (evaluation/baselines.py, no training involved) or baseline "
+             "#3's own GRPO-rollout-time NO_TOOLS_SYSTEM_PROMPT (agent/loop.py) -- this flag "
+             "is specifically for generating that baseline's Stage 1 SFT data.")
     parser.add_argument("--git-sync-every", type=int, default=0,
         help="Push generated/verified traces to the shared git repo every N traces (default: 0 = "
              "disabled, no git operations attempted). Designed for running --total-slices > 1 "
