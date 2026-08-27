@@ -21,6 +21,7 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
+import pandas as pd
 
 repo_root = str(Path(__file__).resolve().parent.parent)
 if repo_root not in sys.path:
