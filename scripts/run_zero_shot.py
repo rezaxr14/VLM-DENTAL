@@ -285,6 +285,10 @@ def _run_zero_shot_for_target(
 
     eligible_imgs = eligible_imgs[eligible_imgs["local_path"].notna() & (eligible_imgs["local_path"] != "None")]
 
+    if getattr(args, "fresh", False) and output_path.exists():
+        output_path.unlink()
+        print(f"  [FRESH] Removed existing output file: {output_path}")
+
     total_eligible = len(eligible_imgs)
     completed_ids = load_completed_ids(output_path)
     remaining_imgs = eligible_imgs[~eligible_imgs["id"].isin(completed_ids)]
@@ -593,6 +597,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature")
     
     # Flags
+    parser.add_argument("--fresh", "--overwrite", action="store_true", help="Start evaluation from scratch and overwrite existing output JSONL")
     parser.add_argument("--ignore-429", action="store_true", help="Opt into retrying 429 rate limit errors (up to 10 retries)")
     parser.add_argument("--ignore-api-errors", action="store_true", help="Continue evaluating remaining images on API errors")
     parser.add_argument("--status-only", action="store_true", help="Inspect slice progress and exit without calling APIs")
