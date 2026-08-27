@@ -505,8 +505,8 @@ def load_combined_dentex_dataset(
         if not isinstance(d, dict) or not d.get("annotations"):
             continue
         name = jf.lower()
-        if split_name in ("val", "validation"):
-            if "val" not in name and "validation" not in name:
+        if split_name in ("val", "validation", "test", "testing"):
+            if "val" not in name and "validation" not in name and "test" not in name:
                 continue
         elif split_name in ("train", "training"):
             if "train" not in name and "training" not in name:
