@@ -422,7 +422,14 @@ def find_local_dentex_dir(data_dir: str | Path | None = None, split_name: str = 
     candidates: list[Path] = []
     if data_dir:
         p = Path(data_dir)
-        candidates.extend([p, p / "dentex", p / "DENTEX"])
+        candidates.extend([
+            p,
+            p / "dentex" / "DENTEX",
+            p / "dentex",
+            p / "DENTEX",
+            p / "data" / "dentex" / "DENTEX",
+            p / "data" / "dentex",
+        ])
     candidates.extend([
         Path("data/dentex/DENTEX"),
         Path("data/dentex"),

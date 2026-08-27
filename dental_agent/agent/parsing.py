@@ -26,6 +26,55 @@ def parse_agent_json(text: str) -> Optional[dict[str, Any]]:
     return result
 
 
+def _extract_candidates(text: str) -> list[str]:
+    """Extract all top-level balanced JSON objects found in a string."""
+    if not text or not isinstance(text, str):
+        return []
+    cleaned = text.strip()
+    cleaned = re.sub(r"<think>.*?</think>", "", cleaned, flags=re.IGNORECASE | re.DOTALL).strip()
+    
+    candidates = []
+    stack = []
+    start = -1
+    in_string = False
+    escape = False
+    
+    for i, char in enumerate(cleaned):
+        if escape:
+            escape = False
+            continue
+        if char == '\\':
+            escape = True
+            continue
+        if char == '"':
+            in_string = not in_string
+            continue
+            
+        if not in_string:
+            if char == '{':
+                if not stack:
+                    start = i
+                stack.append('{')
+            elif char == '}':
+                if stack:
+                    stack.pop()
+                    if not stack and start != -1:
+                        candidates.append(cleaned[start:i+1])
+                        start = -1
+    return candidates
+
+
+def count_action_blobs(text: str) -> int:
+    """Count how many separate action-bearing JSON objects exist in raw model output."""
+    candidates = _extract_candidates(text)
+    count = 0
+    for cand in candidates:
+        res = _try_parse_json(cand)
+        if res and ("final_answer" in res or "tool" in res or "tool_calls" in res):
+            count += 1
+    return count
+
+
 def _parse_agent_json_raw(text: str) -> Optional[dict[str, Any]]:
     """Robustly extract and parse the primary actionable JSON dictionary from model output text.
 
@@ -57,37 +106,7 @@ def _parse_agent_json_raw(text: str) -> Optional[dict[str, Any]]:
                 return result
 
     # 2. Extract ALL independent {} blocks and pick the best one.
-    # We do this by finding all '{' and tracking balanced brackets to extract every possible JSON object in the string.
-    # This prevents the parser from greedily grabbing from the first `{` inside a fake XML tool call to the last `}`.
-    
-    candidates = []
-    stack = []
-    start = -1
-    in_string = False
-    escape = False
-    
-    for i, char in enumerate(cleaned):
-        if escape:
-            escape = False
-            continue
-        if char == '\\':
-            escape = True
-            continue
-        if char == '"':
-            in_string = not in_string
-            continue
-            
-        if not in_string:
-            if char == '{':
-                if not stack:
-                    start = i
-                stack.append('{')
-            elif char == '}':
-                if stack:
-                    stack.pop()
-                    if not stack and start != -1:
-                        candidates.append(cleaned[start:i+1])
-                        start = -1
+    candidates = _extract_candidates(cleaned)
                         
     # --- Multi-blob merge (handles models like minimax that dump several JSON objects per turn) ---
     # Collect every parseable candidate that carries tool_calls or final_answer.

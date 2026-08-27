@@ -127,9 +127,18 @@ def generate_interactive_trajectory(
     image: Image.Image,
     ground_truth: list[dict[str, Any]],
     registry: ToolRegistry,
-    max_turns: int = 8,
+    max_turns: int = 25,
+    min_turns: int = 5,
     max_tool_calls: int = 50,
     max_tokens_per_turn: int | None = None,
+    context_trim_threshold: int | None = None,
+    perturb_small_probability: float = 0.25,
+    perturb_big_probability: float = 0.30,
+    perturb_small_range: tuple[float, float] = (0.12, 0.28),
+    perturb_big_range: tuple[float, float] = (0.45, 0.75),
+    max_blobs_per_turn: int = 2,
+    max_padding_turns: int = 3,
+    max_identical_repeats: int = 3,
     provider: str = GENERATOR_PROVIDER,
     model: str = GENERATOR_MODEL,
     call_llm_fn: Callable[..., str] | None = None,
@@ -145,9 +154,6 @@ def generate_interactive_trajectory(
     gen_provider, gen_model = _resolve_generator()
     system_prompt = build_agent_system_prompt(registry.format_tool_descriptions())
     
-    # Scale max_turns based on number of findings
-    dynamic_max_turns = max(max_turns, len(ground_truth) + 3)
-    
     return run_trace_gen(
         image=image,
         ground_truth=ground_truth,
@@ -155,10 +161,20 @@ def generate_interactive_trajectory(
         system_prompt=system_prompt,
         provider=gen_provider,
         model=gen_model,
-        max_turns=dynamic_max_turns,
+        max_turns=max_turns,
+        min_turns=min_turns,
         max_tool_calls=max_tool_calls,
         max_tokens_per_turn=max_tokens_per_turn,
+        context_trim_threshold=context_trim_threshold,
+        perturb_small_probability=perturb_small_probability,
+        perturb_big_probability=perturb_big_probability,
+        perturb_small_range=perturb_small_range,
+        perturb_big_range=perturb_big_range,
+        max_blobs_per_turn=max_blobs_per_turn,
+        max_padding_turns=max_padding_turns,
+        max_identical_repeats=max_identical_repeats,
     )
+
 
 
 def generate_no_tools_trajectory(
@@ -417,8 +433,16 @@ def generate_only(
     max_turns: int = 25,
     max_tool_calls: int = 50,
     max_tokens_per_turn: int | None = None,
-    min_turns: int = 15,
+    min_turns: int = 5,
     turns_per_finding_buffer: int = 5,
+    context_trim_threshold: int | None = None,
+    perturb_small_probability: float = 0.25,
+    perturb_big_probability: float = 0.30,
+    perturb_small_range: tuple[float, float] = (0.12, 0.28),
+    perturb_big_range: tuple[float, float] = (0.45, 0.75),
+    max_blobs_per_turn: int = 2,
+    max_padding_turns: int = 3,
+    max_identical_repeats: int = 3,
 ) -> dict[str, Any] | None:
     """Generate a raw (unverified) trace for a single image.
     
@@ -457,7 +481,21 @@ def generate_only(
     print(f"  (findings={n_findings}, turn budget={turns_budget})", flush=True)
 
     traj, fail_reason = generate_interactive_trajectory(
-        image, ground_truth, registry, max_turns=turns_budget, max_tool_calls=max_tool_calls, max_tokens_per_turn=max_tokens_per_turn
+        image=image,
+        ground_truth=ground_truth,
+        registry=registry,
+        max_turns=turns_budget,
+        min_turns=min_turns,
+        max_tool_calls=max_tool_calls,
+        max_tokens_per_turn=max_tokens_per_turn,
+        context_trim_threshold=context_trim_threshold,
+        perturb_small_probability=perturb_small_probability,
+        perturb_big_probability=perturb_big_probability,
+        perturb_small_range=perturb_small_range,
+        perturb_big_range=perturb_big_range,
+        max_blobs_per_turn=max_blobs_per_turn,
+        max_padding_turns=max_padding_turns,
+        max_identical_repeats=max_identical_repeats,
     )
     if traj is None or traj.get("final_answer") is None:
         return {
@@ -554,6 +592,7 @@ def verify_pending(
     verified_path: str | Path,
     images_df: pd.DataFrame | None = None,
     call_llm_fn: Callable[..., str] = call_llm,
+    max_repairs: int = 1,
 ) -> dict[str, int]:
     """Read unverified traces, verify each concurrently, and append passing traces to the verified file."""
     unverified_path = Path(unverified_path)
@@ -618,7 +657,7 @@ def verify_pending(
 
         try:
             image = Image.open(image_path).convert("RGB")
-            v_result = verify_trace(image, ground_truth, trajectory, call_llm_fn=call_llm_fn)
+            v_result = verify_trace(image, ground_truth, trajectory, call_llm_fn=call_llm_fn, max_repairs=max_repairs)
             
             if v_result.get("grounded"):
                 trajectory["verifier_reason"] = v_result.get("reason")

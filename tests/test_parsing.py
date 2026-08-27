@@ -65,3 +65,20 @@ This is my reasoning process. I am thinking about how to solve the problem.
     assert parsed is not None
     assert parsed["tool_calls"][0]["tool"] == "zoom_crop"
 
+
+def test_count_action_blobs() -> None:
+    from dental_agent.agent.parsing import count_action_blobs
+    
+    # 1 blob
+    raw_1 = '{"thought": "exploring", "tool": "locate_tooth", "args": {"tooth": 18}}'
+    assert count_action_blobs(raw_1) == 1
+
+    # 2 blobs
+    raw_2 = '{"thought": "step 1", "tool": "locate_tooth", "args": {"tooth": 18}}\n{"thought": "step 2", "tool": "zoom_crop", "args": {"bbox": [1,2,3,4]}}'
+    assert count_action_blobs(raw_2) == 2
+
+    # 4 blobs (dump)
+    raw_4 = '\n'.join([f'{{"tool": "tool_{i}", "args": {{}}}}' for i in range(4)])
+    assert count_action_blobs(raw_4) == 4
+
+
