@@ -229,10 +229,19 @@ def generate_no_tools_trajectory(
         {"role": "user", "content": directive},
         {"role": "assistant", "content": raw},
     ]
+    # Single-item list, matching langgraph_loop.py's per-turn record schema
+    # exactly ({"turn": int, "raw_output": str, "parsed": dict|None}) -- NOT
+    # an int turn-count as this previously (bug) had it. Getting this wrong
+    # silently breaks anything that reads trajectory["turns"] expecting a
+    # list of turn dicts -- e.g. dental_agent/rewards/judge.py's
+    # reward_judge, which iterates turns for "raw_output" and would raise
+    # TypeError: 'int' object is not iterable the moment it's pointed at a
+    # no-tools trace generated before this fix.
+    turns = [{"turn": 0, "raw_output": raw, "parsed": parsed}]
 
     if not parsed or not parsed.get("final_answer"):
         return {
-            "turns": 1,
+            "turns": turns,
             "tool_calls": [],
             "final_answer": None,
             "messages": messages,
@@ -240,7 +249,7 @@ def generate_no_tools_trajectory(
         }, "no parseable final_answer in single-turn response"
 
     return {
-        "turns": 1,
+        "turns": turns,
         "tool_calls": [],
         "final_answer": parsed["final_answer"],
         "messages": messages,
