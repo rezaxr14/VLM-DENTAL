@@ -220,16 +220,19 @@ def _reasoning_node_factory(provider: str, model: str, max_tool_calls: int, max_
         state["consecutive_parse_errors"] = 0
 
         # Multi-blob models (e.g. minimax) may emit both tool_calls AND final_answer in one
-        # raw response.  Execute the tools first, stash the final_answer, and accept it on
-        # the very next reasoning cycle without an extra LLM call.
+        # raw response. Execute the tools first, stash the final_answer for later.
+        # CRITICAL: if this is turn 0, the model has not seen any tool results yet — any
+        # final_answer it emits is pure hallucination. Discard it entirely; do not stash.
         if "final_answer" in parsed and "tool_calls" in parsed and parsed.get("tool_calls"):
-            state["pending_final_answer"] = parsed["final_answer"]
+            if len(state["turns"]) > 0:
+                # Turn ≥ 1: model has seen at least one round of tool results — stash is valid.
+                state["pending_final_answer"] = parsed["final_answer"]
+            # Always strip final_answer so the tool_calls branch runs this turn.
             parsed = {k: v for k, v in parsed.items() if k != "final_answer"}
 
-        # Only consume the stash once enough turns have been completed (MIN_TURNS_BEFORE_FINAL).
-        # This stops a multi-blob model from dumping everything in turn 0 and finalising on
-        # turn 1 — we still require it to have gone through multiple genuine reasoning cycles.
-        MIN_TURNS_BEFORE_FINAL = 4
+        # Only consume the stash once MIN_TURNS_BEFORE_FINAL turns have been completed.
+        # 7 matches the minimum turns enforced in the Colab notebook.
+        MIN_TURNS_BEFORE_FINAL = 7
         if (
             "final_answer" not in parsed
             and state.get("pending_final_answer") is not None
