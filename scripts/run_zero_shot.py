@@ -381,7 +381,7 @@ def _run_zero_shot_for_target(
             if args.image_max_dim > 0:
                 image.thumbnail((args.image_max_dim, args.image_max_dim), Image.Resampling.LANCZOS)
 
-            # Call VLM with ZERO_SHOT_PROMPT
+            # Call VLM with ZERO_SHOT_PROMPT (with reasoning & multi-finding guidelines)
             raw_reply = call_llm(
                 provider=provider,
                 model=model,
@@ -389,7 +389,7 @@ def _run_zero_shot_for_target(
                 user_content=ZERO_SHOT_PROMPT,
                 image=image,
                 temperature=args.temperature,
-                max_tokens=2048,
+                max_tokens=args.max_tokens,
             )
 
             # Parse and match predictions against ALL ground truth findings
@@ -595,6 +595,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", default=None, help="Explicit output file path override")
     parser.add_argument("--image-max-dim", type=int, default=0, help="Max image dimension (0 = full resolution)")
     parser.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature")
+    parser.add_argument("--max-tokens", type=int, default=4096, help="Max tokens for VLM response (reasoning thought + findings JSON)")
     
     # Flags
     parser.add_argument("--fresh", "--overwrite", action="store_true", help="Start evaluation from scratch and overwrite existing output JSONL")
