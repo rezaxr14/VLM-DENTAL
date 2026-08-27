@@ -111,9 +111,27 @@ EXAMPLE:
 """
 
 
-ZERO_SHOT_PROMPT = (
-    "You are looking at a panoramic dental X-ray. Identify ALL abnormal teeth and respond "
-    'with exactly one JSON object: {"findings": [{"quadrant": <1-4>, "tooth_position": <1-8>, "diagnosis": '
-    '"<Caries|Deep Caries|Periapical Lesion|Impacted Tooth>", "confidence": <0-1>}, ...]}. '
-    "No other text, no tools, no reasoning shown."
-)
+ZERO_SHOT_PROMPT = """You are an expert dental radiologist evaluating a panoramic dental radiograph (OPG).
+Carefully examine the entire radiograph across all four quadrants (Quadrant 1: Upper Right, Quadrant 2: Upper Left, Quadrant 3: Lower Left, Quadrant 4: Lower Right).
+
+CLINICAL GUIDELINES:
+1. Panoramic X-rays frequently contain MULTIPLE abnormal teeth (typically 1 to 7 distinct findings). You must identify and report ALL abnormal teeth present across all quadrants.
+2. For each abnormal tooth, report standard FDI Two-Digit Notation:
+   - quadrant: 1 (Upper Right), 2 (Upper Left), 3 (Lower Left), or 4 (Lower Right)
+   - tooth_position: 1 (Central Incisor) to 8 (Third Molar / Wisdom Tooth)
+   - diagnosis: Exactly one of "Caries", "Deep Caries", "Periapical Lesion", "Impacted Tooth"
+   - confidence: Probability score between 0.0 and 1.0
+3. First reason step-by-step through your visual observations (evaluating enamel radiolucency, pulp involvement, periapical radiolucency, and impactions), then summarize all findings in the final JSON object.
+
+RESPONSE FORMAT (EXACTLY ONE JSON OBJECT):
+{
+  "thought": "<concise clinical reasoning covering all examined quadrants>",
+  "findings": [
+    {
+      "quadrant": <1-4>,
+      "tooth_position": <1-8>,
+      "diagnosis": "<Caries|Deep Caries|Periapical Lesion|Impacted Tooth>",
+      "confidence": <0.0-1.0>
+    }
+  ]
+}"""
