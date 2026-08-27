@@ -477,14 +477,13 @@ def generate_only(
     # it actually needs, rather than either starving complex cases or teaching
     # wandering into simple ones via an inflated global default.
     n_findings = len(ground_truth)
-    turns_budget = min(max_turns, max(min_turns, n_findings + turns_per_finding_buffer))
-    print(f"  (findings={n_findings}, turn budget={turns_budget})", flush=True)
+    print(f"  (findings={n_findings}, max_turns={max_turns})", flush=True)
 
     traj, fail_reason = generate_interactive_trajectory(
         image=image,
         ground_truth=ground_truth,
         registry=registry,
-        max_turns=turns_budget,
+        max_turns=max_turns,
         min_turns=min_turns,
         max_tool_calls=max_tool_calls,
         max_tokens_per_turn=max_tokens_per_turn,
