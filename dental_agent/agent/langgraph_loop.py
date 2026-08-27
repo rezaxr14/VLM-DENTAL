@@ -75,7 +75,7 @@ def _provider_env(provider: str, suffix: str, code_default: int) -> int:
     return int(val) if val else code_default
 
 
-def _reasoning_node_factory(provider: str, model: str, max_tool_calls: int, min_turns: int = 7, max_tokens: int | None = None, context_trim_threshold: int | None = None):
+def _reasoning_node_factory(provider: str, model: str, max_tool_calls: int, min_turns: int = 5, max_tokens: int | None = None, context_trim_threshold: int | None = None):
     if max_tokens is not None:
         resolved_max_tokens = max_tokens
     else:
@@ -508,7 +508,7 @@ def build_trace_gen_graph(
     provider: str = "local",
     model: str = "Qwen/Qwen3.5-9B",
     max_tool_calls: int = 8,
-    min_turns: int = 7,
+    min_turns: int = 5,
     max_tokens: int | None = None,
     perturb_small_probability: float = 0.25,
     perturb_big_probability: float = 0.30,
@@ -541,7 +541,7 @@ def run_trace_gen(
     provider: str = "local",
     model: str = "Qwen/Qwen3.5-9B",
     max_turns: int = 8,
-    min_turns: int = 7,
+    min_turns: int = 5,
     max_tool_calls: int = 50,
     max_tokens_per_turn: int | None = None,
     perturb_small_probability: float = 0.25,
