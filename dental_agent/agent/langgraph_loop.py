@@ -219,6 +219,18 @@ def _reasoning_node_factory(provider: str, model: str, max_tool_calls: int, max_
 
         state["consecutive_parse_errors"] = 0
 
+        # Multi-blob models (e.g. minimax) may emit both tool_calls AND final_answer in one
+        # raw response.  Execute the tools first, stash the final_answer, and accept it on
+        # the very next reasoning cycle without an extra LLM call.
+        if "final_answer" in parsed and "tool_calls" in parsed and parsed.get("tool_calls"):
+            state["pending_final_answer"] = parsed["final_answer"]
+            parsed = {k: v for k, v in parsed.items() if k != "final_answer"}
+
+        # If we have a stashed final_answer from a prior multi-blob turn, try to accept it
+        # now that the tool-side work has been recorded.
+        if "final_answer" not in parsed and state.get("pending_final_answer") is not None:
+            parsed = {"final_answer": state.pop("pending_final_answer")}
+
         if "final_answer" in parsed:
             if state["tool_calls"] == 0:
                 turn_record["status"] = "rejected_final_answer"
@@ -572,6 +584,7 @@ def run_trace_gen(
         "turns": [],
         "tool_calls": 0,
         "final_answer": None,
+        "pending_final_answer": None,
         "status": "running",
         "error": None,
         "consecutive_parse_errors": 0,

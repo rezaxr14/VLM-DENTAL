@@ -89,11 +89,45 @@ def _parse_agent_json_raw(text: str) -> Optional[dict[str, Any]]:
                         candidates.append(cleaned[start:i+1])
                         start = -1
                         
-    # Try all balanced candidates from back to front (since the final action is usually last)
-    for cand in reversed(candidates):
+    # --- Multi-blob merge (handles models like minimax that dump several JSON objects per turn) ---
+    # Collect every parseable candidate that carries tool_calls or final_answer.
+    parsed_candidates = []
+    for cand in candidates:
         res = _try_parse_json(cand)
         if res and ("final_answer" in res or "tool" in res or "tool_calls" in res):
-            return res
+            parsed_candidates.append(res)
+
+    if len(parsed_candidates) > 1:
+        # There are multiple action-bearing blobs in this single model response.
+        # Merge: accumulate all tool_calls, and surface final_answer if any blob has it.
+        merged_tool_calls: list = []
+        merged_final_answer = None
+        merged_thought_parts: list = []
+
+        for pc in parsed_candidates:
+            if pc.get("thought"):
+                merged_thought_parts.append(pc["thought"])
+            # Normalise legacy single-tool format into tool_calls list
+            if "tool" in pc and "tool_calls" not in pc:
+                merged_tool_calls.append({"tool": pc["tool"], "args": pc.get("args", {}) or {}})
+            elif "tool_calls" in pc and isinstance(pc["tool_calls"], list):
+                merged_tool_calls.extend(pc["tool_calls"])
+            if "final_answer" in pc and merged_final_answer is None:
+                merged_final_answer = pc["final_answer"]
+
+        merged: dict = {}
+        if merged_thought_parts:
+            merged["thought"] = " | ".join(merged_thought_parts)
+        if merged_tool_calls:
+            merged["tool_calls"] = merged_tool_calls
+        if merged_final_answer is not None:
+            merged["final_answer"] = merged_final_answer
+        if merged:
+            return merged
+
+    # Single-blob path: pick the last (most recent) actionable blob
+    if parsed_candidates:
+        return parsed_candidates[-1]
             
     # 3. If no balanced candidates worked (truncation), try repairing the outermost block that looks like an action
     action_idx = max(cleaned.rfind('{"final_answer"'), cleaned.rfind('{"tool"'))
