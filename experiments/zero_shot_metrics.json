@@ -1,0 +1,15 @@
+{
+  "dentex_test_gemini_gemini-3.5-flash-lite": {
+    "format_adherence": 1.0,
+    "fdi_localization_accuracy": 0.5116279069767442,
+    "pathology_macro_f1": 0.3488372093023256,
+    "exact_match_accuracy": 0.3488372093023256,
+    "exact_match_ci_95": [
+      0.20930232558139536,
+      0.4883720930232558
+    ],
+    "ece": 0.5728571500097002,
+    "mean_tool_calls": 0.0,
+    "total_samples": 43.0
+  }
+}
