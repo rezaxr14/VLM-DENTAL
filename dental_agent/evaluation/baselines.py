@@ -94,6 +94,134 @@ def majority_class_baseline_metrics(
     return metrics
 
 
+def parse_zero_shot_response(text: str) -> dict[str, Any] | list[dict[str, Any]] | None:
+    """Robustly parse JSON response from zero-shot VLM evaluation.
+    
+    Handles:
+    - {"findings": [{"quadrant": ..., "tooth_position": ..., "diagnosis": ..., "confidence": ...}, ...]}
+    - {"final_answer": [{"quadrant": ..., ...}]} or {"final_answer": {"quadrant": ..., ...}}
+    - Direct {"quadrant": ..., "tooth_position": ..., "diagnosis": ...}
+    - Markdown code blocks (```json ... ```)
+    - <think>...</think> reasoning tags
+    """
+    if not text or not isinstance(text, str):
+        return None
+
+    import re
+    cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.IGNORECASE | re.DOTALL).strip()
+
+    # 1. Try markdown code block extraction
+    code_blocks = re.findall(r"```(?:json)?\s*([\s\S]*?)\s*```", cleaned, re.IGNORECASE)
+    for block in reversed(code_blocks):
+        try:
+            parsed = json.loads(block.strip())
+            if isinstance(parsed, (dict, list)):
+                return parsed
+        except Exception:
+            # Trailing comma cleanup
+            sub_block = re.sub(r",\s*([\]}])", r"\1", block.strip())
+            try:
+                parsed = json.loads(sub_block)
+                if isinstance(parsed, (dict, list)):
+                    return parsed
+            except Exception:
+                pass
+
+    # 2. Extract balanced JSON objects
+    stack = []
+    start = -1
+    in_string = False
+    escape = False
+    candidates = []
+
+    for i, char in enumerate(cleaned):
+        if escape:
+            escape = False
+            continue
+        if char == '\\':
+            escape = True
+            continue
+        if char == '"':
+            in_string = not in_string
+            continue
+        if not in_string:
+            if char in ('{', '['):
+                if not stack:
+                    start = i
+                stack.append(char)
+            elif char in ('}', ']'):
+                if stack:
+                    opener = stack.pop()
+                    if not stack and start != -1:
+                        candidates.append(cleaned[start:i + 1])
+                        start = -1
+
+    for cand in reversed(candidates):
+        try:
+            parsed = json.loads(cand)
+            if isinstance(parsed, (dict, list)):
+                return parsed
+        except Exception:
+            sub_cand = re.sub(r",\s*([\]}])", r"\1", cand)
+            try:
+                parsed = json.loads(sub_cand)
+                if isinstance(parsed, (dict, list)):
+                    return parsed
+            except Exception:
+                pass
+
+    # 3. Fallback to parse_agent_json
+    return parse_agent_json(text)
+
+
+def match_zero_shot_finding(
+    parsed_output: Any,
+    gt_quadrant: int | None = None,
+    gt_tooth_position: int | None = None,
+) -> dict[str, Any] | None:
+    """Extract and match the most relevant finding from a parsed zero-shot response.
+    
+    Normalizes:
+    - {"findings": [...]} -> selected finding dict
+    - {"final_answer": [...]} -> selected finding dict
+    - {"final_answer": {...}} -> finding dict
+    - {"quadrant": ..., "tooth_position": ..., "diagnosis": ...} -> finding dict
+    """
+    if parsed_output is None:
+        return None
+
+    findings_list: list[dict[str, Any]] = []
+
+    if isinstance(parsed_output, list):
+        findings_list = [f for f in parsed_output if isinstance(f, dict)]
+    elif isinstance(parsed_output, dict):
+        if "findings" in parsed_output and isinstance(parsed_output["findings"], list):
+            findings_list = [f for f in parsed_output["findings"] if isinstance(f, dict)]
+        elif "final_answer" in parsed_output:
+            fa = parsed_output["final_answer"]
+            if isinstance(fa, list):
+                findings_list = [f for f in fa if isinstance(f, dict)]
+            elif isinstance(fa, dict):
+                return fa
+        elif "quadrant" in parsed_output or "diagnosis" in parsed_output:
+            return parsed_output
+
+    if not findings_list:
+        return parsed_output if isinstance(parsed_output, dict) else None
+
+    # If ground truth tooth position is known, prioritize finding that matches the tooth
+    if gt_quadrant is not None and gt_tooth_position is not None:
+        for f in findings_list:
+            if f.get("quadrant") == gt_quadrant and f.get("tooth_position") == gt_tooth_position:
+                return f
+        for f in findings_list:
+            if f.get("quadrant") == gt_quadrant:
+                return f
+
+    # Fallback to the first finding
+    return findings_list[0]
+
+
 def run_zero_shot_baseline(
     image_ids: list[int],
     images_df: pd.DataFrame,
@@ -104,15 +232,39 @@ def run_zero_shot_baseline(
     cache_path: str | Path | None = None,
     resume: bool = True,
     diag_col: str = "category_id_3",
+    pacing_delay: float = 0.0,
+    image_max_dim: int = 0,
+    temperature: float = 0.0,
+    on_result_callback: Any = None,
 ) -> list[dict[str, Any]]:
     """No fine-tuning, no tool access, single pass — zero-shot commercial VLM evaluation."""
     results: list[dict[str, Any]] = []
     done_ids: set[int] = set()
 
     if cache_path and resume and os.path.exists(str(cache_path)):
-        with open(cache_path) as f:
-            results = json.load(f)
-        done_ids = {r["image_id"] for r in results}
+        with open(cache_path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                    results.append(rec)
+                    if "image_id" in rec:
+                        done_ids.add(int(rec["image_id"]))
+                except Exception:
+                    pass
+        if not results and os.path.exists(str(cache_path)):
+            # Try plain json format fallback
+            try:
+                with open(cache_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, list):
+                        results = data
+                        done_ids = {int(r["image_id"]) for r in results if "image_id" in r}
+            except Exception:
+                pass
+
         print(f"Resuming: {len(done_ids)} image(s) already processed in {cache_path}")
 
     cat_lookup = (
@@ -121,7 +273,8 @@ def run_zero_shot_baseline(
         else {}
     )
 
-    for image_id in image_ids:
+    import time
+    for image_id in tqdm(image_ids, desc=f"ZeroShot ({provider}/{model})"):
         if image_id in done_ids:
             continue
         anns = annots_df[annots_df["image_id"] == image_id]
@@ -144,23 +297,65 @@ def run_zero_shot_baseline(
             continue
         image = Image.open(image_path).convert("RGB")
 
-        raw = call_llm(provider, model, ZERO_SHOT_PROMPT, "Analyze this X-ray.", image=image)
-        parsed = parse_agent_json(raw)
+        if pacing_delay > 0:
+            time.sleep(pacing_delay)
 
-        reward_val = reward_accuracy({"final_answer": parsed}, ground_truth) if parsed else 0.0
-        results.append(to_jsonable({
+        try:
+            raw = call_llm(
+                provider=provider,
+                model=model,
+                system_prompt="You are an expert dental radiologist analyzing panoramic dental radiographs.",
+                user_content=ZERO_SHOT_PROMPT,
+                image=image,
+                temperature=temperature,
+                max_tokens=2048,
+            )
+            parsed_raw = parse_zero_shot_response(raw)
+            parsed_final = match_zero_shot_finding(parsed_raw, gt_quadrant=quadrant, gt_tooth_position=tooth_position)
+            err_msg = None
+        except Exception as e:
+            raw = f"Error: {e}"
+            parsed_raw = None
+            parsed_final = None
+            err_msg = str(e)
+
+        reward_val = reward_accuracy({"final_answer": parsed_final}, ground_truth) if parsed_final else 0.0
+        format_ok = bool(
+            parsed_final
+            and isinstance(parsed_final, dict)
+            and "diagnosis" in parsed_final
+            and "quadrant" in parsed_final
+            and "tooth_position" in parsed_final
+        )
+
+        item = to_jsonable({
             "image_id": image_id,
             "ground_truth": ground_truth,
-            "final_answer": parsed,
+            "final_answer": parsed_final,
+            "raw_output": raw,
             "tool_calls": 0,
-            "format_ok": parsed is not None,
+            "format_ok": format_ok,
             "reward": reward_val,
-            "reward_components": {},
-        }))
+            "reward_components": {"accuracy": reward_val},
+            "error": err_msg,
+        })
+        results.append(item)
+        done_ids.add(image_id)
+
+        if on_result_callback is not None:
+            try:
+                on_result_callback(item)
+            except Exception:
+                pass
 
         if cache_path:
-            with open(cache_path, "w") as f:
-                json.dump(to_jsonable(results), f, indent=2)
+            # Append line to jsonl
+            try:
+                os.makedirs(os.path.dirname(str(cache_path)) or ".", exist_ok=True)
+                with open(cache_path, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(item) + "\n")
+            except Exception as e:
+                print(f"Warning: Failed to write to cache {cache_path}: {e}")
 
     return results
 
@@ -189,7 +384,8 @@ def run_zeroshot_baseline(
                 image=image,
                 temperature=0.0,
             )
-            parsed = parse_agent_json(raw_reply)
+            parsed_raw = parse_zero_shot_response(raw_reply)
+            parsed = match_zero_shot_finding(parsed_raw)
         except Exception as e:
             raw_reply = f"Error: {e}"
             parsed = None

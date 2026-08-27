@@ -1,0 +1,522 @@
+#!/usr/bin/env python3
+"""
+Zero-Shot VLM Baseline Evaluation Runner (§6, Baseline #1).
+
+Evaluates general-purpose Vision-Language Models (GPT-4o, Gemini 3.5/3.7, Claude 3.5/3.7,
+NVIDIA NIM, Groq, OpenRouter, and local vLLM) on dental panoramic radiographs without
+domain fine-tuning and without tool access.
+
+Usage:
+    python scripts/run_zero_shot.py --provider gemini --model gemini-3.5-flash-lite
+    python scripts/run_zero_shot.py --provider nvidia_nim --model meta/muse-glimmer-30b
+    python scripts/run_zero_shot.py --provider local --model QuantTrio/Qwen3.5-9B-AWQ
+
+Parallel workers (horizontal slicing with git sync):
+    python scripts/run_zero_shot.py --provider gemini --total-slices 4 --slice-index 1 --git-sync-every 5
+    python scripts/run_zero_shot.py --provider gemini --total-slices 4 --slice-index 2 --git-sync-every 5
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import time
+from pathlib import Path
+from typing import Any
+
+# Ensure UTF-8 output on Windows consoles
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+# Ensure dental_agent is importable when running standalone
+repo_root = str(Path(__file__).resolve().parent.parent)
+if repo_root not in sys.path:
+    sys.path.insert(0, repo_root)
+
+from dental_agent.config import load_config, load_env
+from dental_agent.data.dentex import load_dentex_dataset, dentex_row_to_fdi
+from dental_agent.data.tufts import load_tufts_dataset
+from dental_agent.data.slicing import get_slice_ids
+from dental_agent.training.api_pool import (
+    call_llm,
+    verify_local_server_health,
+    RPDLimitExhausted,
+)
+from dental_agent.evaluation.baselines import (
+    ZERO_SHOT_PROMPT,
+    parse_zero_shot_response,
+    match_zero_shot_finding,
+    majority_class_baseline_metrics,
+)
+from dental_agent.evaluation.metrics import (
+    compute_evaluation_metrics,
+    compute_diagnostic_metrics,
+    expected_calibration_error,
+    bootstrap_metric_ci,
+)
+from dental_agent.evaluation.reporting import (
+    generate_summary_table,
+    generate_markdown_report,
+)
+from dental_agent.training.git_sync import sync_and_push
+from dental_agent.utils.serialization import to_jsonable
+from PIL import Image
+
+
+# ---------------------------------------------------------------------------
+# Output path defaults
+# ---------------------------------------------------------------------------
+DEFAULT_OUTPUT_DIR = "data/evaluations"
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def load_completed_ids(output_path: Path) -> set[int]:
+    """Read existing output file and extract processed image IDs for resume."""
+    completed: set[int] = set()
+    if not output_path.exists():
+        return completed
+
+    with open(output_path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+                if "image_id" in record:
+                    completed.add(int(record["image_id"]))
+            except Exception:
+                pass
+    return completed
+
+
+def resolve_provider_and_model(args: argparse.Namespace) -> tuple[str, str]:
+    """Resolve provider and model following precedence: CLI args > .env > sensible defaults."""
+    provider = args.provider
+    if not provider:
+        provider = (
+            os.environ.get("ZERO_SHOT_PROVIDER")
+            or os.environ.get("VERIFIER_PROVIDER")
+            or os.environ.get("GENERATOR_PROVIDER")
+            or "gemini"
+        )
+    provider = provider.lower()
+
+    model = args.model
+    if not model:
+        prefix = provider.upper().replace("_NIM", "")
+        model = (
+            os.environ.get(f"{prefix}_ZERO_SHOT_MODEL")
+            or os.environ.get(f"{prefix}_VERIFIER_MODEL")
+            or os.environ.get(f"{prefix}_GENERATOR_MODEL")
+            or os.environ.get("GENERATOR_MODEL")
+        )
+        if not model:
+            default_models = {
+                "gemini": "gemini-3.5-flash-lite",
+                "nvidia_nim": "meta/muse-glimmer-30b",
+                "groq": "qwen/qwen3.6-27b",
+                "openrouter": "minimax/minimax-m3:free",
+                "local": "QuantTrio/Qwen3.5-9B-AWQ",
+                "openai": "gpt-4o",
+                "anthropic": "claude-3-7-sonnet-20250219",
+            }
+            model = default_models.get(provider, "gemini-3.5-flash-lite")
+
+    return provider, model
+
+
+def print_banner(provider: str, model: str, completed_count: int, total_images: int, output_path: Path) -> None:
+    print("\n" + "=" * 70, flush=True)
+    print("DENTAL AGENT: ZERO-SHOT VLM BASELINE EVALUATION (§6, Baseline #1)", flush=True)
+    print("=" * 70, flush=True)
+    print(f"* Provider         : {provider.upper()}", flush=True)
+    print(f"* Model            : {model}", flush=True)
+    print(f"* Output File      : {output_path}", flush=True)
+    print(f"* Progress         : {completed_count} / {total_images} images", flush=True)
+    print("=" * 70 + "\n", flush=True)
+
+
+# ---------------------------------------------------------------------------
+# Core Evaluation Loop
+# ---------------------------------------------------------------------------
+
+def run_zero_shot_evaluation(args: argparse.Namespace) -> None:
+    load_env()
+    cfg = load_config(args.config)
+
+    provider, model = resolve_provider_and_model(args)
+    dataset_name = args.dataset.strip().lower()
+
+    # Determine output path
+    safe_model_tag = model.replace("/", "--").replace(":", "-")
+    os.makedirs(args.output_dir, exist_ok=True)
+    if args.output:
+        output_path = Path(args.output)
+    else:
+        output_path = Path(args.output_dir) / f"zero_shot_{dataset_name}_{provider}_{safe_model_tag}.jsonl"
+
+    # 1. Load Dataset
+    print(f"Loading {dataset_name.upper()} dataset (split='{args.split}')...")
+    if dataset_name == "tufts":
+        imgs_df, annots_df, cats_df = load_tufts_dataset(data_dir=cfg.data_dir)
+    else:
+        imgs_df, annots_df, cats_df = load_dentex_dataset(
+            data_dir=cfg.data_dir, split_name=args.split
+        )
+
+    annotated_ids = set(annots_df["image_id"].unique())
+    eligible_imgs = imgs_df[imgs_df["id"].isin(annotated_ids)]
+
+    # 2. Horizontal Slicing
+    if args.total_slices > 1:
+        slice_ids = get_slice_ids(eligible_imgs["id"].tolist(), args.total_slices, args.slice_index, args.slice_seed)
+        eligible_imgs = eligible_imgs[eligible_imgs["id"].isin(slice_ids)]
+
+    # 3. Targeted Dynamic Slice Download if configured
+    repo_id = os.environ.get("TUFTS_IMAGES_REPO" if dataset_name == "tufts" else "DENTEX_IMAGES_REPO")
+    if repo_id:
+        print(f"Fetching targeted images from {repo_id}...")
+        if dataset_name == "tufts":
+            from dental_agent.data.tufts import download_tufts_slice as _download_slice
+        else:
+            from dental_agent.data.dentex import download_dentex_slice as _download_slice
+        local_paths_map = _download_slice(eligible_imgs["id"].tolist(), repo_id=repo_id, cache_dir=cfg.data_dir)
+        def _update_path(row):
+            pid = row["id"]
+            if pid in local_paths_map and local_paths_map[pid] is not None:
+                return str(local_paths_map[pid])
+            return row["local_path"]
+        imgs_df["local_path"] = imgs_df.apply(_update_path, axis=1)
+        eligible_imgs = imgs_df[imgs_df["id"].isin(eligible_imgs["id"])]
+
+    eligible_imgs = eligible_imgs[eligible_imgs["local_path"].notna() & (eligible_imgs["local_path"] != "None")]
+
+    total_eligible = len(eligible_imgs)
+    completed_ids = load_completed_ids(output_path)
+    remaining_imgs = eligible_imgs[~eligible_imgs["id"].isin(completed_ids)]
+
+    slice_info = f" (Slice {args.slice_index}/{args.total_slices})" if args.total_slices > 1 else ""
+    print(f"Targeting{slice_info}: {len(eligible_imgs)} eligible images.")
+    print_banner(provider, model, len(completed_ids), total_eligible, output_path)
+
+    if args.status_only:
+        print("Status check complete. Run without --status-only to begin evaluation.")
+        return
+
+    cat_lookup = (
+        dict(zip(cats_df["id"], cats_df["name"]))
+        if cats_df is not None and len(cats_df)
+        else {}
+    )
+
+    # Compute Majority Class Baseline if requested
+    if args.run_majority_baseline:
+        print("\n--- Computing Majority-Class Baseline Floor on Cohort ---")
+        majority_metrics = majority_class_baseline_metrics(
+            holdout_image_ids=eligible_imgs["id"].tolist(),
+            annots_df=annots_df,
+            categories_df=cats_df,
+        )
+        print(f"Majority Baseline FDI Accuracy    : {majority_metrics.get('fdi_accuracy', 0.0):.3f}")
+        print(f"Majority Baseline Balanced Acc   : {majority_metrics.get('diagnosis_balanced_accuracy', 0.0):.3f}\n")
+
+    if remaining_imgs.empty:
+        print(f"[DONE] All {total_eligible} images have already been evaluated!")
+        _print_final_summary(output_path, provider, model, args)
+        return
+
+    todo_images = remaining_imgs.to_dict(orient="records")
+    if args.max_images is not None:
+        todo_images = todo_images[: args.max_images]
+
+    print(f"Starting Zero-Shot evaluation: {len(todo_images)} image(s) (Pacing delay: {args.pacing_delay}s)...")
+
+    if args.ignore_429:
+        os.environ["IGNORE_429"] = "true"
+
+    evaluated_in_session = 0
+    failed_in_session = 0
+    since_last_sync = 0
+    session_start_time = time.time()
+
+    for idx, img_record in enumerate(todo_images, start=1):
+        image_id = int(img_record["id"])
+        image_path = str(img_record.get("local_path", ""))
+        image_file = os.path.basename(image_path)
+
+        print(f"[{idx}/{len(todo_images)}] Evaluating Image ID {image_id} ({image_file})...", flush=True)
+
+        if not os.path.exists(image_path):
+            print(f"  [WARN] Image file missing: {image_path}. Skipping.")
+            continue
+
+        try:
+            # Health check for local vLLM
+            if provider == "local":
+                health_retries = 0
+                while not verify_local_server_health(timeout=5.0):
+                    health_retries += 1
+                    if health_retries > 24:
+                        raise RuntimeError("Local vLLM server unresponsive > 2m. Aborting.")
+                    print(f"  vLLM unresponsive. Waiting 5s... ({health_retries}/24)")
+                    time.sleep(5)
+
+            # Extract ground truth using dentex_row_to_fdi (Rule 1)
+            anns = annots_df[annots_df["image_id"] == image_id]
+            if anns.empty:
+                print(f"  [WARN] No annotations for image {image_id}. Skipping.")
+                continue
+
+            ann0 = anns.iloc[0]
+            gt_quadrant, gt_tooth_pos = dentex_row_to_fdi(ann0)
+            gt_diag = cat_lookup.get(ann0.get("category_id_3"), "Caries")
+            ground_truth = {
+                "quadrant": gt_quadrant,
+                "tooth_position": gt_tooth_pos,
+                "diagnosis": gt_diag,
+            }
+
+            image = Image.open(image_path).convert("RGB")
+            if args.image_max_dim > 0:
+                image.thumbnail((args.image_max_dim, args.image_max_dim), Image.Resampling.LANCZOS)
+
+            # Call VLM with ZERO_SHOT_PROMPT
+            raw_reply = call_llm(
+                provider=provider,
+                model=model,
+                system_prompt="You are an expert dental radiologist analyzing panoramic dental radiographs.",
+                user_content=ZERO_SHOT_PROMPT,
+                image=image,
+                temperature=args.temperature,
+                max_tokens=2048,
+            )
+
+            # Parse and match prediction
+            parsed_raw = parse_zero_shot_response(raw_reply)
+            parsed_final = match_zero_shot_finding(
+                parsed_raw,
+                gt_quadrant=gt_quadrant,
+                gt_tooth_position=gt_tooth_pos,
+            )
+
+            # Evaluate matches
+            quad_ok = False
+            pos_ok = False
+            diag_ok = False
+            confidence = None
+
+            if isinstance(parsed_final, dict):
+                quad_ok = parsed_final.get("quadrant") == gt_quadrant
+                pos_ok = parsed_final.get("tooth_position") == gt_tooth_pos
+                diag_pred = str(parsed_final.get("diagnosis", "")).strip().lower()
+                diag_ok = diag_pred == str(gt_diag).strip().lower()
+                conf_raw = parsed_final.get("confidence")
+                try:
+                    confidence = float(conf_raw) if conf_raw is not None else None
+                except (ValueError, TypeError):
+                    confidence = None
+
+            fdi_ok = quad_ok and pos_ok
+            exact_match = fdi_ok and diag_ok
+
+            format_ok = bool(
+                isinstance(parsed_final, dict)
+                and "diagnosis" in parsed_final
+                and "quadrant" in parsed_final
+                and "tooth_position" in parsed_final
+            )
+
+            print(
+                f"  GT: FDI {gt_quadrant}{gt_tooth_pos} ({gt_diag}) | "
+                f"Pred: FDI {parsed_final.get('quadrant') if parsed_final else '?'}{parsed_final.get('tooth_position') if parsed_final else '?'} "
+                f"({parsed_final.get('diagnosis') if parsed_final else '?'}) | "
+                f"FDI: {'OK' if fdi_ok else 'MISS'} | "
+                f"Exact: {'MATCH' if exact_match else 'NO'}",
+                flush=True,
+            )
+
+            record = to_jsonable({
+                "image_id": image_id,
+                "dataset": dataset_name,
+                "split": args.split,
+                "provider": provider,
+                "model": model,
+                "ground_truth": ground_truth,
+                "final_answer": parsed_final,
+                "raw_output": raw_reply,
+                "format_ok": format_ok,
+                "fdi_correct": fdi_ok,
+                "quadrant_correct": quad_ok,
+                "tooth_position_correct": pos_ok,
+                "diagnosis_correct": diag_ok,
+                "exact_match": exact_match,
+                "confidence": confidence,
+                "timestamp": time.time(),
+            })
+
+            # Append to JSONL
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(output_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(record) + "\n")
+
+            evaluated_in_session += 1
+            since_last_sync += 1
+
+            # Incremental Git Sync
+            if args.git_sync_every > 0 and since_last_sync >= args.git_sync_every:
+                print(f"  [git-sync] Syncing checkpoint after {since_last_sync} images...", flush=True)
+                sync_and_push([str(output_path)], commit_msg=f"eval(zero_shot): checkpoint {provider}/{model}")
+                since_last_sync = 0
+
+            if args.pacing_delay > 0:
+                time.sleep(args.pacing_delay)
+
+        except RPDLimitExhausted as e:
+            print(f"\n[RATE-LIMIT] Daily limit exhausted for {provider}: {e}")
+            break
+        except Exception as e:
+            failed_in_session += 1
+            print(f"  [ERROR] Image ID {image_id} failed: {e}", flush=True)
+            if not args.ignore_api_errors:
+                print("Aborting. Use --ignore-api-errors to continue past errors.")
+                raise e
+
+    # Final Sync
+    if args.git_sync_every > 0 and since_last_sync > 0:
+        print(f"\n[git-sync] Performing final session push...", flush=True)
+        sync_and_push([str(output_path)], commit_msg=f"eval(zero_shot): session complete {provider}/{model}")
+
+    elapsed = time.time() - session_start_time
+    print(f"\nSession finished in {elapsed:.1f}s. Evaluated: {evaluated_in_session}, Failed: {failed_in_session}")
+    _print_final_summary(output_path, provider, model, args)
+
+
+def _print_final_summary(output_path: Path, provider: str, model: str, args: argparse.Namespace) -> None:
+    if not output_path.exists():
+        return
+
+    records = []
+    with open(output_path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            if line.strip():
+                try:
+                    records.append(json.loads(line))
+                except Exception:
+                    pass
+
+    if not records:
+        print("No evaluation records found.")
+        return
+
+    n = len(records)
+    fmt_ok = sum(1 for r in records if r.get("format_ok"))
+    fdi_ok = sum(1 for r in records if r.get("fdi_correct"))
+    quad_ok = sum(1 for r in records if r.get("quadrant_correct"))
+    pos_ok = sum(1 for r in records if r.get("tooth_position_correct"))
+    diag_ok = sum(1 for r in records if r.get("diagnosis_correct"))
+    exact_ok = sum(1 for r in records if r.get("exact_match"))
+
+    confidences = [r["confidence"] for r in records if r.get("confidence") is not None]
+    correctness = [int(r.get("exact_match", False)) for r in records if r.get("confidence") is not None]
+    ece = expected_calibration_error(confidences, correctness) if len(confidences) >= 5 else 0.0
+
+    point_em, em_low, em_high = bootstrap_metric_ci(
+        records,
+        lambda recs: sum(1 for r in recs if r.get("exact_match")) / len(recs) if recs else 0.0,
+    )
+
+    metrics_dict = {
+        f"Zero-Shot ({provider}/{model})": {
+            "format_adherence": fmt_ok / n,
+            "quadrant_accuracy": quad_ok / n,
+            "tooth_position_accuracy": pos_ok / n,
+            "fdi_localization_accuracy": fdi_ok / n,
+            "pathology_accuracy": diag_ok / n,
+            "pathology_macro_f1": diag_ok / n,  # simplified point
+            "exact_match_accuracy": exact_ok / n,
+            "exact_match_ci_95": [em_low, em_high],
+            "ece": ece,
+            "mean_tool_calls": 0.0,
+            "total_samples": float(n),
+        }
+    }
+
+    print("\n" + "=" * 70)
+    print(f"BENCHMARK RESULTS: {provider.upper()} / {model} (n={n})")
+    print("=" * 70)
+    print(f"Format Compliance         : {fmt_ok / n * 100:.1f}% ({fmt_ok}/{n})")
+    print(f"Quadrant Accuracy         : {quad_ok / n * 100:.1f}% ({quad_ok}/{n})")
+    print(f"Tooth Position Accuracy   : {pos_ok / n * 100:.1f}% ({pos_ok}/{n})")
+    print(f"FDI Localization Accuracy : {fdi_ok / n * 100:.1f}% ({fdi_ok}/{n})")
+    print(f"Pathology Diagnosis Acc   : {diag_ok / n * 100:.1f}% ({diag_ok}/{n})")
+    print(f"Exact Match Accuracy      : {exact_ok / n * 100:.1f}% ({exact_ok}/{n})")
+    print(f"Exact Match 95% CI        : [{em_low * 100:.1f}%, {em_high * 100:.1f}%]")
+    print(f"Expected Calibration Error: {ece:.4f}")
+    print("=" * 70)
+
+    summary_table = generate_summary_table(metrics_dict, table_format="github")
+    print("\n" + summary_table + "\n")
+
+    if getattr(args, "generate_report", True):
+        report_path = Path("experiments") / f"zero_shot_report_{provider}_{model.replace('/', '--')}.md"
+        generate_markdown_report(metrics_dict, output_path=report_path)
+
+
+# ---------------------------------------------------------------------------
+# CLI Argument Parser
+# ---------------------------------------------------------------------------
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Zero-Shot VLM Baseline Evaluation CLI (§6, Baseline #1)",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument("--config", "-c", default=None, help="Path to config YAML")
+    parser.add_argument("--dataset", default="dentex", help="Dataset name ('dentex' or 'tufts')")
+    parser.add_argument("--split", default="test", help="Dataset split ('test', 'validation', 'train')")
+    parser.add_argument("--provider", default=None, help="Provider ('gemini', 'nvidia_nim', 'groq', 'openrouter', 'local', 'openai', 'anthropic')")
+    parser.add_argument("--model", default=None, help="Model name / checkpoint identifier")
+    
+    # Slicing & Workers
+    parser.add_argument("--total-slices", type=int, default=1, help="Total parallel slices across instances")
+    parser.add_argument("--slice-index", type=int, default=1, help="1-based slice index for this instance")
+    parser.add_argument("--slice-seed", type=int, default=42, help="Seed for deterministic dataset slicing")
+    
+    # Pacing, Limits & Sync
+    parser.add_argument("--pacing-delay", type=float, default=1.5, help="Delay (seconds) between successive LLM requests")
+    parser.add_argument("--git-sync-every", type=int, default=0, help="Push checkpoint to Git every N images (0 = disabled)")
+    parser.add_argument("--max-images", type=int, default=None, help="Cap number of images to evaluate in this run")
+    
+    # Output & Scaling
+    parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR, help="Directory for evaluation JSONL outputs")
+    parser.add_argument("--output", default=None, help="Explicit output file path override")
+    parser.add_argument("--image-max-dim", type=int, default=0, help="Max image dimension (0 = full resolution)")
+    parser.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature")
+    
+    # Flags
+    parser.add_argument("--ignore-429", action="store_true", help="Opt into retrying 429 rate limit errors (up to 10 retries)")
+    parser.add_argument("--ignore-api-errors", action="store_true", help="Continue evaluating remaining images on API errors")
+    parser.add_argument("--status-only", action="store_true", help="Inspect slice progress and exit without calling APIs")
+    parser.add_argument("--run-majority-baseline", action="store_true", help="Also compute majority-class baseline floor on cohort")
+    parser.add_argument("--generate-report", action="store_true", default=True, help="Write markdown/LaTeX report in experiments/")
+
+    return parser
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+    run_zero_shot_evaluation(args)
+
+
+if __name__ == "__main__":
+    main()
