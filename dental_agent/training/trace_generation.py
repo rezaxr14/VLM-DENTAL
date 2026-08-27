@@ -523,7 +523,10 @@ def generate_only_no_tools(
 
     ground_truth = _format_ground_truth(anns, cat_lookup, diag_col)
 
-    traj, fail_reason = generate_no_tools_trajectory(image, ground_truth, max_tokens=max_tokens)
+    gen_provider, gen_model = _resolve_generator()
+    traj, fail_reason = generate_no_tools_trajectory(
+        image, ground_truth, provider=gen_provider, model=gen_model, max_tokens=max_tokens
+    )
     if traj is None or traj.get("final_answer") is None:
         return {
             "image_id": image_id,
