@@ -226,9 +226,15 @@ def _reasoning_node_factory(provider: str, model: str, max_tool_calls: int, max_
             state["pending_final_answer"] = parsed["final_answer"]
             parsed = {k: v for k, v in parsed.items() if k != "final_answer"}
 
-        # If we have a stashed final_answer from a prior multi-blob turn, try to accept it
-        # now that the tool-side work has been recorded.
-        if "final_answer" not in parsed and state.get("pending_final_answer") is not None:
+        # Only consume the stash once enough turns have been completed (MIN_TURNS_BEFORE_FINAL).
+        # This stops a multi-blob model from dumping everything in turn 0 and finalising on
+        # turn 1 — we still require it to have gone through multiple genuine reasoning cycles.
+        MIN_TURNS_BEFORE_FINAL = 4
+        if (
+            "final_answer" not in parsed
+            and state.get("pending_final_answer") is not None
+            and len(state["turns"]) >= MIN_TURNS_BEFORE_FINAL
+        ):
             parsed = {"final_answer": state.pop("pending_final_answer")}
 
         if "final_answer" in parsed:
