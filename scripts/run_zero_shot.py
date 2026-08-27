@@ -58,6 +58,9 @@ from dental_agent.evaluation.metrics import (
     compute_diagnostic_metrics,
     expected_calibration_error,
     bootstrap_metric_ci,
+    match_multi_findings,
+    extract_predicted_findings,
+    normalize_dental_diagnosis,
 )
 from dental_agent.evaluation.reporting import (
     generate_summary_table,
@@ -282,6 +285,10 @@ def _run_zero_shot_for_target(
 
     eligible_imgs = eligible_imgs[eligible_imgs["local_path"].notna() & (eligible_imgs["local_path"] != "None")]
 
+    if getattr(args, "fresh", False) and output_path.exists():
+        output_path.unlink()
+        print(f"  [FRESH] Removed existing output file: {output_path}")
+
     total_eligible = len(eligible_imgs)
     completed_ids = load_completed_ids(output_path)
     remaining_imgs = eligible_imgs[~eligible_imgs["id"].isin(completed_ids)]
@@ -352,20 +359,23 @@ def _run_zero_shot_for_target(
                     print(f"  vLLM unresponsive. Waiting 5s... ({health_retries}/24)")
                     time.sleep(5)
 
-            # Extract ground truth using dentex_row_to_fdi (Rule 1)
+            # Extract ALL ground truth findings for this image using dentex_row_to_fdi (Rule 1)
             anns = annots_df[annots_df["image_id"] == image_id]
             if anns.empty:
                 print(f"  [WARN] No annotations for image {image_id}. Skipping.")
                 continue
 
-            ann0 = anns.iloc[0]
-            gt_quadrant, gt_tooth_pos = dentex_row_to_fdi(ann0)
-            gt_diag = cat_lookup.get(ann0.get("category_id_3"), "Caries")
-            ground_truth = {
-                "quadrant": gt_quadrant,
-                "tooth_position": gt_tooth_pos,
-                "diagnosis": gt_diag,
-            }
+            gt_findings = []
+            for _, ann_row in anns.iterrows():
+                q, pos = dentex_row_to_fdi(ann_row)
+                d_id = ann_row.get("category_id_3")
+                d_raw = cat_lookup.get(d_id, "Caries")
+                gt_findings.append({
+                    "quadrant": q,
+                    "tooth_position": pos,
+                    "diagnosis": normalize_dental_diagnosis(d_raw),
+                    "raw_diagnosis": str(d_raw),
+                })
 
             image = Image.open(image_path).convert("RGB")
             if args.image_max_dim > 0:
@@ -382,47 +392,31 @@ def _run_zero_shot_for_target(
                 max_tokens=2048,
             )
 
-            # Parse and match prediction
+            # Parse and match predictions against ALL ground truth findings
             parsed_raw = parse_zero_shot_response(raw_reply)
-            parsed_final = match_zero_shot_finding(
-                parsed_raw,
-                gt_quadrant=gt_quadrant,
-                gt_tooth_position=gt_tooth_pos,
-            )
+            pred_findings = extract_predicted_findings(parsed_raw)
+            match_res = match_multi_findings(gt_findings, pred_findings)
 
-            # Evaluate matches
-            quad_ok = False
-            pos_ok = False
-            diag_ok = False
-            confidence = None
+            # Check format adherence
+            format_ok = bool(parsed_raw is not None and (len(pred_findings) > 0 or isinstance(parsed_raw, (dict, list))))
+            
+            # Clinical summary indicators
+            fdi_ok = match_res["fdi_tp"] > 0
+            exact_match = match_res["exact_tp"] > 0
+            all_exact_match = (match_res["exact_fn"] == 0 and match_res["exact_fp"] == 0)
 
-            if isinstance(parsed_final, dict):
-                quad_ok = parsed_final.get("quadrant") == gt_quadrant
-                pos_ok = parsed_final.get("tooth_position") == gt_tooth_pos
-                diag_pred = str(parsed_final.get("diagnosis", "")).strip().lower()
-                diag_ok = diag_pred == str(gt_diag).strip().lower()
-                conf_raw = parsed_final.get("confidence")
-                try:
-                    confidence = float(conf_raw) if conf_raw is not None else None
-                except (ValueError, TypeError):
-                    confidence = None
+            primary_matched = match_res["matched_pairs"][0]["pred"] if match_res["matched_pairs"] else (pred_findings[0] if pred_findings else None)
+            confidence = primary_matched.get("confidence") if primary_matched else None
 
-            fdi_ok = quad_ok and pos_ok
-            exact_match = fdi_ok and diag_ok
-
-            format_ok = bool(
-                isinstance(parsed_final, dict)
-                and "diagnosis" in parsed_final
-                and "quadrant" in parsed_final
-                and "tooth_position" in parsed_final
-            )
-
+            # Formatted console display
+            gt_str = ", ".join(f"FDI {g['quadrant']}{g['tooth_position']} ({g['diagnosis']})" for g in gt_findings)
+            pred_str = ", ".join(f"FDI {p['quadrant']}{p['tooth_position']} ({p['diagnosis']})" for p in pred_findings) if pred_findings else "None"
+            
+            print(f"  GT ({len(gt_findings)}): {gt_str}")
+            print(f"  Pred ({len(pred_findings)}): {pred_str}")
             print(
-                f"  GT: FDI {gt_quadrant}{gt_tooth_pos} ({gt_diag}) | "
-                f"Pred: FDI {parsed_final.get('quadrant') if parsed_final else '?'}{parsed_final.get('tooth_position') if parsed_final else '?'} "
-                f"({parsed_final.get('diagnosis') if parsed_final else '?'}) | "
-                f"FDI: {'OK' if fdi_ok else 'MISS'} | "
-                f"Exact: {'MATCH' if exact_match else 'NO'}",
+                f"  Score: FDI Match: {match_res['fdi_tp']}/{len(gt_findings)} (P: {match_res['fdi_precision']:.2f}, R: {match_res['fdi_recall']:.2f}, F1: {match_res['fdi_f1']:.2f}) | "
+                f"Exact Match: {match_res['exact_tp']}/{len(gt_findings)} (P: {match_res['exact_precision']:.2f}, R: {match_res['exact_recall']:.2f}, F1: {match_res['exact_f1']:.2f})",
                 flush=True,
             )
 
@@ -432,15 +426,24 @@ def _run_zero_shot_for_target(
                 "split": args.split,
                 "provider": provider,
                 "model": model,
-                "ground_truth": ground_truth,
-                "final_answer": parsed_final,
+                "ground_truth": gt_findings,
+                "predictions": pred_findings,
+                "matched_pairs": match_res["matched_pairs"],
+                "fdi_precision": match_res["fdi_precision"],
+                "fdi_recall": match_res["fdi_recall"],
+                "fdi_f1": match_res["fdi_f1"],
+                "exact_precision": match_res["exact_precision"],
+                "exact_recall": match_res["exact_recall"],
+                "exact_f1": match_res["exact_f1"],
+                "fdi_correct": fdi_ok,
+                "quadrant_correct": fdi_ok,
+                "tooth_position_correct": fdi_ok,
+                "diagnosis_correct": exact_match,
+                "exact_match": exact_match,
+                "all_exact_match": all_exact_match,
+                "final_answer": primary_matched,
                 "raw_output": raw_reply,
                 "format_ok": format_ok,
-                "fdi_correct": fdi_ok,
-                "quadrant_correct": quad_ok,
-                "tooth_position_correct": pos_ok,
-                "diagnosis_correct": diag_ok,
-                "exact_match": exact_match,
                 "confidence": confidence,
                 "timestamp": time.time(),
             })
@@ -594,6 +597,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature")
     
     # Flags
+    parser.add_argument("--fresh", "--overwrite", action="store_true", help="Start evaluation from scratch and overwrite existing output JSONL")
     parser.add_argument("--ignore-429", action="store_true", help="Opt into retrying 429 rate limit errors (up to 10 retries)")
     parser.add_argument("--ignore-api-errors", action="store_true", help="Continue evaluating remaining images on API errors")
     parser.add_argument("--status-only", action="store_true", help="Inspect slice progress and exit without calling APIs")
