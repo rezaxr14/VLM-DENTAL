@@ -301,10 +301,16 @@ def _run_zero_shot_for_target(
         print("Status check complete. Run without --status-only to begin evaluation.")
         return
 
+    DENTEX_DEFAULT_DIAGNOSES = {
+        0: "Impacted",
+        1: "Caries",
+        2: "Periapical Lesion",
+        3: "Deep Caries",
+    }
     cat_lookup = (
         dict(zip(cats_df["id"], cats_df["name"]))
         if cats_df is not None and len(cats_df)
-        else {}
+        else DENTEX_DEFAULT_DIAGNOSES
     )
 
     # Compute Majority Class Baseline if requested
@@ -323,36 +329,34 @@ def _run_zero_shot_for_target(
         _print_final_summary(output_path, provider, model, args)
         return
 
-    todo_images = remaining_imgs.to_dict(orient="records")
-    if args.max_images is not None:
-        todo_images = todo_images[: args.max_images]
+    print(f"Starting Zero-Shot evaluation: {len(remaining_imgs)} image(s) (Pacing delay: {args.pacing_delay}s)...")
 
-    print(f"Starting Zero-Shot evaluation: {len(todo_images)} image(s) (Pacing delay: {args.pacing_delay}s)...")
-
-    if args.ignore_429:
-        os.environ["IGNORE_429"] = "true"
-
+    # Evaluation loop
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     evaluated_in_session = 0
-    failed_in_session = 0
     since_last_sync = 0
     session_start_time = time.time()
 
-    for idx, img_record in enumerate(todo_images, start=1):
+    for idx, (_, img_record) in enumerate(remaining_imgs.iterrows(), start=1):
         image_id = int(img_record["id"])
         image_path = str(img_record.get("local_path", ""))
         image_file = os.path.basename(image_path)
 
-        print(f"[{idx}/{len(todo_images)}] Evaluating Image ID {image_id} ({image_file})...", flush=True)
+        print(f"[{idx}/{len(remaining_imgs)}] Evaluating Image ID {image_id} ({image_file})...", flush=True)
 
         if not os.path.exists(image_path):
             print(f"  [WARN] Image file missing: {image_path}. Skipping.")
             continue
 
         try:
+            # Respect pacing delay
+            if args.pacing_delay > 0:
+                time.sleep(args.pacing_delay)
+
             # Health check for local vLLM
             if provider == "local":
                 health_retries = 0
-                while not verify_local_server_health(timeout=5.0):
+                while not verify_local_server_health():
                     health_retries += 1
                     if health_retries > 24:
                         raise RuntimeError("Local vLLM server unresponsive > 2m. Aborting.")
@@ -369,7 +373,11 @@ def _run_zero_shot_for_target(
             for _, ann_row in anns.iterrows():
                 q, pos = dentex_row_to_fdi(ann_row)
                 d_id = ann_row.get("category_id_3")
-                d_raw = cat_lookup.get(d_id, "Caries")
+                try:
+                    d_id_int = int(d_id)
+                except (ValueError, TypeError):
+                    d_id_int = None
+                d_raw = cat_lookup.get(d_id, cat_lookup.get(d_id_int, DENTEX_DEFAULT_DIAGNOSES.get(d_id_int, "Caries")))
                 gt_findings.append({
                     "quadrant": q,
                     "tooth_position": pos,
@@ -381,7 +389,7 @@ def _run_zero_shot_for_target(
             if args.image_max_dim > 0:
                 image.thumbnail((args.image_max_dim, args.image_max_dim), Image.Resampling.LANCZOS)
 
-            # Call VLM with ZERO_SHOT_PROMPT
+            # Call VLM with ZERO_SHOT_PROMPT (with reasoning & multi-finding guidelines)
             raw_reply = call_llm(
                 provider=provider,
                 model=model,
@@ -389,7 +397,7 @@ def _run_zero_shot_for_target(
                 user_content=ZERO_SHOT_PROMPT,
                 image=image,
                 temperature=args.temperature,
-                max_tokens=2048,
+                max_tokens=args.max_tokens,
             )
 
             # Parse and match predictions against ALL ground truth findings
@@ -416,7 +424,8 @@ def _run_zero_shot_for_target(
             print(f"  Pred ({len(pred_findings)}): {pred_str}")
             print(
                 f"  Score: FDI Match: {match_res['fdi_tp']}/{len(gt_findings)} (P: {match_res['fdi_precision']:.2f}, R: {match_res['fdi_recall']:.2f}, F1: {match_res['fdi_f1']:.2f}) | "
-                f"Exact Match: {match_res['exact_tp']}/{len(gt_findings)} (P: {match_res['exact_precision']:.2f}, R: {match_res['exact_recall']:.2f}, F1: {match_res['exact_f1']:.2f})",
+                f"Exact Match: {match_res['exact_tp']}/{len(gt_findings)} (P: {match_res['exact_precision']:.2f}, R: {match_res['exact_recall']:.2f}, F1: {match_res['exact_f1']:.2f}) | "
+                f"Closeness: {match_res['closeness_score']:.2f} (Spatial: {match_res['spatial_proximity']:.2f}, Diag: {match_res['diagnostic_similarity']:.2f})",
                 flush=True,
             )
 
@@ -435,6 +444,9 @@ def _run_zero_shot_for_target(
                 "exact_precision": match_res["exact_precision"],
                 "exact_recall": match_res["exact_recall"],
                 "exact_f1": match_res["exact_f1"],
+                "closeness_score": match_res["closeness_score"],
+                "spatial_proximity": match_res["spatial_proximity"],
+                "diagnostic_similarity": match_res["diagnostic_similarity"],
                 "fdi_correct": fdi_ok,
                 "quadrant_correct": fdi_ok,
                 "tooth_position_correct": fdi_ok,
@@ -515,6 +527,12 @@ def _print_final_summary(output_path: Path, provider: str, model: str, args: arg
     diag_ok = sum(1 for r in records if r.get("diagnosis_correct"))
     exact_ok = sum(1 for r in records if r.get("exact_match"))
 
+    mean_fdi_f1 = sum(r.get("fdi_f1", 1.0 if r.get("fdi_correct") else 0.0) for r in records) / n
+    mean_exact_f1 = sum(r.get("exact_f1", 1.0 if r.get("exact_match") else 0.0) for r in records) / n
+    mean_closeness = sum(r.get("closeness_score", 0.0) for r in records) / n
+    mean_spatial = sum(r.get("spatial_proximity", 0.0) for r in records) / n
+    mean_diag_sim = sum(r.get("diagnostic_similarity", 0.0) for r in records) / n
+
     confidences = [r["confidence"] for r in records if r.get("confidence") is not None]
     correctness = [int(r.get("exact_match", False)) for r in records if r.get("confidence") is not None]
     ece = expected_calibration_error(confidences, correctness) if len(confidences) >= 5 else 0.0
@@ -530,9 +548,14 @@ def _print_final_summary(output_path: Path, provider: str, model: str, args: arg
             "quadrant_accuracy": quad_ok / n,
             "tooth_position_accuracy": pos_ok / n,
             "fdi_localization_accuracy": fdi_ok / n,
+            "fdi_localization_f1": mean_fdi_f1,
             "pathology_accuracy": diag_ok / n,
-            "pathology_macro_f1": diag_ok / n,  # simplified point
+            "pathology_macro_f1": diag_ok / n,
             "exact_match_accuracy": exact_ok / n,
+            "exact_match_f1": mean_exact_f1,
+            "closeness_score": mean_closeness,
+            "spatial_proximity": mean_spatial,
+            "diagnostic_similarity": mean_diag_sim,
             "exact_match_ci_95": [em_low, em_high],
             "ece": ece,
             "mean_tool_calls": 0.0,
@@ -544,12 +567,11 @@ def _print_final_summary(output_path: Path, provider: str, model: str, args: arg
     print(f"BENCHMARK RESULTS: {provider.upper()} / {model} (n={n})")
     print("=" * 70)
     print(f"Format Compliance         : {fmt_ok / n * 100:.1f}% ({fmt_ok}/{n})")
-    print(f"Quadrant Accuracy         : {quad_ok / n * 100:.1f}% ({quad_ok}/{n})")
-    print(f"Tooth Position Accuracy   : {pos_ok / n * 100:.1f}% ({pos_ok}/{n})")
-    print(f"FDI Localization Accuracy : {fdi_ok / n * 100:.1f}% ({fdi_ok}/{n})")
+    print(f"FDI Localization Accuracy : {fdi_ok / n * 100:.1f}% ({fdi_ok}/{n}) [Mean F1: {mean_fdi_f1:.3f}]")
     print(f"Pathology Diagnosis Acc   : {diag_ok / n * 100:.1f}% ({diag_ok}/{n})")
-    print(f"Exact Match Accuracy      : {exact_ok / n * 100:.1f}% ({exact_ok}/{n})")
+    print(f"Exact Match Accuracy      : {exact_ok / n * 100:.1f}% ({exact_ok}/{n}) [Mean F1: {mean_exact_f1:.3f}]")
     print(f"Exact Match 95% CI        : [{em_low * 100:.1f}%, {em_high * 100:.1f}%]")
+    print(f"Continuous Closeness Score: {mean_closeness:.3f} (Spatial: {mean_spatial:.3f}, Diag Sim: {mean_diag_sim:.3f})")
     print(f"Expected Calibration Error: {ece:.4f}")
     print("=" * 70)
 
@@ -595,6 +617,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", default=None, help="Explicit output file path override")
     parser.add_argument("--image-max-dim", type=int, default=0, help="Max image dimension (0 = full resolution)")
     parser.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature")
+    parser.add_argument("--max-tokens", type=int, default=4096, help="Max tokens for VLM response (reasoning thought + findings JSON)")
     
     # Flags
     parser.add_argument("--fresh", "--overwrite", action="store_true", help="Start evaluation from scratch and overwrite existing output JSONL")

@@ -107,16 +107,79 @@ def extract_predicted_findings(parsed_output: Any) -> list[dict[str, Any]]:
     return clean_findings
 
 
+def compute_finding_closeness(
+    gt: dict[str, Any],
+    pred: dict[str, Any],
+) -> tuple[float, float, float]:
+    """Compute continuous closeness score (0.0 to 1.0) between a ground truth finding
+    and a predicted finding, decomposing into spatial proximity and diagnostic similarity.
+    
+    Spatial Proximity (0.0 to 1.0):
+    - 1.00: Exact Quadrant and Tooth Position
+    - 0.75: Same Quadrant, Adjacent Tooth Position (|pos_diff| == 1)
+    - 0.40: Same Quadrant, Non-adjacent Position
+    - 0.30: Arch symmetry (e.g. Q1 vs Q2, Q3 vs Q4) on same tooth position
+    - 0.00: Completely different tooth location
+    
+    Diagnostic Similarity (0.0 to 1.0):
+    - 1.00: Exact diagnosis match (e.g. Impacted == Impacted)
+    - 0.75: Clinical progression spectrum (Caries <-> Deep Caries)
+    - 0.40: Endodontic sequelae (Caries/Deep Caries <-> Periapical Lesion)
+    - 0.00: Unrelated diagnosis (e.g. Impacted <-> Caries)
+    
+    Composite Closeness:
+    - 0.5 * spatial_proximity + 0.5 * diag_similarity
+    """
+    gt_q = gt.get("quadrant")
+    gt_pos = gt.get("tooth_position")
+    gt_diag = normalize_dental_diagnosis(gt.get("diagnosis"))
+    
+    p_q = pred.get("quadrant")
+    p_pos = pred.get("tooth_position")
+    p_diag = normalize_dental_diagnosis(pred.get("diagnosis"))
+    
+    # 1. Spatial Proximity
+    spatial = 0.0
+    if gt_q is not None and gt_pos is not None and p_q is not None and p_pos is not None:
+        if gt_q == p_q and gt_pos == p_pos:
+            spatial = 1.0
+        elif gt_q == p_q and abs(gt_pos - p_pos) == 1:
+            spatial = 0.75
+        elif gt_q == p_q:
+            spatial = 0.40
+        elif ((gt_q in (1, 2) and p_q in (1, 2)) or (gt_q in (3, 4) and p_q in (3, 4))) and gt_pos == p_pos:
+            spatial = 0.30
+        else:
+            spatial = 0.0
+            
+    # 2. Diagnostic Similarity
+    diag_sim = 0.0
+    if gt_diag and p_diag:
+        if gt_diag == p_diag:
+            diag_sim = 1.0
+        elif {gt_diag, p_diag} == {"Caries", "Deep Caries"}:
+            diag_sim = 0.75
+        elif (gt_diag in {"Caries", "Deep Caries"} and p_diag == "Periapical Lesion") or (p_diag in {"Caries", "Deep Caries"} and gt_diag == "Periapical Lesion"):
+            diag_sim = 0.40
+        else:
+            diag_sim = 0.0
+            
+    composite = 0.5 * spatial + 0.5 * diag_sim
+    return float(composite), float(spatial), float(diag_sim)
+
+
 def match_multi_findings(
     ground_truths: list[dict[str, Any]],
     predictions: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Clinically sound set-level matching between ground truth findings and model predictions.
+    """Clinically sound set-level matching and continuous closeness scoring
+    between ground truth findings and model predictions.
     
     Computes:
     - FDI Localization TP, FP, FN, Precision, Recall, F1
     - Exact Match (Localization + Pathology) TP, FP, FN, Precision, Recall, F1
-    - Detailed matched pairs
+    - Continuous Closeness Score (0.0 to 1.0) per finding & overall
+    - Detailed matched pairs with closeness metrics
     """
     n_gt = len(ground_truths)
     n_pred = len(predictions)
@@ -128,6 +191,7 @@ def match_multi_findings(
             "fdi_precision": 1.0, "fdi_recall": 1.0, "fdi_f1": 1.0,
             "exact_tp": 0, "exact_fp": 0, "exact_fn": 0,
             "exact_precision": 1.0, "exact_recall": 1.0, "exact_f1": 1.0,
+            "closeness_score": 1.0, "spatial_proximity": 1.0, "diagnostic_similarity": 1.0,
             "matched_pairs": [],
         }
     
@@ -156,6 +220,9 @@ def match_multi_findings(
                     "pred": pred,
                     "fdi_match": True,
                     "exact_match": True,
+                    "closeness": 1.0,
+                    "spatial": 1.0,
+                    "diag_sim": 1.0,
                 })
                 break
                 
@@ -175,11 +242,15 @@ def match_multi_findings(
             if gt_q is not None and gt_pos is not None and gt_q == p_q and gt_pos == p_pos:
                 used_preds.add(pred_idx)
                 used_gt.add(gt_idx)
+                c_score, s_score, d_score = compute_finding_closeness(gt, pred)
                 matched_pairs.append({
                     "gt": gt,
                     "pred": pred,
                     "fdi_match": True,
                     "exact_match": False,
+                    "closeness": c_score,
+                    "spatial": s_score,
+                    "diag_sim": d_score,
                 })
                 break
                 
@@ -198,6 +269,30 @@ def match_multi_findings(
     exact_p = exact_tp / max(1, n_pred) if n_pred > 0 else 0.0
     exact_r = exact_tp / max(1, n_gt) if n_gt > 0 else 0.0
     exact_f1 = (2 * exact_p * exact_r) / (exact_p + exact_r) if (exact_p + exact_r) > 0 else 0.0
+
+    # Continuous Closeness: for each GT finding, find highest closeness among predictions
+    gt_closeness_list = []
+    gt_spatial_list = []
+    gt_diag_list = []
+    
+    if n_pred > 0 and n_gt > 0:
+        for gt in ground_truths:
+            best_c, best_s, best_d = 0.0, 0.0, 0.0
+            for pred in predictions:
+                c, s, d = compute_finding_closeness(gt, pred)
+                if c > best_c:
+                    best_c, best_s, best_d = c, s, d
+            gt_closeness_list.append(best_c)
+            gt_spatial_list.append(best_s)
+            gt_diag_list.append(best_d)
+            
+        mean_closeness = sum(gt_closeness_list) / max(1, len(gt_closeness_list))
+        mean_spatial = sum(gt_spatial_list) / max(1, len(gt_spatial_list))
+        mean_diag = sum(gt_diag_list) / max(1, len(gt_diag_list))
+    else:
+        mean_closeness = 0.0
+        mean_spatial = 0.0
+        mean_diag = 0.0
     
     return {
         "gt_count": n_gt,
@@ -214,6 +309,9 @@ def match_multi_findings(
         "exact_precision": exact_p,
         "exact_recall": exact_r,
         "exact_f1": exact_f1,
+        "closeness_score": mean_closeness,
+        "spatial_proximity": mean_spatial,
+        "diagnostic_similarity": mean_diag,
         "matched_pairs": matched_pairs,
     }
 
