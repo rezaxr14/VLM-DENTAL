@@ -26,7 +26,7 @@ except ImportError as _e:  # pragma: no cover
         "Add `langgraph` to requirements.txt / pyproject.toml and `pip install langgraph`."
     ) from _e
 
-from dental_agent.agent.parsing import parse_agent_json
+from dental_agent.agent.parsing import parse_agent_json, count_action_blobs
 from dental_agent.agent.tool_dispatch import execute_tool_call
 from dental_agent.tools.registry import ToolRegistry
 from dental_agent.tools.nudge import tool_nudge_crop
@@ -38,7 +38,7 @@ from dental_agent.utils.serialization import to_jsonable
 # module's docstring for why. Don't reintroduce a local copy here.
 
 
-class TraceGenState(TypedDict):
+class TraceGenState(TypedDict, total=False):
     base_image: Image.Image
     messages: list[dict[str, Any]]
     turns: list[dict[str, Any]]
@@ -51,6 +51,8 @@ class TraceGenState(TypedDict):
     pending_tool_calls: list[dict[str, Any]] | None
     tools_used: set[str]
     located_teeth: set[int]
+    _padding_turns: int
+    _recent_tool_fingerprints: list[str]
 
 
 
@@ -75,7 +77,18 @@ def _provider_env(provider: str, suffix: str, code_default: int) -> int:
     return int(val) if val else code_default
 
 
-def _reasoning_node_factory(provider: str, model: str, max_tool_calls: int, min_turns: int = 5, max_tokens: int | None = None, context_trim_threshold: int | None = None):
+def _reasoning_node_factory(
+    provider: str,
+    model: str,
+    max_tool_calls: int,
+    min_turns: int = 5,
+    max_turns: int = 25,
+    max_tokens: int | None = None,
+    context_trim_threshold: int | None = None,
+    max_blobs_per_turn: int = 2,
+    max_padding_turns: int = 3,
+    max_identical_repeats: int = 3,
+):
     if max_tokens is not None:
         resolved_max_tokens = max_tokens
     else:
@@ -86,10 +99,27 @@ def _reasoning_node_factory(provider: str, model: str, max_tool_calls: int, min_
     )
 
     def _reasoning_node(state: TraceGenState) -> TraceGenState:
+        if len(state["turns"]) >= max_turns and state["final_answer"] is None:
+            state["status"] = "error"
+            state["error"] = f"max_turns ({max_turns}) reached without a valid final_answer"
+            return state
+
         if state["tool_calls"] >= max_tool_calls and state["final_answer"] is None:
             state["status"] = "error"
             state["error"] = f"max_tool_calls ({max_tool_calls}) reached without a final_answer"
             return state
+
+        # Check for repetitive identical tool calls (mechanical padding loop)
+        fingerprints = state.get("_recent_tool_fingerprints", [])
+        if len(fingerprints) >= max_identical_repeats:
+            last_n = fingerprints[-max_identical_repeats:]
+            if len(set(last_n)) == 1:
+                state["status"] = "error"
+                state["error"] = (
+                    f"identical_tool_loop: tool '{last_n[0].split('|')[0]}' was called identically "
+                    f"{max_identical_repeats} times in a row. Terminating trace."
+                )
+                return state
 
         # 4b. Sliding-window context trimming -- threshold is now provider-specific
         # (see _PROVIDER_TRIM_THRESHOLD_DEFAULTS above). A threshold computed off
@@ -166,6 +196,23 @@ def _reasoning_node_factory(provider: str, model: str, max_tool_calls: int, min_
             else:
                 raise e
 
+        # Multi-blob dump guard: if model dumps > max_blobs_per_turn action blocks in one turn, terminate trace
+        blob_count = count_action_blobs(raw)
+        if blob_count > max_blobs_per_turn:
+            turn_record_fail: dict[str, Any] = {
+                "turn": len(state["turns"]),
+                "raw_output": raw,
+                "parsed": None,
+                "status": "multi_blob_dump",
+            }
+            state["turns"].append(turn_record_fail)
+            state["status"] = "error"
+            state["error"] = (
+                f"multi_blob_dump: model emitted {blob_count} action JSON objects in a single turn "
+                f"(limit={max_blobs_per_turn}). Terminating trace."
+            )
+            return state
+
         parsed = parse_agent_json(raw)
         state["messages"].append({"role": "assistant", "content": raw})
 
@@ -220,16 +267,44 @@ def _reasoning_node_factory(provider: str, model: str, max_tool_calls: int, min_
 
         state["consecutive_parse_errors"] = 0
 
+        # Check for mechanical padding loop thought patterns
+        import re as _re
+        _PADDING_PATTERNS = [
+            r"making a tool call",
+            r"performing.*tool",
+            r"continuing.*tool",
+            r"additional tool",
+            r"one more tool",
+            r"another tool call",
+            r"tool call before final",
+            r"satisfy the requirement",
+            r"tool work to satisfy",
+        ]
+        thought_text = ((parsed or {}).get("thought") or "").lower()
+        is_padding = any(_re.search(p, thought_text) for p in _PADDING_PATTERNS)
+        state["_padding_turns"] = (state.get("_padding_turns", 0) + 1) if is_padding else 0
+        if state["_padding_turns"] >= max_padding_turns:
+            turn_record["status"] = "padding_loop"
+            state["turns"].append(turn_record)
+            state["status"] = "error"
+            state["error"] = (
+                f"padding_loop: model repeated mechanical padding tool calls for "
+                f"{max_padding_turns} consecutive turns. Terminating trace."
+            )
+            return state
+
         # Multi-blob models (e.g. minimax) may emit both tool_calls AND final_answer in one
-        # raw response. Execute the tools first, stash the final_answer for later.
-        # CRITICAL: if this is turn 0, the model has not seen any tool results yet — any
-        # final_answer it emits is pure hallucination. Discard it entirely; do not stash.
+        # raw response. If turn count is satisfied, prioritize final_answer; otherwise execute tools first.
         if "final_answer" in parsed and "tool_calls" in parsed and parsed.get("tool_calls"):
-            if len(state["turns"]) > 0:
-                # Turn ≥ 1: model has seen at least one round of tool results — stash is valid.
-                state["pending_final_answer"] = parsed["final_answer"]
-            # Always strip final_answer so the tool_calls branch runs this turn.
-            parsed = {k: v for k, v in parsed.items() if k != "final_answer"}
+            if len(state["turns"]) >= min_turns and state["tool_calls"] > 0:
+                # SFT minimum turn requirement already satisfied — accept final_answer directly!
+                parsed = {"final_answer": parsed["final_answer"]}
+            else:
+                if len(state["turns"]) > 0 and state.get("pending_final_answer") is None:
+                    # Turn ≥ 1: model has seen at least one round of tool results — stash is valid.
+                    state["pending_final_answer"] = parsed["final_answer"]
+                # Strip final_answer so the tool_calls branch runs this turn.
+                parsed = {k: v for k, v in parsed.items() if k != "final_answer"}
 
         # Only consume the stash once min_turns turns have been completed.
         if (
@@ -238,6 +313,7 @@ def _reasoning_node_factory(provider: str, model: str, max_tool_calls: int, min_
             and len(state["turns"]) >= min_turns
         ):
             parsed = {"final_answer": state.pop("pending_final_answer")}
+
 
         if "final_answer" in parsed:
             if state["tool_calls"] == 0:
@@ -484,6 +560,15 @@ def _tool_node_factory(
 
             turn_record["tool_calls_this_turn"].append(call_record)
 
+        # Track tool fingerprints to detect repetitive mechanical loops
+        new_fps = []
+        for call in pending:
+            tool_name = call.get("tool", "")
+            tool_args = call.get("args", {})
+            new_fps.append(f"{tool_name}|{json.dumps(tool_args, sort_keys=True)}")
+        existing_fps = state.get("_recent_tool_fingerprints", [])
+        state["_recent_tool_fingerprints"] = (existing_fps + new_fps)[-8:]
+
         turn_record["status"] = "tool_executed" if any_ok else "tool_all_failed"
         state["turns"].append(turn_record)
         state["messages"].append({"role": "user", "content": observation})
@@ -507,22 +592,41 @@ def build_trace_gen_graph(
     ground_truth: list[dict[str, Any]] | None = None,
     provider: str = "local",
     model: str = "Qwen/Qwen3.5-9B",
-    max_tool_calls: int = 8,
+    max_tool_calls: int = 50,
     min_turns: int = 5,
+    max_turns: int = 25,
     max_tokens: int | None = None,
+    context_trim_threshold: int | None = None,
     perturb_small_probability: float = 0.25,
     perturb_big_probability: float = 0.30,
+    perturb_small_range: tuple[float, float] = (0.12, 0.28),
+    perturb_big_range: tuple[float, float] = (0.45, 0.75),
+    max_blobs_per_turn: int = 2,
+    max_padding_turns: int = 3,
+    max_identical_repeats: int = 3,
 ):
     """Build and compile the LangGraph for ground-truth-directed, real-tool-execution generation."""
     graph = StateGraph(TraceGenState)
 
     graph.add_node("reasoning", _reasoning_node_factory(
-        provider, model, max_tool_calls, min_turns=min_turns, max_tokens=max_tokens
+        provider=provider,
+        model=model,
+        max_tool_calls=max_tool_calls,
+        min_turns=min_turns,
+        max_turns=max_turns,
+        max_tokens=max_tokens,
+        context_trim_threshold=context_trim_threshold,
+        max_blobs_per_turn=max_blobs_per_turn,
+        max_padding_turns=max_padding_turns,
+        max_identical_repeats=max_identical_repeats,
     ))
     graph.add_node("tools", _tool_node_factory(
-        registry, ground_truth=ground_truth or [],
+        registry,
+        ground_truth=ground_truth or [],
         perturb_small_probability=perturb_small_probability,
         perturb_big_probability=perturb_big_probability,
+        perturb_small_range=perturb_small_range,
+        perturb_big_range=perturb_big_range,
     ))
 
     graph.set_entry_point("reasoning")
@@ -540,22 +644,23 @@ def run_trace_gen(
     system_prompt: str,
     provider: str = "local",
     model: str = "Qwen/Qwen3.5-9B",
-    max_turns: int = 8,
+    max_turns: int = 25,
     min_turns: int = 5,
     max_tool_calls: int = 50,
     max_tokens_per_turn: int | None = None,
+    context_trim_threshold: int | None = None,
     perturb_small_probability: float = 0.25,
     perturb_big_probability: float = 0.30,
+    perturb_small_range: tuple[float, float] = (0.12, 0.28),
+    perturb_big_range: tuple[float, float] = (0.45, 0.75),
+    max_blobs_per_turn: int = 2,
+    max_padding_turns: int = 3,
+    max_identical_repeats: int = 3,
 ) -> tuple[dict[str, Any] | None, str | None]:
     """Ground-truth-directed trace generation with real tool execution via LangGraph.
     
     Returns (trajectory_dict, None) on success or (None, error_reason) on failure.
     """
-    # Always drop bbox coordinates from the directive -- now that locate_tooth actually
-    # works, handing over exact coordinates just teaches copy-the-hint instead of
-    # genuine tool-mediated localization. Keep naming which findings exist (preserves
-    # yield -- the model isn't searching blind) but never the bbox itself. This applies
-    # to every provider and every finding count, not just Groq above some threshold.
     hint_text = "; ".join(
         f"Q{f['quadrant']}T{f['tooth_position']}:{f['diagnosis']}" for f in ground_truth
     )
@@ -603,18 +708,28 @@ def run_trace_gen(
         "pending_tool_calls": None,
         "tools_used": set(),
         "located_teeth": set(),
+        "_padding_turns": 0,
+        "_recent_tool_fingerprints": [],
     }
 
     app = build_trace_gen_graph(
-        registry, ground_truth=ground_truth, provider=provider, model=model,
-        max_tool_calls=max_tool_calls, min_turns=min_turns, max_tokens=max_tokens_per_turn,
+        registry=registry,
+        ground_truth=ground_truth,
+        provider=provider,
+        model=model,
+        max_tool_calls=max_tool_calls,
+        min_turns=min_turns,
+        max_turns=max_turns,
+        max_tokens=max_tokens_per_turn,
+        context_trim_threshold=context_trim_threshold,
         perturb_small_probability=perturb_small_probability,
         perturb_big_probability=perturb_big_probability,
+        perturb_small_range=perturb_small_range,
+        perturb_big_range=perturb_big_range,
+        max_blobs_per_turn=max_blobs_per_turn,
+        max_padding_turns=max_padding_turns,
+        max_identical_repeats=max_identical_repeats,
     )
-    # Each logical turn can now cost up to ~4 reasoning-node visits (2 retries + 1
-    # recovery attempt + 1 success) plus 1 tool-node visit, so budget generously —
-    # this is just a runaway-loop safety valve, not the real cost control (that's
-    # max_tool_calls / consecutive_parse_errors above).
     final_state: TraceGenState = app.invoke(
         initial_state, config={"recursion_limit": max_tool_calls * 2 + max_turns * 6 + 10}
     )
@@ -622,10 +737,6 @@ def run_trace_gen(
     error = final_state.get("error")
 
     if final_state["final_answer"] is None:
-        # Preserve whatever partial progress exists (successful tool calls, partial
-        # reasoning turns) instead of discarding it — a failed image still returns
-        # its turns/tool_calls so the caller can persist them for inspection or
-        # future reuse, rather than losing that generation work entirely.
         if final_state["turns"]:
             return {
                 "turns": final_state["turns"],
@@ -643,3 +754,4 @@ def run_trace_gen(
         "messages": final_state["messages"],
         "format_ok": True,
     }, None
+

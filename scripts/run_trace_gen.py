@@ -319,6 +319,12 @@ def _run_generate_for_dataset(args: argparse.Namespace, cfg: Any, dataset_name: 
                     max_tokens_per_turn=args.max_tokens,
                     min_turns=args.min_turns,
                     turns_per_finding_buffer=args.turns_per_finding_buffer,
+                    context_trim_threshold=args.context_trim_threshold,
+                    perturb_small_probability=args.perturb_small_prob,
+                    perturb_big_probability=args.perturb_big_prob,
+                    max_blobs_per_turn=args.max_blobs_per_turn,
+                    max_padding_turns=args.max_padding_turns,
+                    max_identical_repeats=args.max_identical_repeats,
                 )
             elapsed = time.time() - t0
 
@@ -494,6 +500,7 @@ def _run_verify_for_dataset(args: argparse.Namespace, cfg: Any, unverified_path:
     result = verify_pending(
         unverified_path=unverified_path,
         verified_path=verified_path,
+        max_repairs=args.max_repairs,
     )
 
     total_time = time.time() - session_start
@@ -651,8 +658,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--min-turns",
         type=int,
-        default=15,
-        help="Floor on the per-image turn budget, used even for single-finding images (default: 15).",
+        default=5,
+        help="Floor on the per-image turn budget, used even for single-finding images (default: 5).",
     )
     parser.add_argument(
         "--turns-per-finding-buffer",
@@ -673,6 +680,53 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=None,
         help="Max image dimension for API payload scaling (CLI argument takes strict precedence over .env). Set to 0 to send unscaled images.",
+    )
+    parser.add_argument(
+        "--perturb-small-prob",
+        type=float,
+        default=0.25,
+        help="Probability of applying a small synthetic bounding box perturbation during trace gen (default: 0.25)",
+    )
+    parser.add_argument(
+        "--perturb-big-prob",
+        type=float,
+        default=0.30,
+        help="Probability of applying a large synthetic bounding box perturbation during trace gen (default: 0.30)",
+    )
+    parser.add_argument(
+        "--max-blobs-per-turn",
+        type=int,
+        default=2,
+        help="Maximum action-bearing JSON blocks in a single raw LLM response before failing fast as a multi-blob dump (default: 2)",
+    )
+    parser.add_argument(
+        "--max-padding-turns",
+        type=int,
+        default=3,
+        help="Maximum consecutive filler/padding thought turns before terminating the trace (default: 3)",
+    )
+    parser.add_argument(
+        "--max-identical-repeats",
+        type=int,
+        default=3,
+        help="Maximum consecutive identical tool calls before terminating the trace as a loop (default: 3)",
+    )
+    parser.add_argument(
+        "--context-trim-threshold",
+        type=int,
+        default=None,
+        help="Estimated token threshold at which older tool image results are trimmed to preserve context budget (default: provider env fallback)",
+    )
+    parser.add_argument(
+        "--max-repairs",
+        type=int,
+        default=1,
+        help="Maximum repair attempts by the verifier on trace rejection (default: 1)",
+    )
+    parser.add_argument(
+        "--retry-failed",
+        action="store_true",
+        help="Re-generate traces that failed in previous runs instead of skipping them",
     )
     parser.add_argument(
         "--status-only",

@@ -61,7 +61,7 @@ def mock_dentex_path(tmp_path: Path):
                 "id": 20,
                 "image_id": 1,
                 "category_id_1": 3,
-                "category_id_2": 8,
+                "category_id_2": 7,
                 "bbox": [200, 200, 60, 60],
             }
         ],
