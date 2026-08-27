@@ -149,28 +149,110 @@ def print_banner(provider: str, model: str, completed_count: int, total_images: 
 # Core Evaluation Loop
 # ---------------------------------------------------------------------------
 
+KNOWN_PROVIDERS: set[str] = {
+    "gemini", "nvidia_nim", "groq", "openrouter", "local", "openai", "anthropic"
+}
+
+
+def _is_rate_limit_or_fatal_error(e: Exception) -> bool:
+    msg = str(e).lower()
+    return (
+        isinstance(e, RPDLimitExhausted)
+        or "429" in msg
+        or "rate limit" in msg
+        or "too many requests" in msg
+        or "rpd limit" in msg
+        or "quota" in msg
+        or "insufficient" in msg
+        or "credit" in msg
+    )
+
+
 def run_zero_shot_evaluation(args: argparse.Namespace) -> None:
     load_env()
     cfg = load_config(args.config)
 
-    provider, model = resolve_provider_and_model(args)
-    dataset_name = args.dataset.strip().lower()
+    # 1. Expand evaluation targets
+    targets: list[tuple[str, str]] = []
+    
+    # Check if comma-separated list of items has provider:model syntax (e.g. "gemini:gemini-3.5-flash-lite,nvidia_nim:meta/muse-glimmer-30b")
+    if args.model and any(":" in item and item.split(":", 1)[0].strip().lower() in KNOWN_PROVIDERS for item in args.model.split(",")):
+        for item in args.model.split(","):
+            item = item.strip()
+            if not item:
+                continue
+            if ":" in item and item.split(":", 1)[0].strip().lower() in KNOWN_PROVIDERS:
+                p, m = item.split(":", 1)
+                targets.append((p.strip().lower(), m.strip()))
+            else:
+                p, m = resolve_provider_and_model(argparse.Namespace(**{**vars(args), "model": item}))
+                targets.append((p, m))
+    else:
+        raw_models = [m.strip() for m in args.model.split(",")] if args.model else [None]
+        raw_providers = [p.strip() for p in args.provider.split(",")] if args.provider else [None]
 
-    # Determine output path
+        if len(raw_models) > 1 and len(raw_providers) == 1:
+            for m in raw_models:
+                p, resolved_m = resolve_provider_and_model(argparse.Namespace(**{**vars(args), "model": m, "provider": raw_providers[0]}))
+                targets.append((p, resolved_m))
+        elif len(raw_providers) > 1 and len(raw_models) == 1:
+            for p in raw_providers:
+                resolved_p, m = resolve_provider_and_model(argparse.Namespace(**{**vars(args), "model": raw_models[0], "provider": p}))
+                targets.append((resolved_p, m))
+        elif len(raw_models) > 1 and len(raw_providers) == len(raw_models):
+            for p, m in zip(raw_providers, raw_models):
+                resolved_p, resolved_m = resolve_provider_and_model(argparse.Namespace(**{**vars(args), "model": m, "provider": p}))
+                targets.append((resolved_p, resolved_m))
+        else:
+            p, m = resolve_provider_and_model(args)
+            targets.append((p, m))
+
+    dataset_name = args.dataset.strip().lower()
+    split_name = args.split.strip().lower()
+
+    # Track providers that hit 429/quota limits to hard-skip all other models on that provider
+    failed_providers: set[str] = set()
+
+    for p_idx, (provider, model) in enumerate(targets, start=1):
+        if provider in failed_providers:
+            print(f"\n⏩ [SKIP-PROVIDER] Skipping target {p_idx}/{len(targets)}: {provider.upper()} ({model}) — provider '{provider}' encountered a 429/quota limit earlier.\n", flush=True)
+            continue
+
+        if len(targets) > 1:
+            print("\n" + "#" * 70)
+            print(f"EVALUATION TARGET {p_idx}/{len(targets)}: {provider.upper()} ({model})")
+            print("#" * 70 + "\n")
+        
+        provider_failed = _run_zero_shot_for_target(args, cfg, dataset_name, split_name, provider, model)
+        if provider_failed:
+            failed_providers.add(provider)
+            print(f"\n⚠️ [PROVIDER-LOCK] Marked provider '{provider}' as failed. All remaining models on '{provider}' will be skipped immediately.", flush=True)
+
+
+def _run_zero_shot_for_target(
+    args: argparse.Namespace,
+    cfg: Any,
+    dataset_name: str,
+    split_name: str,
+    provider: str,
+    model: str,
+) -> None:
+    # Standardized, unambiguous output naming convention:
+    # data/evaluations/zero_shot_{dataset}_{split}_{provider}_{model}.jsonl
     safe_model_tag = model.replace("/", "--").replace(":", "-")
     os.makedirs(args.output_dir, exist_ok=True)
-    if args.output:
+    if args.output and len(getattr(args, "model", "").split(",")) <= 1:
         output_path = Path(args.output)
     else:
-        output_path = Path(args.output_dir) / f"zero_shot_{dataset_name}_{provider}_{safe_model_tag}.jsonl"
+        output_path = Path(args.output_dir) / f"zero_shot_{dataset_name}_{split_name}_{provider}_{safe_model_tag}.jsonl"
 
     # 1. Load Dataset
-    print(f"Loading {dataset_name.upper()} dataset (split='{args.split}')...")
+    print(f"Loading {dataset_name.upper()} dataset (split='{split_name}')...")
     if dataset_name == "tufts":
         imgs_df, annots_df, cats_df = load_tufts_dataset(data_dir=cfg.data_dir)
     else:
         imgs_df, annots_df, cats_df = load_dentex_dataset(
-            data_dir=cfg.data_dir, split_name=args.split
+            data_dir=cfg.data_dir, split_name=split_name
         )
 
     annotated_ids = set(annots_df["image_id"].unique())
@@ -374,30 +456,35 @@ def run_zero_shot_evaluation(args: argparse.Namespace) -> None:
             # Incremental Git Sync
             if args.git_sync_every > 0 and since_last_sync >= args.git_sync_every:
                 print(f"  [git-sync] Syncing checkpoint after {since_last_sync} images...", flush=True)
-                sync_and_push([str(output_path)], commit_msg=f"eval(zero_shot): checkpoint {provider}/{model}")
+                sync_and_push([str(output_path)], commit_message=f"eval(zero_shot): checkpoint {provider}/{model}")
                 since_last_sync = 0
 
             if args.pacing_delay > 0:
                 time.sleep(args.pacing_delay)
 
-        except RPDLimitExhausted as e:
-            print(f"\n[RATE-LIMIT] Daily limit exhausted for {provider}: {e}")
-            break
         except Exception as e:
             failed_in_session += 1
-            print(f"  [ERROR] Image ID {image_id} failed: {e}", flush=True)
+            if _is_rate_limit_or_fatal_error(e):
+                print(f"\n🛑 [429 / RATE-LIMIT] Provider '{provider}' encountered a rate limit or quota exhaustion: {e}", flush=True)
+                print(f"⏩ Hard-skipping provider '{provider}' and advancing immediately to the next provider...", flush=True)
+                if args.git_sync_every > 0 and since_last_sync > 0:
+                    sync_and_push([str(output_path)], commit_message=f"eval(zero_shot): checkpoint {provider}/{model}")
+                return True
+            
+            print(f"  [ERROR] Image ID {image_id} failed on {provider}/{model}: {e}", flush=True)
             if not args.ignore_api_errors:
-                print("Aborting. Use --ignore-api-errors to continue past errors.")
+                print("Aborting. Use --ignore-api-errors to continue past single-image errors.")
                 raise e
 
     # Final Sync
     if args.git_sync_every > 0 and since_last_sync > 0:
         print(f"\n[git-sync] Performing final session push...", flush=True)
-        sync_and_push([str(output_path)], commit_msg=f"eval(zero_shot): session complete {provider}/{model}")
+        sync_and_push([str(output_path)], commit_message=f"eval(zero_shot): session complete {provider}/{model}")
 
     elapsed = time.time() - session_start_time
     print(f"\nSession finished in {elapsed:.1f}s. Evaluated: {evaluated_in_session}, Failed: {failed_in_session}")
     _print_final_summary(output_path, provider, model, args)
+    return False
 
 
 def _print_final_summary(output_path: Path, provider: str, model: str, args: argparse.Namespace) -> None:
@@ -468,7 +555,10 @@ def _print_final_summary(output_path: Path, provider: str, model: str, args: arg
 
     if getattr(args, "generate_report", True):
         report_path = Path("experiments") / f"zero_shot_report_{provider}_{model.replace('/', '--')}.md"
+        report_path.parent.mkdir(parents=True, exist_ok=True)
         generate_markdown_report(metrics_dict, output_path=report_path)
+        if args.git_sync_every > 0:
+            sync_and_push([str(output_path), str(report_path)], commit_message=f"eval(zero_shot): final results & report {provider}/{model}")
 
 
 # ---------------------------------------------------------------------------
@@ -484,7 +574,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dataset", default="dentex", help="Dataset name ('dentex' or 'tufts')")
     parser.add_argument("--split", default="test", help="Dataset split ('test', 'validation', 'train')")
     parser.add_argument("--provider", default=None, help="Provider ('gemini', 'nvidia_nim', 'groq', 'openrouter', 'local', 'openai', 'anthropic')")
-    parser.add_argument("--model", default=None, help="Model name / checkpoint identifier")
+    parser.add_argument("--model", default=None, help="Model name / checkpoint identifier or comma-separated list")
+    parser.add_argument("--suite", choices=["option7", "benchmark", "all"], default=None, help="Run pre-configured multi-model benchmark suite (7 NVIDIA NIM + 3 OpenRouter models)")
     
     # Slicing & Workers
     parser.add_argument("--total-slices", type=int, default=1, help="Total parallel slices across instances")
