@@ -67,9 +67,12 @@ def generate_summary_table(
             "Method / Model": model_name,
             "Format Ok (%)": f"{metrics.get('format_adherence', 0.0) * 100:.1f}%",
             "FDI Acc (%)": f"{metrics.get('fdi_localization_accuracy', 0.0) * 100:.1f}%",
+            "FDI F1": f"{metrics.get('fdi_localization_f1', metrics.get('fdi_localization_accuracy', 0.0)):.3f}",
+            "Pathology Acc (%)": f"{metrics.get('pathology_accuracy', 0.0) * 100:.1f}%",
             "Pathology F1": f"{metrics.get('pathology_macro_f1', 0.0):.3f}",
             "Exact Match (%)": f"{metrics.get('exact_match_accuracy', 0.0) * 100:.1f}%",
             "Exact Match 95% CI": ci_str,
+            "Closeness": f"{metrics.get('closeness_score', 0.0):.3f}",
             "ECE": f"{metrics.get('ece', 0.0):.4f}",
             "Avg Tool Calls": f"{metrics.get('mean_tool_calls', 0.0):.2f}",
         }
