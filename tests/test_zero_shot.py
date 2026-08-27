@@ -136,3 +136,36 @@ def test_zero_shot_metric_evaluation_mock():
     # FDI: 1/3 (image 1) + 1/3 (image 2) = 2/3
     assert abs(metrics["fdi_accuracy"] - 2.0 / 3.0) < 1e-4
     assert metrics["format_compliance_rate"] == 1.0
+
+
+def test_multi_finding_matching_and_precision_recall():
+    from dental_agent.evaluation.metrics import match_multi_findings, extract_predicted_findings
+
+    # Ground truth: 3 findings on radiograph
+    gt = [
+        {"quadrant": 4, "tooth_position": 8, "diagnosis": "Impacted"},
+        {"quadrant": 1, "tooth_position": 6, "diagnosis": "Caries"},
+        {"quadrant": 3, "tooth_position": 6, "diagnosis": "Periapical Lesion"},
+    ]
+
+    # Model predicted 2 findings: one exact match (48 Impacted), one FDI match with wrong diag (16 Deep Caries)
+    preds = [
+        {"quadrant": 4, "tooth_position": 8, "diagnosis": "Impacted Tooth", "confidence": 0.95},
+        {"quadrant": 1, "tooth_position": 6, "diagnosis": "Deep Caries", "confidence": 0.80},
+    ]
+
+    clean_preds = extract_predicted_findings(preds)
+    res = match_multi_findings(gt, clean_preds)
+
+    assert res["gt_count"] == 3
+    assert res["pred_count"] == 2
+    # Both 48 and 16 localized
+    assert res["fdi_tp"] == 2
+    assert res["fdi_precision"] == 1.0  # 2/2
+    assert abs(res["fdi_recall"] - 2.0 / 3.0) < 1e-4  # 2/3
+
+    # Only 48 has exact diagnosis match
+    assert res["exact_tp"] == 1
+    assert res["exact_precision"] == 0.5  # 1/2
+    assert abs(res["exact_recall"] - 1.0 / 3.0) < 1e-4  # 1/3
+

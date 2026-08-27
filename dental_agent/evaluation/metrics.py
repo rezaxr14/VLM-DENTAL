@@ -41,6 +41,183 @@ def expected_calibration_error(
 compute_ece = expected_calibration_error
 
 
+def normalize_dental_diagnosis(val: Any) -> str:
+    """Normalize various model diagnosis outputs to canonical DENTEX categories:
+    'Impacted', 'Caries', 'Periapical Lesion', 'Deep Caries'."""
+    if val is None:
+        return "Unknown"
+    s = str(val).strip().lower()
+    if "deep" in s and "caries" in s:
+        return "Deep Caries"
+    if "caries" in s or "carious" in s or "decay" in s:
+        return "Caries"
+    if "periapical" in s or "apical" in s or "lesion" in s or "radiolucency" in s:
+        return "Periapical Lesion"
+    if "impact" in s:
+        return "Impacted"
+    return str(val).strip().title()
+
+
+def extract_predicted_findings(parsed_output: Any) -> list[dict[str, Any]]:
+    """Extract a normalized list of findings from arbitrary VLM outputs."""
+    if parsed_output is None:
+        return []
+    
+    raw_list = []
+    if isinstance(parsed_output, list):
+        raw_list = parsed_output
+    elif isinstance(parsed_output, dict):
+        if "findings" in parsed_output and isinstance(parsed_output["findings"], list):
+            raw_list = parsed_output["findings"]
+        elif "final_answer" in parsed_output:
+            fa = parsed_output["final_answer"]
+            if isinstance(fa, list):
+                raw_list = fa
+            elif isinstance(fa, dict):
+                raw_list = [fa]
+        elif "quadrant" in parsed_output or "tooth_position" in parsed_output or "diagnosis" in parsed_output:
+            raw_list = [parsed_output]
+    
+    clean_findings = []
+    for item in raw_list:
+        if not isinstance(item, dict):
+            continue
+        try:
+            q = int(item.get("quadrant")) if item.get("quadrant") is not None else None
+            pos = int(item.get("tooth_position")) if item.get("tooth_position") is not None else None
+        except (ValueError, TypeError):
+            q, pos = None, None
+        
+        diag = item.get("diagnosis")
+        norm_diag = normalize_dental_diagnosis(diag) if diag else "Unknown"
+        conf = None
+        if "confidence" in item and item["confidence"] is not None:
+            try:
+                conf = float(item["confidence"])
+            except (ValueError, TypeError):
+                conf = None
+        
+        clean_findings.append({
+            "quadrant": q,
+            "tooth_position": pos,
+            "diagnosis": norm_diag,
+            "raw_diagnosis": str(diag) if diag else "",
+            "confidence": conf,
+        })
+    return clean_findings
+
+
+def match_multi_findings(
+    ground_truths: list[dict[str, Any]],
+    predictions: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Clinically sound set-level matching between ground truth findings and model predictions.
+    
+    Computes:
+    - FDI Localization TP, FP, FN, Precision, Recall, F1
+    - Exact Match (Localization + Pathology) TP, FP, FN, Precision, Recall, F1
+    - Detailed matched pairs
+    """
+    n_gt = len(ground_truths)
+    n_pred = len(predictions)
+    
+    if n_gt == 0 and n_pred == 0:
+        return {
+            "gt_count": 0, "pred_count": 0,
+            "fdi_tp": 0, "fdi_fp": 0, "fdi_fn": 0,
+            "fdi_precision": 1.0, "fdi_recall": 1.0, "fdi_f1": 1.0,
+            "exact_tp": 0, "exact_fp": 0, "exact_fn": 0,
+            "exact_precision": 1.0, "exact_recall": 1.0, "exact_f1": 1.0,
+            "matched_pairs": [],
+        }
+    
+    used_preds = set()
+    used_gt = set()
+    matched_pairs = []
+    
+    # Pass 1: Match Exact Matches (Both tooth FDI and normalized diagnosis match)
+    for gt_idx, gt in enumerate(ground_truths):
+        gt_q = gt.get("quadrant")
+        gt_pos = gt.get("tooth_position")
+        gt_diag = normalize_dental_diagnosis(gt.get("diagnosis"))
+        
+        for pred_idx, pred in enumerate(predictions):
+            if pred_idx in used_preds:
+                continue
+            p_q = pred.get("quadrant")
+            p_pos = pred.get("tooth_position")
+            p_diag = normalize_dental_diagnosis(pred.get("diagnosis"))
+            
+            if gt_q is not None and gt_pos is not None and gt_q == p_q and gt_pos == p_pos and gt_diag == p_diag:
+                used_preds.add(pred_idx)
+                used_gt.add(gt_idx)
+                matched_pairs.append({
+                    "gt": gt,
+                    "pred": pred,
+                    "fdi_match": True,
+                    "exact_match": True,
+                })
+                break
+                
+    # Pass 2: Match Remaining FDI Localization Matches (Correct tooth, incorrect diagnosis)
+    for gt_idx, gt in enumerate(ground_truths):
+        if gt_idx in used_gt:
+            continue
+        gt_q = gt.get("quadrant")
+        gt_pos = gt.get("tooth_position")
+        
+        for pred_idx, pred in enumerate(predictions):
+            if pred_idx in used_preds:
+                continue
+            p_q = pred.get("quadrant")
+            p_pos = pred.get("tooth_position")
+            
+            if gt_q is not None and gt_pos is not None and gt_q == p_q and gt_pos == p_pos:
+                used_preds.add(pred_idx)
+                used_gt.add(gt_idx)
+                matched_pairs.append({
+                    "gt": gt,
+                    "pred": pred,
+                    "fdi_match": True,
+                    "exact_match": False,
+                })
+                break
+                
+    fdi_tp = len(matched_pairs)
+    fdi_fp = n_pred - fdi_tp
+    fdi_fn = n_gt - fdi_tp
+    
+    exact_tp = sum(1 for m in matched_pairs if m["exact_match"])
+    exact_fp = n_pred - exact_tp
+    exact_fn = n_gt - exact_tp
+    
+    fdi_p = fdi_tp / max(1, n_pred) if n_pred > 0 else 0.0
+    fdi_r = fdi_tp / max(1, n_gt) if n_gt > 0 else 0.0
+    fdi_f1 = (2 * fdi_p * fdi_r) / (fdi_p + fdi_r) if (fdi_p + fdi_r) > 0 else 0.0
+    
+    exact_p = exact_tp / max(1, n_pred) if n_pred > 0 else 0.0
+    exact_r = exact_tp / max(1, n_gt) if n_gt > 0 else 0.0
+    exact_f1 = (2 * exact_p * exact_r) / (exact_p + exact_r) if (exact_p + exact_r) > 0 else 0.0
+    
+    return {
+        "gt_count": n_gt,
+        "pred_count": n_pred,
+        "fdi_tp": fdi_tp,
+        "fdi_fp": fdi_fp,
+        "fdi_fn": fdi_fn,
+        "fdi_precision": fdi_p,
+        "fdi_recall": fdi_r,
+        "fdi_f1": fdi_f1,
+        "exact_tp": exact_tp,
+        "exact_fp": exact_fp,
+        "exact_fn": exact_fn,
+        "exact_precision": exact_p,
+        "exact_recall": exact_r,
+        "exact_f1": exact_f1,
+        "matched_pairs": matched_pairs,
+    }
+
+
 def compute_evaluation_metrics(results: list[dict[str, Any]]) -> dict[str, Any]:
     """Core §6 metrics from a run_agent_batch() results list: FDI (quadrant + tooth
     position) accuracy, per-diagnosis F1, balanced accuracy, format-compliance rate,
