@@ -300,7 +300,19 @@ def build_dataframes(
 
     images_df = pd.DataFrame(coco.get("images", []))
     annots_df = pd.DataFrame(coco.get("annotations", []))
-    categories_df = pd.DataFrame(coco.get("categories", []))
+    
+    raw_cats = (
+        coco.get("categories_3")
+        or coco.get("categories_disease")
+        or coco.get("categories")
+        or [
+            {"id": 0, "name": "Impacted", "supercategory": "Impacted"},
+            {"id": 1, "name": "Caries", "supercategory": "Caries"},
+            {"id": 2, "name": "Periapical Lesion", "supercategory": "Periapical Lesion"},
+            {"id": 3, "name": "Deep Caries", "supercategory": "Deep Caries"},
+        ]
+    )
+    categories_df = pd.DataFrame(raw_cats)
 
     # Ensure bbox is a plain list (for parquet serialization)
     if "bbox" in annots_df.columns:
