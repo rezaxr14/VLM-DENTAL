@@ -37,6 +37,26 @@ def test_resolve_trace_image_path_cross_environment_fallback(tmp_path):
     assert resolved.name == "4.png"
 
 
+def test_resolve_trace_image_path_windows_backslash_on_posix(tmp_path):
+    # Windows formatted path with backslashes
+    fake_win_path = r"C:\Users\tester\AppData\Local\data\images\7.png"
+
+    local_img_dir = tmp_path / "dentex" / "training_data"
+    local_img_dir.mkdir(parents=True, exist_ok=True)
+    local_img_file = local_img_dir / "7.png"
+    Image.new("RGB", (100, 100), color="purple").save(local_img_file)
+
+    resolved = resolve_trace_image_path(
+        fake_win_path,
+        image_id=7,
+        dataset_name="dentex",
+        data_dir=tmp_path,
+    )
+    assert resolved is not None
+    assert resolved.exists()
+    assert resolved.name == "7.png"
+
+
 def test_resolve_trace_image_path_via_images_df(tmp_path):
     fake_path = "/non_existent_mount/val_15.png"
     real_img = tmp_path / "actual_val_15.png"
@@ -71,3 +91,8 @@ def test_resolve_trace_image_path_dynamic_slice_download(monkeypatch, tmp_path):
     )
     assert resolved is not None
     assert resolved == downloaded_img
+
+
+def test_resolve_trace_image_path_invalid_inputs():
+    assert resolve_trace_image_path(None, image_id=-1, dataset_name="unknown") is None
+    assert resolve_trace_image_path("", image_id=-1, dataset_name="unknown") is None
