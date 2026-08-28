@@ -35,9 +35,11 @@ data/*.parquet
 data/*.zip
 *.zip
 
-# Allow synthetic traces to be tracked and synchronized via Git
+# Allow synthetic traces and evaluation results to be tracked and synchronized via Git
 !data/traces/
 !data/traces/*
+!data/evaluations/
+!data/evaluations/*
 
 # API keys & secrets
 .env
