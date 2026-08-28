@@ -259,4 +259,66 @@ def test_parse_zero_shot_alternative_key_formats():
     assert clean3[0]["diagnosis"] == "Periapical Lesion"
 
 
+def test_negation_awareness_in_reasoning_extractor():
+    """Verify that sentences stating 'no caries' or 'normal' are NOT falsely extracted as findings."""
+    from dental_agent.evaluation.baselines import extract_findings_from_reasoning_text
+
+    text_with_negations = """
+    <think>
+    - Tooth 16 (Upper Right First Molar): There is no caries visible. Tooth is intact and normal.
+    - Tooth 17: No evidence of periapical lesion.
+    - Tooth 48 (Lower Right Third Molar): Clearly visible as an impacted tooth. Diagnosis: Impacted Tooth.
+    - Tooth 36: Ruled out deep caries.
+    - Tooth 44: Diagnosis: Periapical Lesion.
+    </think>
+    """
+    findings = extract_findings_from_reasoning_text(text_with_negations)
+    positions = [(f["quadrant"], f["tooth_position"]) for f in findings]
+    
+    # 48 and 44 must be extracted (affirmative findings)
+    assert (4, 8) in positions
+    assert (4, 4) in positions
+    
+    # 16, 17, and 36 must NOT be extracted (negated findings)
+    assert (1, 6) not in positions
+    assert (1, 7) not in positions
+    assert (3, 6) not in positions
+
+
+def test_load_completed_ids_retry_empty(tmp_path):
+    """Test that load_completed_ids filters out 0-prediction records when retry_empty=True."""
+    from scripts.run_zero_shot import load_completed_ids, save_evaluation_record_atomic
+
+    jsonl_path = tmp_path / "test_eval.jsonl"
+    
+    # Save record 1 (valid)
+    rec1 = {"image_id": 1, "predictions": [{"quadrant": 1, "tooth_position": 8, "diagnosis": "Impacted"}], "format_ok": True}
+    save_evaluation_record_atomic(jsonl_path, rec1)
+
+    # Save record 2 (empty/truncated)
+    rec2 = {"image_id": 2, "predictions": [], "format_ok": False}
+    save_evaluation_record_atomic(jsonl_path, rec2)
+
+    # Without retry_empty: returns both 1 and 2
+    all_completed = load_completed_ids(jsonl_path, retry_empty=False)
+    assert all_completed == {1, 2}
+
+    # With retry_empty: returns only 1 (image 2 must be re-evaluated)
+    valid_completed = load_completed_ids(jsonl_path, retry_empty=True)
+    assert valid_completed == {1}
+
+    # Now simulate re-evaluating image 2 with valid predictions
+    rec2_fixed = {"image_id": 2, "predictions": [{"quadrant": 4, "tooth_position": 8, "diagnosis": "Impacted"}], "format_ok": True}
+    save_evaluation_record_atomic(jsonl_path, rec2_fixed)
+
+    # Now both are completed and file has exactly 2 lines
+    final_completed = load_completed_ids(jsonl_path, retry_empty=True)
+    assert final_completed == {1, 2}
+    
+    with open(jsonl_path, "r", encoding="utf-8") as f:
+        lines = [line.strip() for line in f if line.strip()]
+    assert len(lines) == 2
+
+
+
 
