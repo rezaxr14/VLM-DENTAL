@@ -366,6 +366,9 @@ def _run_zero_shot_for_target(
         _print_final_summary(output_path, provider, model, args)
         return False
 
+    if args.max_images is not None and args.max_images > 0:
+        remaining_imgs = remaining_imgs.iloc[:args.max_images]
+
     print(f"Starting Zero-Shot evaluation: {len(remaining_imgs)} image(s) (Pacing delay: {args.pacing_delay}s)...")
 
     # Evaluation loop
