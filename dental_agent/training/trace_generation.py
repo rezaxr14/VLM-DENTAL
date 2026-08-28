@@ -301,8 +301,18 @@ def verify_trace(
 
     # Extract the assistant's reasoning
     messages = trajectory.get("messages", [])
-    assistant_msgs = [m["content"] for m in messages if m["role"] == "assistant"]
-    trace_text = "\n\n".join(assistant_msgs)
+    assistant_msgs = [
+        m.get("content", "")
+        for m in messages
+        if isinstance(m, dict) and m.get("role") == "assistant" and m.get("content")
+    ]
+    if not assistant_msgs and "turns" in trajectory:
+        assistant_msgs = [
+            t.get("raw_output", "")
+            for t in trajectory.get("turns", [])
+            if isinstance(t, dict) and t.get("raw_output")
+        ]
+    trace_text = "\n\n".join(assistant_msgs) if assistant_msgs else json.dumps(trajectory)
 
     user_content = f"Ground Truth: {json.dumps(ground_truth)}\n\nCandidate Trace:\n{trace_text}"
 
@@ -345,7 +355,8 @@ def verify_trace(
             repaired_trajectory = dict(trajectory)
             repaired_messages = list(trajectory.get("messages", []))
             for i in range(len(repaired_messages)-1, -1, -1):
-                if repaired_messages[i]["role"] == "assistant":
+                if isinstance(repaired_messages[i], dict) and repaired_messages[i].get("role") == "assistant":
+                    repaired_messages[i] = dict(repaired_messages[i])
                     repaired_messages[i]["content"] = repaired_raw
                     break
             repaired_trajectory["messages"] = repaired_messages
@@ -598,10 +609,180 @@ def generate_only_no_tools(
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+
+_RESOLVED_PATH_CACHE: dict[tuple[str, int, str], Path] = {}
+
+
+def resolve_trace_image_path(
+    image_path: str | Path | None,
+    image_id: int,
+    dataset_name: str = "dentex",
+    images_df: pd.DataFrame | None = None,
+    data_dir: str | Path | None = None,
+) -> Path | None:
+    """Resolve an image path across heterogeneous runtime environments (Kaggle -> Colab -> Local).
+
+    If the raw image_path stored in a trace JSONL was recorded on a different filesystem
+    (e.g., /kaggle/working/... when running in Colab, or Windows backslashes on Linux), this helper:
+      1. Normalizes path separators and checks fast memoization cache.
+      2. Checks if the path exists directly as-is on the current filesystem.
+      3. Checks if images_df contains a valid local_path for this image_id.
+      4. Searches local dataset folders (including find_local_dentex_dir) for {id}.png/jpg.
+      5. Searches HF hub cache snapshots on disk.
+      6. Dynamically downloads the slice image via DENTEX_IMAGES_REPO / TUFTS_IMAGES_REPO.
+    """
+    raw_str = str(image_path).strip() if image_path is not None else ""
+    try:
+        norm_id = int(image_id)
+    except (ValueError, TypeError):
+        norm_id = -1
+    ds_norm = (dataset_name or "dentex").lower()
+
+    cache_key = (ds_norm, norm_id, raw_str)
+    if cache_key in _RESOLVED_PATH_CACHE:
+        cached_p = _RESOLVED_PATH_CACHE[cache_key]
+        if cached_p.exists() and cached_p.is_file():
+            return cached_p
+
+    if raw_str:
+        p = Path(raw_str)
+        if p.exists() and p.is_file():
+            _RESOLVED_PATH_CACHE[cache_key] = p
+            return p
+
+    # 1. Lookup in images_df if provided
+    if images_df is not None and "id" in images_df.columns and "local_path" in images_df.columns:
+        match = images_df[images_df["id"] == norm_id]
+        if not match.empty:
+            df_path = match.iloc[0].get("local_path")
+            if df_path and os.path.exists(str(df_path)):
+                res_p = Path(df_path)
+                _RESOLVED_PATH_CACHE[cache_key] = res_p
+                return res_p
+
+    # 2. Extract universal filename across Windows and POSIX separators
+    fname = raw_str.replace("\\", "/").split("/")[-1] if raw_str else f"{norm_id}.png"
+    stem = fname.rsplit(".", 1)[0] if "." in fname else fname
+
+    if ds_norm == "dentex":
+        candidate_names = list(dict.fromkeys([
+            fname,
+            f"{norm_id}.png",
+            f"{stem}.png",
+            f"val_{norm_id}.png",
+            f"train_{norm_id}.png",
+            f"{norm_id}.jpg",
+        ]))
+        search_roots: list[Path] = []
+        if data_dir:
+            search_roots.append(Path(data_dir))
+        try:
+            from dental_agent.data.dentex import find_local_dentex_dir
+            local_dentex = find_local_dentex_dir(data_dir=data_dir)
+            if local_dentex and local_dentex.exists():
+                search_roots.append(local_dentex)
+        except Exception:
+            pass
+        search_roots.extend([
+            Path("data/dentex"),
+            Path("data/dentex/DENTEX"),
+            Path("data/training_data"),
+            Path("data/validation_data"),
+            Path("data/dentex/training_data"),
+            Path("data/dentex/validation_data"),
+        ])
+    elif ds_norm == "tufts":
+        candidate_names = list(dict.fromkeys([
+            fname,
+            f"{norm_id}.jpg",
+            f"{norm_id}.JPG",
+            f"{norm_id}.png",
+            f"{stem}.jpg",
+            f"{stem}.JPG",
+        ]))
+        search_roots = []
+        if data_dir:
+            search_roots.append(Path(data_dir))
+        search_roots.extend([
+            Path("data/Tufts"),
+            Path("data/tufts"),
+            Path("data/Tufts/Radiographs"),
+            Path("data/tufts/Radiographs"),
+        ])
+    else:
+        candidate_names = list(dict.fromkeys([fname, f"{norm_id}.png", f"{norm_id}.jpg"]))
+        search_roots = [Path(data_dir)] if data_dir else [Path("data")]
+
+    for root in search_roots:
+        if not root.exists():
+            continue
+        for name in candidate_names:
+            candidate = root / name
+            if candidate.exists() and candidate.is_file():
+                _RESOLVED_PATH_CACHE[cache_key] = candidate
+                return candidate
+            candidate_nested = root / "images" / name
+            if candidate_nested.exists() and candidate_nested.is_file():
+                _RESOLVED_PATH_CACHE[cache_key] = candidate_nested
+                return candidate_nested
+
+    # 3. Glob match in local dataset folders
+    for root in search_roots:
+        if root.exists():
+            for name in candidate_names:
+                for match in root.glob(f"**/{name}"):
+                    if match.is_file():
+                        _RESOLVED_PATH_CACHE[cache_key] = match
+                        return match
+
+    # 4. Check HuggingFace hub cache
+    repo_id = os.environ.get("DENTEX_IMAGES_REPO" if ds_norm == "dentex" else "TUFTS_IMAGES_REPO")
+    hf_cache_root = Path.home() / ".cache" / "huggingface" / "hub"
+    if repo_id and hf_cache_root.exists():
+        hf_repo_dir = hf_cache_root / f"datasets--{repo_id.replace('/', '--')}"
+        if hf_repo_dir.exists():
+            for name in candidate_names:
+                for match in hf_repo_dir.glob(f"**/{name}"):
+                    if match.is_file():
+                        _RESOLVED_PATH_CACHE[cache_key] = match
+                        return match
+
+    # 5. Dynamic slice download if repo is configured
+    if ds_norm == "dentex" and norm_id >= 0:
+        repo_id = os.environ.get("DENTEX_IMAGES_REPO")
+        if repo_id:
+            try:
+                from dental_agent.data.dentex import download_dentex_slice
+                paths_map = download_dentex_slice([norm_id], repo_id=repo_id, cache_dir=data_dir)
+                if norm_id in paths_map and paths_map[norm_id] is not None:
+                    p_down = Path(paths_map[norm_id])
+                    if p_down.exists():
+                        _RESOLVED_PATH_CACHE[cache_key] = p_down
+                        return p_down
+            except Exception as e:
+                print(f"Warning: Failed to fetch image {norm_id} from {repo_id}: {e}")
+    elif ds_norm == "tufts" and norm_id >= 0:
+        repo_id = os.environ.get("TUFTS_IMAGES_REPO")
+        if repo_id:
+            try:
+                from dental_agent.data.tufts import download_tufts_slice
+                paths_map = download_tufts_slice([norm_id], repo_id=repo_id, cache_dir=data_dir)
+                if norm_id in paths_map and paths_map[norm_id] is not None:
+                    p_down = Path(paths_map[norm_id])
+                    if p_down.exists():
+                        _RESOLVED_PATH_CACHE[cache_key] = p_down
+                        return p_down
+            except Exception as e:
+                print(f"Warning: Failed to fetch image {norm_id} from {repo_id}: {e}")
+
+    return None
+
+
 def verify_pending(
     unverified_path: str | Path,
     verified_path: str | Path,
     images_df: pd.DataFrame | None = None,
+    data_dir: str | Path | None = None,
     call_llm_fn: Callable[..., str] = call_llm,
     max_repairs: int = 1,
     total_slices: int = 1,
@@ -679,8 +860,18 @@ def verify_pending(
         trajectory = record.get("trajectory", {})
         dataset_name = record.get("dataset", "dentex")
 
-        if not trajectory or not os.path.exists(str(image_path)):
-            return False, image_id, "Skipped (no trajectory or image)"
+        resolved_path = resolve_trace_image_path(
+            image_path=image_path,
+            image_id=image_id,
+            dataset_name=dataset_name,
+            images_df=images_df,
+            data_dir=data_dir,
+        )
+
+        if not trajectory or resolved_path is None or not resolved_path.exists():
+            return False, image_id, f"Skipped (no trajectory or missing image: {image_path})"
+
+        image_path = str(resolved_path)
 
         try:
             image = Image.open(image_path).convert("RGB")
@@ -724,12 +915,13 @@ def verify_pending(
                 record, idx = futures[future]
                 try:
                     passed, img_id, reason = future.result()
+                    reason_str = (reason or "")[:60]
                     if passed:
                         n_verified += 1
-                        print(f"  [Img {img_id}] PASSED ({reason[:60]})", flush=True)
+                        print(f"  [Img {img_id}] PASSED ({reason_str})", flush=True)
                     else:
                         n_rejected += 1
-                        print(f"  [Img {img_id}] REJECTED ({reason[:60]})", flush=True)
+                        print(f"  [Img {img_id}] REJECTED ({reason_str})", flush=True)
                 except Exception as e:
                     from dental_agent.training.api_pool import RPDLimitExhausted
                     if isinstance(e, RPDLimitExhausted):
@@ -839,6 +1031,7 @@ def repair_pending(
     unverified_path: str | Path,
     verified_path: str | Path,
     images_df: pd.DataFrame | None = None,
+    data_dir: str | Path | None = None,
     provider: str | None = None,
     model: str | None = None,
     total_slices: int = 1,
@@ -913,10 +1106,20 @@ def repair_pending(
         ground_truth = record.get("ground_truth", [])
         dataset_name = record.get("dataset", "dentex")
 
-        if not os.path.exists(str(img_path)):
+        resolved_path = resolve_trace_image_path(
+            image_path=img_path,
+            image_id=img_id,
+            dataset_name=dataset_name,
+            images_df=images_df,
+            data_dir=data_dir,
+        )
+
+        if resolved_path is None or not resolved_path.exists():
             print(f"[{idx}/{len(needs_repair)}] Img {img_id}: image missing ({img_path}). Skipping.")
             n_failed += 1
             continue
+
+        img_path = str(resolved_path)
 
         try:
             image = Image.open(img_path).convert("RGB")
@@ -942,10 +1145,12 @@ def repair_pending(
 
                 verified_ids.add((dataset_name, img_id))
                 n_promoted += 1
-                print(f"[{idx}/{len(needs_repair)}] Img {img_id}: REPAIRED & VERIFIED ({reason[:60]})", flush=True)
+                reason_str = (reason or "")[:60]
+                print(f"[{idx}/{len(needs_repair)}] Img {img_id}: REPAIRED & VERIFIED ({reason_str})", flush=True)
             else:
                 n_failed += 1
-                print(f"[{idx}/{len(needs_repair)}] Img {img_id}: REPAIR FAILED ({reason[:60]})", flush=True)
+                reason_str = (reason or "")[:60]
+                print(f"[{idx}/{len(needs_repair)}] Img {img_id}: REPAIR FAILED ({reason_str})", flush=True)
 
         except Exception as e:
             from dental_agent.training.api_pool import RPDLimitExhausted
