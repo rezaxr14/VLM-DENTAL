@@ -593,6 +593,7 @@ def _run_verify_for_dataset(args: argparse.Namespace, cfg: Any, unverified_path:
         max_images=args.max_images,
         provider=os.environ.get("VERIFIER_PROVIDER"),
         model=os.environ.get("VERIFIER_MODEL"),
+        git_sync_every=args.git_sync_every,
     )
 
     total_time = time.time() - session_start

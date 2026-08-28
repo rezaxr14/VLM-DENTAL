@@ -792,6 +792,7 @@ def verify_pending(
     max_images: int | None = None,
     provider: str | None = None,
     model: str | None = None,
+    git_sync_every: int = 0,
 ) -> dict[str, int]:
     """Read unverified traces, verify each, and append passing traces to the verified file."""
     unverified_path = Path(unverified_path)
@@ -922,6 +923,24 @@ def verify_pending(
                     else:
                         n_rejected += 1
                         print(f"  [Img {img_id}] REJECTED ({reason_str})", flush=True)
+
+                    processed_so_far = n_verified + n_rejected
+                    if (
+                        git_sync_every > 0
+                        and processed_so_far > 0
+                        and processed_so_far % git_sync_every == 0
+                        and n_verified > 0
+                    ):
+                        try:
+                            from dental_agent.training.git_sync import sync_and_push
+                            print(f"\n[git-sync] Periodic sync ({processed_so_far} processed, +{n_verified} verified)...", flush=True)
+                            sync_and_push(
+                                [str(verified_path)],
+                                f"trace-verify: checkpoint +{n_verified} verified, +{n_rejected} rejected",
+                            )
+                        except Exception as sync_err:
+                            print(f"  [git-sync] Periodic sync warning: {sync_err}", flush=True)
+
                 except Exception as e:
                     from dental_agent.training.api_pool import RPDLimitExhausted
                     if isinstance(e, RPDLimitExhausted):
