@@ -458,7 +458,7 @@ def _run_zero_shot_for_target(
             elif env_tokens is not None and env_tokens.strip():
                 tokens_to_use = int(env_tokens)
             else:
-                default_max_tokens = {"GROQ": 2048, "GEMINI": 16384, "OPENROUTER": 16384}
+                default_max_tokens = {"GROQ": 2048, "LOCAL": 2048, "GEMINI": 16384, "OPENROUTER": 16384}
                 tokens_to_use = default_max_tokens.get(prefix, 4096)
 
             # Call VLM with ZERO_SHOT_PROMPT (with reasoning & multi-finding guidelines)
