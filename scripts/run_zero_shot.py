@@ -330,6 +330,9 @@ def _run_zero_shot_for_target(
     completed_ids = load_completed_ids(output_path, retry_empty=retry_empty)
     remaining_imgs = eligible_imgs[~eligible_imgs["id"].isin(completed_ids)]
 
+    if getattr(args, "start_image_id", None) is not None:
+        remaining_imgs = remaining_imgs[remaining_imgs["id"] >= args.start_image_id]
+
     slice_info = f" (Slice {args.slice_index}/{args.total_slices})" if args.total_slices > 1 else ""
     print(f"Targeting{slice_info}: {len(eligible_imgs)} eligible images (Completed: {len(completed_ids)}, Remaining: {len(remaining_imgs)}).")
     print_banner(provider, model, len(completed_ids), total_eligible, output_path)
@@ -680,6 +683,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pacing-delay", type=float, default=1.5, help="Delay (seconds) between successive LLM requests")
     parser.add_argument("--git-sync-every", type=int, default=0, help="Push checkpoint to Git every N images (0 = disabled)")
     parser.add_argument("--max-images", type=int, default=None, help="Cap number of images to evaluate in this run")
+    parser.add_argument("--start-image-id", "--start-id", type=int, default=None, help="Only evaluate images with ID >= start-image-id")
     
     # Output & Scaling
     parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR, help="Directory for evaluation JSONL outputs")
