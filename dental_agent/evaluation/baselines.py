@@ -160,16 +160,46 @@ def parse_zero_shot_response(text: str) -> dict[str, Any] | list[dict[str, Any]]
                             candidates.append(source_text[start:i + 1])
                             start = -1
 
+    def _has_valid_dental_keys(d: Any) -> bool:
+        if isinstance(d, list):
+            return any(_has_valid_dental_keys(item) for item in d)
+        if isinstance(d, dict):
+            return any(k in d for k in ("findings", "final_answer", "quadrant", "tooth_position", "tooth", "fdi", "teeth"))
+        return False
+
     for cand in reversed(candidates):
         try:
             parsed = json.loads(cand)
             if isinstance(parsed, (dict, list)):
+                if _has_valid_dental_keys(parsed):
+                    return parsed
+                # If dict has only thought/reasoning/analysis, unwrap and parse thought text
+                if isinstance(parsed, dict):
+                    thought_parts = [
+                        str(v) for k, v in parsed.items()
+                        if isinstance(v, str) and k in ("thought", "reasoning", "analysis", "content", "response", "message", "text")
+                    ]
+                    if thought_parts:
+                        thought_findings = extract_findings_from_reasoning_text(" ".join(thought_parts))
+                        if thought_findings:
+                            return {"findings": thought_findings}
                 return parsed
         except Exception:
             sub_cand = re.sub(r",\s*([\]}])", r"\1", cand)
             try:
                 parsed = json.loads(sub_cand)
                 if isinstance(parsed, (dict, list)):
+                    if _has_valid_dental_keys(parsed):
+                        return parsed
+                    if isinstance(parsed, dict):
+                        thought_parts = [
+                            str(v) for k, v in parsed.items()
+                            if isinstance(v, str) and k in ("thought", "reasoning", "analysis", "content", "response", "message", "text")
+                        ]
+                        if thought_parts:
+                            thought_findings = extract_findings_from_reasoning_text(" ".join(thought_parts))
+                            if thought_findings:
+                                return {"findings": thought_findings}
                     return parsed
             except Exception:
                 pass
@@ -188,8 +218,8 @@ def parse_zero_shot_response(text: str) -> dict[str, Any] | list[dict[str, Any]]
 
 
 def extract_findings_from_reasoning_text(text: str) -> list[dict]:
-    """Fallback extractor when a reasoning model (e.g. Qwen 3.6) produces rich clinical
-    reasoning but is truncated before completing its final JSON structure.
+    """Fallback extractor when a reasoning model (e.g. Qwen 3.6, MiniMax, Nemotron) produces
+    rich clinical reasoning but is truncated or omits top-level JSON formatting.
     Includes strict negation-awareness to avoid extracting ruled-out normal teeth."""
     if not text or not isinstance(text, str):
         return []
@@ -202,19 +232,50 @@ def extract_findings_from_reasoning_text(text: str) -> list[dict]:
     lines = [l.strip() for l in text.splitlines() if l.strip()]
 
     for line in lines:
-        tooth_matches = list(re.finditer(r"(?:Tooth|FDI|tooth|#)?\s*\b([1-4])([1-8])\b", line, re.IGNORECASE))
-        for tm in tooth_matches:
-            q, pos = int(tm.group(1)), int(tm.group(2))
-            sub = line[tm.start():]
-            sub_lower = sub.lower()
+        line_lower = line.lower()
 
-            # Negation guard: skip if ruled out or marked normal
-            if any(neg in sub_lower for neg in ["no caries", "no periapical", "no impaction", "no evidence", "ruled out", "normal", "intact", "unremarkable"]):
+        # Negation guard: skip line if marked explicitly normal or unremarkable
+        if any(neg in line_lower for neg in [
+            "no caries", "no periapical", "no impaction", "no evidence",
+            "ruled out", "normal", "intact", "unremarkable", "without active pathology",
+            "no pathology", "no significant abnormality"
+        ]):
+            continue
+
+        detected_teeth = []
+
+        # 1. 2-digit FDI patterns (e.g. "Tooth 18", "FDI 48", "#38", "18", "tooth 26")
+        for tm in re.finditer(r"(?:Tooth|FDI|tooth|#)?\s*\b([1-4])([1-8])\b", line, re.IGNORECASE):
+            # Check if this tooth is just a reference tooth preceded by 'against', 'adjacent to', 'near', 'beside'
+            prefix = line[:tm.start()].lower()
+            if any(prefix.rstrip().endswith(prep) for prep in ["against", "against tooth", "adjacent to", "adjacent to tooth", "next to", "next to tooth", "mesial to", "distal to", "near"]):
                 continue
+            detected_teeth.append((int(tm.group(1)), int(tm.group(2)), tm.start()))
 
-            diag_m = re.search(r"\b(deep\s+caries|caries|periapical\s+lesion|impacted(?:\s+tooth)?)\b", sub, re.IGNORECASE)
-            if diag_m:
-                raw_diag = diag_m.group(1).strip()
+        # 2. Separated Quadrant and Tooth (e.g. "Quadrant 1 ... Tooth 8", "Quad 3, Position 6")
+        for qtm in re.finditer(r"(?:Quadrant|Quad|Q)\s*([1-4])\b[^\n\r;]*?\b(?:Tooth|Position|#)\s*([1-8])\b", line, re.IGNORECASE):
+            detected_teeth.append((int(qtm.group(1)), int(qtm.group(2)), qtm.start()))
+
+        for ptq in re.finditer(r"\b(?:Tooth|Position|#)\s*([1-8])\b[^\n\r;]*?\b(?:Quadrant|Quad|Q)\s*([1-4])\b", line, re.IGNORECASE):
+            detected_teeth.append((int(ptq.group(2)), int(ptq.group(1)), ptq.start()))
+
+        # 3. Named quadrant patterns (e.g. "Upper Right ... tooth 8", "Lower Left ... tooth 6")
+        named_quads = [
+            (r"(?:Upper\s+Right|Maxillary\s+Right)\b[^\n\r;]*?\b(?:Tooth|Position|#)?\s*([1-8])\b", 1),
+            (r"(?:Upper\s+Left|Maxillary\s+Left)\b[^\n\r;]*?\b(?:Tooth|Position|#)?\s*([1-8])\b", 2),
+            (r"(?:Lower\s+Left|Mandibular\s+Left)\b[^\n\r;]*?\b(?:Tooth|Position|#)?\s*([1-8])\b", 3),
+            (r"(?:Lower\s+Right|Mandibular\s+Right)\b[^\n\r;]*?\b(?:Tooth|Position|#)?\s*([1-8])\b", 4),
+        ]
+        for pattern, q_val in named_quads:
+            for nq_match in re.finditer(pattern, line, re.IGNORECASE):
+                pos_val = int(nq_match.group(1))
+                detected_teeth.append((q_val, pos_val, nq_match.start()))
+
+        # Search for dental pathologies on this line
+        diag_m = re.search(r"\b(deep\s+caries|caries|periapical\s+lesion|impacted(?:\s+wisdom|\s+tooth)?|impaction)\b", line, re.IGNORECASE)
+        if diag_m and detected_teeth:
+            raw_diag = diag_m.group(1).strip()
+            for q, pos, _ in detected_teeth:
                 key = (q, pos)
                 if key not in seen:
                     seen.add(key)

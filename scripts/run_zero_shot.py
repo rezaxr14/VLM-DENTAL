@@ -644,7 +644,8 @@ def _print_final_summary(output_path: Path, provider: str, model: str, args: arg
     print("\n" + summary_table + "\n")
 
     if getattr(args, "generate_report", True):
-        report_path = Path("experiments") / f"zero_shot_report_{provider}_{model.replace('/', '--')}.md"
+        safe_model_tag = model.replace('/', '--').replace(':', '-')
+        report_path = Path("experiments") / f"zero_shot_report_{provider}_{safe_model_tag}.md"
         report_path.parent.mkdir(parents=True, exist_ok=True)
         generate_markdown_report(metrics_dict, output_path=report_path)
         if args.git_sync_every > 0:
