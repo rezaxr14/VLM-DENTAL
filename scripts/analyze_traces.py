@@ -85,8 +85,12 @@ def load_and_clean(path: str, do_clean: bool):
         except json.JSONDecodeError:
             corrupt += 1
 
+    def _tc_count(tr):
+        v = tr.get("trajectory", tr).get("tool_calls", 0)
+        return len(v) if isinstance(v, list) else v
+
     # Remove failed (no final_answer)
-    good = [t for t in parsed if t.get("trajectory", {}).get("final_answer")]
+    good = [t for t in parsed if t.get("trajectory", t).get("final_answer")]
     failed = len(parsed) - len(good)
 
     # Deduplicate – keep richest trace (most tool calls)
@@ -99,10 +103,10 @@ def load_and_clean(path: str, do_clean: bool):
         if len(traces) == 1:
             deduped.append(traces[0])
         else:
-            best = max(traces, key=lambda t: t.get("trajectory", {}).get("tool_calls", 0))
+            best = max(traces, key=_tc_count)
             deduped.append(best)
             dup_removed += len(traces) - 1
-            dup_details.append((img_id, len(traces), best.get("trajectory", {}).get("tool_calls", 0)))
+            dup_details.append((img_id, len(traces), _tc_count(best)))
 
     if do_clean:
         with open(path, "w", encoding="utf-8") as f:
@@ -130,9 +134,12 @@ def extract_stats(traces):
     diag_counter: Counter = Counter()
 
     for t in traces:
-        traj = t.get("trajectory", {})
+        traj = t.get("trajectory", t)
         turns = traj.get("turns", [])
-        tool_calls_total = traj.get("tool_calls", 0)
+        
+        tc_raw = traj.get("tool_calls", 0)
+        tool_calls_total = len(tc_raw) if isinstance(tc_raw, list) else tc_raw
+        
         final_answer = traj.get("final_answer", [])
 
         # Per-turn tool breakdown
@@ -140,6 +147,8 @@ def extract_stats(traces):
         for turn in turns:
             for tc in turn.get("tool_calls_this_turn", []):
                 name = tc.get("tool_name", "unknown")
+                if name == "final_answer":
+                    continue
                 tools_in_trace[name] += 1
                 tool_call_counts[name] += 1
 
@@ -248,7 +257,7 @@ def print_tool_stats(tool_call_counts, tool_trace_counts, per_trace):
         p90 = _percentile(tool_per_trace[tool], 90)
         pct_calls = _pct(total, total_calls)
         pct_traces = _pct(used_in, n)
-        bar = _bar(total, max(tool_call_counts.values()))
+        bar = _bar(total, max(tool_call_counts.values(), default=0))
         print(f"  {tool:<24}  {total:>6,}  {pct_calls:>6.1f}%  {pct_traces:>7.1f}%  {avg_pt:>9.1f}  {p50:>4.1f}  {p90:>4.1f}  {bar}")
 
 
@@ -263,7 +272,7 @@ def print_diagnosis_stats(diag_counter, per_trace):
         cnt = diag_counter.get(diag, 0)
         pct = _pct(cnt, total_findings)
         avg = cnt / n
-        bar = _bar(cnt, max(diag_counter.values()))
+        bar = _bar(cnt, max(diag_counter.values(), default=0))
         print(f"  {diag:<22}  {cnt:>6,}  {pct:>5.1f}%  {avg:>9.2f}  {bar}")
 
 
@@ -322,9 +331,10 @@ def make_charts(per_trace, tool_call_counts, diag_counter, output_dir: str):
 
     # 1. Tool usage bar chart
     fig, ax = plt.subplots(figsize=(10, 5))
-    tools  = TOOL_NAMES
+    tools  = [t for t in TOOL_NAMES if t != "final_answer"]
+    tools  = sorted(tools, key=lambda t: tool_call_counts.get(t, 0))
     counts = [tool_call_counts.get(t, 0) for t in tools]
-    colors = [ACCENT if c == max(counts) else TEAL for c in counts]
+    colors = [ACCENT if c == max(counts, default=0) else TEAL for c in counts]
     bars = ax.barh(tools, counts, color=colors, edgecolor="#1a1a2e", linewidth=0.5)
     ax.bar_label(bars, fmt="%d", color="#eaeaea", padding=3, fontsize=9)
     ax.set_xlabel("Total Calls")
