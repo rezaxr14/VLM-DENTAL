@@ -478,6 +478,10 @@ def _call_llm_once(
 
     except Exception as e:
         err_str = str(e)
+        if "free-models-per-day" in err_str or "openrouter_free_tier_daily" in err_str:
+            print(f"\n🛑 [OPENROUTER 429 DAILY QUOTA EXHAUSTED] Free-tier daily limit (50 requests/day) reached across all free models on this API key. Resets at midnight UTC or with credits.", flush=True)
+            raise RPDLimitExhausted("openrouter", 50, 50)
+
         if "Rate limit reached" in err_str or "rate_limit_exceeded" in err_str or "429" in err_str:
             import re
             tpm_match = re.search(r"Limit\s+(\d+),\s*Used\s+(\d+),\s*Requested\s+(\d+)", err_str)
@@ -519,6 +523,8 @@ def call_llm(
                 max_tokens=max_tokens, temperature=temperature,
                 response_mime_type=response_mime_type, role=role, **kwargs,
             )
+        except RPDLimitExhausted:
+            raise
         except Exception as e:
             msg = str(e)
             status_code = getattr(getattr(e, "response", None), "status_code", None) or getattr(e, "status_code", None)

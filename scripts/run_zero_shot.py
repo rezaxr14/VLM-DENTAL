@@ -83,7 +83,9 @@ DEFAULT_OUTPUT_DIR = "data/evaluations"
 
 def load_completed_ids(output_path: Path, retry_empty: bool = True) -> set[int]:
     """Read existing output file and extract processed image IDs for resume.
-    If retry_empty is True, excludes records where predictions are empty or format failed."""
+    If retry_empty is True, excludes records where predictions are empty or format failed.
+    Truncated records (finish_reason='length') are ALWAYS excluded regardless of retry_empty,
+    because a cut-off response is definitionally incomplete and must be re-evaluated."""
     completed: set[int] = set()
     if not output_path.exists():
         return completed
@@ -97,6 +99,9 @@ def load_completed_ids(output_path: Path, retry_empty: bool = True) -> set[int]:
                 record = json.loads(line)
                 if "image_id" in record:
                     img_id = int(record["image_id"])
+                    # Always re-run truncated responses — a cut-off reply is never valid
+                    if record.get("finish_reason") == "length":
+                        continue
                     if retry_empty:
                         preds = record.get("predictions", [])
                         format_ok = record.get("format_ok", False)

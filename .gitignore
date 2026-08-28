@@ -78,3 +78,5 @@ data/models/grounding_tool_heavy/
 !data/models/grounding_tool_cv_best/weights/best.pt
 
 data/api_usage_state.json
+data/traces/train_cot_traces_unverified.jsonl.bak
+data/traces/train_cot_traces_unverified_no_tools.jsonl.bak
