@@ -348,16 +348,19 @@ def make_charts(per_trace, tool_call_counts, diag_counter, output_dir: str):
     # 2. Diagnosis pie chart
     labels = list(diag_counter.keys())
     sizes  = list(diag_counter.values())
+    total_sizes = sum(sizes) if sizes else 1
+    
+    # Format labels with percentages for the legend instead of putting them in the slices
+    legend_labels = [f"{lbl} ({sizes[i]}, {sizes[i]/total_sizes*100:.1f}%)" for i, lbl in enumerate(labels)]
+    
     palette = ["#e94560", "#16c79a", "#f5a623", "#7b68ee", "#0f3460", "#eaeaea"][:max(len(labels), 6)]
     fig, ax = plt.subplots(figsize=(8, 7), subplot_kw=dict(aspect="equal"))
-    wedges, texts, autotexts = ax.pie(
-        sizes, labels=None, autopct="%1.1f%%", pctdistance=0.85,
+    wedges, texts = ax.pie(
+        sizes, labels=None, 
         colors=palette, startangle=140,
         wedgeprops=dict(edgecolor="#1a1a2e", linewidth=1.5)
     )
-    for at in autotexts:
-        at.set_color("#1a1a2e"); at.set_fontsize(9); at.set_weight("bold")
-    ax.legend(wedges, labels, title="Diagnoses", loc="center left", bbox_to_anchor=(0.9, 0.5), facecolor="#1a1a2e", edgecolor="#0f3460", labelcolor="#eaeaea")
+    ax.legend(wedges, legend_labels, title="Diagnoses", loc="center left", bbox_to_anchor=(0.9, 0.5), facecolor="#1a1a2e", edgecolor="#0f3460", labelcolor="#eaeaea")
     ax.set_title("Diagnosis Distribution")
     plt.tight_layout()
     fig.savefig(os.path.join(output_dir, "diagnosis_dist.png"), dpi=150)
