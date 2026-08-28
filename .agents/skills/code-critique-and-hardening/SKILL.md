@@ -76,3 +76,30 @@ Every new helper, data resolver, or pipeline extension must include unit tests:
 1. **Direct Success Test**: Tests the expected happy path with standard inputs.
 2. **Fallback / Cross-Environment Test**: Simulates foreign file paths (e.g. Kaggle/Windows paths on Linux).
 3. **Edge-Case / Invalid Input Test**: Verifies graceful handling of `None`, empty strings, and malformed inputs without exceptions.
+
+---
+
+## 4. Resource & Bandwidth Optimization (Surgical Downloads)
+Whenever writing code that resolves or downloads dataset assets:
+1. **Check Local Disk First**:
+   ```python
+   if local_path and os.path.exists(str(local_path)):
+       return local_path
+   ```
+2. **Pre-Filter Completed & Existing IDs Before Network Fetch**:
+   ```python
+   # Load completed records first:
+   completed_ids = load_completed_ids(output_path, only_successful=True)
+   
+   # Identify only remaining, missing IDs:
+   needed_ids = [
+       img_id for img_id in target_ids
+       if img_id not in completed_ids and not is_cached_locally(img_id)
+   ]
+   
+   # Only fetch the exact delta:
+   if needed_ids:
+       local_paths_map = download_slice(needed_ids, repo_id=repo_id, cache_dir=cache_dir)
+   ```
+3. **Memoize Lookups**: Cache resolved file paths in `_RESOLVED_PATH_CACHE` to eliminate redundant disk probes.
+

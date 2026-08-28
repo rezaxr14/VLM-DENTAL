@@ -97,4 +97,11 @@ Before concluding any coding task or marking an implementation complete, the age
 4. **Mutability Side-Effects**: Deep copy (`dict()`, `list()`) mutable nested structures before modifying values in-place (e.g., trajectory messages).
 5. **Concurrency & Determinism**: Sort collections converted from sets (`sorted(set(...))`) before chunking/slicing to guarantee deterministic behavior across parallel workers.
 
+## 16. Local Asset Re-Use & Surgical Download Invariant (CRITICAL)
+Downloading entire datasets or redundant image batches wastes bandwidth, causes disk thrashing, and stalls execution.
+- **Rule:** NEVER download or fetch assets from remote repositories (HuggingFace Hub, cloud storage, external URLs) if the files already exist locally on disk (in local directories, dataset cache, or prior downloads).
+- **Rule:** When downloading is strictly required, NEVER download the entire dataset or an entire slice indiscriminately. You MUST compute the exact set of missing/needed image IDs and download ONLY those specific IDs (`needed_ids = [id for id in target_ids if not exists_locally(id) and id not in completed_ids]`).
+- **Rule:** In all batch pipelines (generation, verification, repair, zero-shot evaluation), always load and filter completed items (`load_completed_ids`) BEFORE triggering any image download or pre-fetch routine.
+
+
 
