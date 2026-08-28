@@ -292,11 +292,14 @@ def build_dataframes(
             "categories": os.path.join(data_dir, f"{split_name}_categories_df.parquet"),
         }
         if all(os.path.exists(p) for p in paths.values()):
-            return (
-                pd.read_parquet(paths["images"]),
-                pd.read_parquet(paths["annots"]),
-                pd.read_parquet(paths["categories"]),
-            )
+            try:
+                return (
+                    pd.read_parquet(paths["images"]),
+                    pd.read_parquet(paths["annots"]),
+                    pd.read_parquet(paths["categories"]),
+                )
+            except Exception:
+                pass
 
     images_df = pd.DataFrame(coco.get("images", []))
     annots_df = pd.DataFrame(coco.get("annotations", []))
