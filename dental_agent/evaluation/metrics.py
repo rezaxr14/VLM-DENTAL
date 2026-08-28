@@ -206,6 +206,12 @@ def compute_finding_closeness(
             spatial = 1.0
         elif gt_q == p_q and abs(gt_pos - p_pos) == 1:
             spatial = 0.75
+        elif (gt_pos == 1 and p_pos == 1) and (
+            (gt_q == 1 and p_q == 2) or (gt_q == 2 and p_q == 1) or
+            (gt_q == 3 and p_q == 4) or (gt_q == 4 and p_q == 3)
+        ):
+            # Cross-midline central incisor adjacency (FDI 11 <-> 21, 41 <-> 31)
+            spatial = 0.75
         elif gt_q == p_q:
             spatial = 0.40
         elif ((gt_q in (1, 2) and p_q in (1, 2)) or (gt_q in (3, 4) and p_q in (3, 4))) and gt_pos == p_pos:

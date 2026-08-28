@@ -220,7 +220,8 @@ def parse_zero_shot_response(text: str) -> dict[str, Any] | list[dict[str, Any]]
 def extract_findings_from_reasoning_text(text: str) -> list[dict]:
     """Fallback extractor when a reasoning model (e.g. Qwen 3.6, MiniMax, Nemotron) produces
     rich clinical reasoning but is truncated or omits top-level JSON formatting.
-    Includes strict negation-awareness to avoid extracting ruled-out normal teeth."""
+    Uses midpoint token-distance association and local negation scope to avoid
+    cross-tooth pathology contamination."""
     if not text or not isinstance(text, str):
         return []
 
@@ -229,62 +230,89 @@ def extract_findings_from_reasoning_text(text: str) -> list[dict]:
     seen = set()
 
     # Process each bullet point / line independently
-    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    raw_lines = [l.strip() for l in text.splitlines() if l.strip()]
 
-    for line in lines:
+    for line in raw_lines:
         line_lower = line.lower()
 
-        # Negation guard: skip line if marked explicitly normal or unremarkable
-        if any(neg in line_lower for neg in [
-            "no caries", "no periapical", "no impaction", "no evidence",
-            "ruled out", "normal", "intact", "unremarkable", "without active pathology",
-            "no pathology", "no significant abnormality"
+        # Global skip if line is purely stating normal status with no teeth abnormal
+        if any(norm_term in line_lower for norm_term in [
+            "all normal", "entirely normal", "intact and sound", "without active pathology",
+            "no pathology detected", "no significant abnormality"
         ]):
             continue
 
-        detected_teeth = []
+        detected_teeth: list[tuple[int, int, float]] = []  # (quad, pos, char_mid)
 
         # 1. 2-digit FDI patterns (e.g. "Tooth 18", "FDI 48", "#38", "18", "tooth 26")
         for tm in re.finditer(r"(?:Tooth|FDI|tooth|#)?\s*\b([1-4])([1-8])\b", line, re.IGNORECASE):
-            # Check if this tooth is just a reference tooth preceded by 'against', 'adjacent to', 'near', 'beside'
+            # Check if this tooth is just a reference tooth preceded by 'against', 'adjacent to', 'near'
             prefix = line[:tm.start()].lower()
-            if any(prefix.rstrip().endswith(prep) for prep in ["against", "against tooth", "adjacent to", "adjacent to tooth", "next to", "next to tooth", "mesial to", "distal to", "near"]):
+            if any(prefix.rstrip().endswith(prep) for prep in [
+                "against", "against tooth", "adjacent to", "adjacent to tooth",
+                "next to", "next to tooth", "mesial to", "distal to", "near"
+            ]):
                 continue
-            detected_teeth.append((int(tm.group(1)), int(tm.group(2)), tm.start()))
+            char_mid = (tm.start() + tm.end()) / 2.0
+            detected_teeth.append((int(tm.group(1)), int(tm.group(2)), char_mid))
 
         # 2. Separated Quadrant and Tooth (e.g. "Quadrant 1 ... Tooth 8", "Quad 3, Position 6")
-        for qtm in re.finditer(r"(?:Quadrant|Quad|Q)\s*([1-4])\b[^\n\r;]*?\b(?:Tooth|Position|#)\s*([1-8])\b", line, re.IGNORECASE):
-            detected_teeth.append((int(qtm.group(1)), int(qtm.group(2)), qtm.start()))
+        for qtm in re.finditer(r"(?:Quadrant|Quad|Q)\s*([1-4])\b[^\n\r;]*?\b(?:Tooth|Position|#|\()?\s*(?:Tooth|Position|#)?\s*([1-8])\b", line, re.IGNORECASE):
+            char_mid = (qtm.start() + qtm.end()) / 2.0
+            detected_teeth.append((int(qtm.group(1)), int(qtm.group(2)), char_mid))
 
         for ptq in re.finditer(r"\b(?:Tooth|Position|#)\s*([1-8])\b[^\n\r;]*?\b(?:Quadrant|Quad|Q)\s*([1-4])\b", line, re.IGNORECASE):
-            detected_teeth.append((int(ptq.group(2)), int(ptq.group(1)), ptq.start()))
+            char_mid = (ptq.start() + ptq.end()) / 2.0
+            detected_teeth.append((int(ptq.group(2)), int(ptq.group(1)), char_mid))
 
         # 3. Named quadrant patterns (e.g. "Upper Right ... tooth 8", "Lower Left ... tooth 6")
         named_quads = [
-            (r"(?:Upper\s+Right|Maxillary\s+Right)\b[^\n\r;]*?\b(?:Tooth|Position|#)?\s*([1-8])\b", 1),
-            (r"(?:Upper\s+Left|Maxillary\s+Left)\b[^\n\r;]*?\b(?:Tooth|Position|#)?\s*([1-8])\b", 2),
-            (r"(?:Lower\s+Left|Mandibular\s+Left)\b[^\n\r;]*?\b(?:Tooth|Position|#)?\s*([1-8])\b", 3),
-            (r"(?:Lower\s+Right|Mandibular\s+Right)\b[^\n\r;]*?\b(?:Tooth|Position|#)?\s*([1-8])\b", 4),
+            (r"(?:Upper\s+Right|Maxillary\s+Right)\b[^\n\r;]*?\b(?:Tooth|Position|#|\()?\s*(?:Tooth|Position|#)?\s*([1-8])\b", 1),
+            (r"(?:Upper\s+Left|Maxillary\s+Left)\b[^\n\r;]*?\b(?:Tooth|Position|#|\()?\s*(?:Tooth|Position|#)?\s*([1-8])\b", 2),
+            (r"(?:Lower\s+Left|Mandibular\s+Left)\b[^\n\r;]*?\b(?:Tooth|Position|#|\()?\s*(?:Tooth|Position|#)?\s*([1-8])\b", 3),
+            (r"(?:Lower\s+Right|Mandibular\s+Right)\b[^\n\r;]*?\b(?:Tooth|Position|#|\()?\s*(?:Tooth|Position|#)?\s*([1-8])\b", 4),
         ]
         for pattern, q_val in named_quads:
             for nq_match in re.finditer(pattern, line, re.IGNORECASE):
                 pos_val = int(nq_match.group(1))
-                detected_teeth.append((q_val, pos_val, nq_match.start()))
+                char_mid = (nq_match.start() + nq_match.end()) / 2.0
+                detected_teeth.append((q_val, pos_val, char_mid))
 
-        # Search for dental pathologies on this line
-        diag_m = re.search(r"\b(deep\s+caries|caries|periapical\s+lesion|impacted(?:\s+wisdom|\s+tooth)?|impaction)\b", line, re.IGNORECASE)
-        if diag_m and detected_teeth:
-            raw_diag = diag_m.group(1).strip()
-            for q, pos, _ in detected_teeth:
-                key = (q, pos)
-                if key not in seen:
-                    seen.add(key)
-                    findings.append({
-                        "quadrant": q,
-                        "tooth_position": pos,
-                        "diagnosis": raw_diag,
-                        "confidence": 0.8,
-                    })
+        if not detected_teeth:
+            continue
+
+        # Find all pathology mentions on this line
+        path_matches = list(re.finditer(
+            r"\b(deep\s+caries|caries|carious|periapical\s+lesion|apical\s+lesion|impacted(?:\s+wisdom|\s+tooth)?|impaction)\b",
+            line,
+            re.IGNORECASE
+        ))
+
+        for pm in path_matches:
+            diag_text = pm.group(1).strip()
+            diag_start = pm.start()
+            diag_mid = (pm.start() + pm.end()) / 2.0
+
+            # Local negation check: look back up to 35 characters before the pathology match
+            lookback_window = line[max(0, diag_start - 35):diag_start].lower()
+            if any(neg in lookback_window for neg in [
+                "no ", "not ", "without ", "ruled out", "free of ", "no evidence of ", "no signs of "
+            ]):
+                continue  # This specific pathology is negated locally
+
+            # Associate with the closest detected tooth on this line
+            closest_tooth = min(detected_teeth, key=lambda t: abs(t[2] - diag_mid))
+            q, pos, _ = closest_tooth
+            key = (q, pos)
+
+            if key not in seen:
+                seen.add(key)
+                findings.append({
+                    "quadrant": q,
+                    "tooth_position": pos,
+                    "diagnosis": diag_text,
+                    "confidence": 0.8,
+                })
 
     return findings
 
