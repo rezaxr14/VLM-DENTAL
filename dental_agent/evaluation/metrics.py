@@ -242,6 +242,10 @@ def match_multi_findings(
     """Clinically sound set-level matching and continuous closeness scoring
     between ground truth findings and model predictions.
     
+    Uses Hungarian Bipartite Maximum Matching (scipy.optimize.linear_sum_assignment)
+    to find the globally optimal pairing that maximizes Exact Matches, FDI Localization,
+    and Continuous Closeness without greedy ordering bias.
+    
     Computes:
     - FDI Localization TP, FP, FN, Precision, Recall, F1
     - Exact Match (Localization + Pathology) TP, FP, FN, Precision, Recall, F1
@@ -262,77 +266,140 @@ def match_multi_findings(
             "matched_pairs": [],
         }
     
-    used_preds = set()
-    used_gt = set()
+    if n_gt == 0 or n_pred == 0:
+        return {
+            "gt_count": n_gt, "pred_count": n_pred,
+            "fdi_tp": 0, "fdi_fp": n_pred, "fdi_fn": n_gt,
+            "fdi_precision": 0.0 if n_pred > 0 else 1.0,
+            "fdi_recall": 0.0 if n_gt > 0 else 1.0,
+            "fdi_f1": 0.0,
+            "exact_tp": 0, "exact_fp": n_pred, "exact_fn": n_gt,
+            "exact_precision": 0.0 if n_pred > 0 else 1.0,
+            "exact_recall": 0.0 if n_gt > 0 else 1.0,
+            "exact_f1": 0.0,
+            "closeness_score": 0.0, "spatial_proximity": 0.0, "diagnostic_similarity": 0.0,
+            "matched_pairs": [],
+        }
+
+    # Build Weight Matrix for Bipartite Matching
+    # Priority: Exact Match (weight 1000) > FDI Localization (weight 100) > Continuous Closeness (weight 0-1)
+    try:
+        from scipy.optimize import linear_sum_assignment
+        has_scipy = True
+    except ImportError:
+        has_scipy = False
+
     matched_pairs = []
-    
-    # Pass 1: Match Exact Matches (Both tooth FDI and normalized diagnosis match)
-    for gt_idx, gt in enumerate(ground_truths):
-        gt_q = gt.get("quadrant")
-        gt_pos = gt.get("tooth_position")
-        gt_diag = normalize_dental_diagnosis(gt.get("diagnosis"))
-        
-        for pred_idx, pred in enumerate(predictions):
-            if pred_idx in used_preds:
-                continue
+    fdi_tp = 0
+    exact_tp = 0
+
+    if has_scipy:
+        cost_matrix = np.zeros((n_gt, n_pred), dtype=np.float64)
+        closeness_matrix = np.zeros((n_gt, n_pred), dtype=np.float64)
+        spatial_matrix = np.zeros((n_gt, n_pred), dtype=np.float64)
+        diag_matrix = np.zeros((n_gt, n_pred), dtype=np.float64)
+
+        for i, gt in enumerate(ground_truths):
+            gt_q = gt.get("quadrant")
+            gt_pos = gt.get("tooth_position")
+            gt_diag = normalize_dental_diagnosis(gt.get("diagnosis"))
+
+            for j, pred in enumerate(predictions):
+                p_q = pred.get("quadrant")
+                p_pos = pred.get("tooth_position")
+                p_diag = normalize_dental_diagnosis(pred.get("diagnosis"))
+
+                c, s, d = compute_finding_closeness(gt, pred)
+                closeness_matrix[i, j] = c
+                spatial_matrix[i, j] = s
+                diag_matrix[i, j] = d
+
+                fdi_match = (gt_q is not None and gt_pos is not None and gt_q == p_q and gt_pos == p_pos)
+                exact_match = fdi_match and (gt_diag == p_diag)
+
+                weight = (1000.0 if exact_match else (100.0 if fdi_match else 0.0)) + c
+                cost_matrix[i, j] = -weight  # Maximize weight by minimizing negative weight
+
+        row_ind, col_ind = linear_sum_assignment(cost_matrix)
+
+        for r, c in zip(row_ind, col_ind):
+            gt = ground_truths[r]
+            pred = predictions[c]
+            gt_q = gt.get("quadrant")
+            gt_pos = gt.get("tooth_position")
+            gt_diag = normalize_dental_diagnosis(gt.get("diagnosis"))
             p_q = pred.get("quadrant")
             p_pos = pred.get("tooth_position")
             p_diag = normalize_dental_diagnosis(pred.get("diagnosis"))
-            
-            if gt_q is not None and gt_pos is not None and gt_q == p_q and gt_pos == p_pos and gt_diag == p_diag:
-                used_preds.add(pred_idx)
-                used_gt.add(gt_idx)
-                matched_pairs.append({
-                    "gt": gt,
-                    "pred": pred,
-                    "fdi_match": True,
-                    "exact_match": True,
-                    "closeness": 1.0,
-                    "spatial": 1.0,
-                    "diag_sim": 1.0,
-                })
-                break
-                
-    # Pass 2: Match Remaining FDI Localization Matches (Correct tooth, incorrect diagnosis)
-    for gt_idx, gt in enumerate(ground_truths):
-        if gt_idx in used_gt:
-            continue
-        gt_q = gt.get("quadrant")
-        gt_pos = gt.get("tooth_position")
-        
-        for pred_idx, pred in enumerate(predictions):
-            if pred_idx in used_preds:
+
+            fdi_match = (gt_q is not None and gt_pos is not None and gt_q == p_q and gt_pos == p_pos)
+            exact_match = fdi_match and (gt_diag == p_diag)
+
+            if fdi_match:
+                fdi_tp += 1
+            if exact_match:
+                exact_tp += 1
+
+            matched_pairs.append({
+                "gt": gt,
+                "pred": pred,
+                "fdi_match": bool(fdi_match),
+                "exact_match": bool(exact_match),
+                "closeness": float(closeness_matrix[r, c]),
+                "spatial": float(spatial_matrix[r, c]),
+                "diag_sim": float(diag_matrix[r, c]),
+            })
+    else:
+        # Fallback Greedy 2-pass matcher if scipy is unavailable
+        used_preds = set()
+        used_gt = set()
+        for gt_idx, gt in enumerate(ground_truths):
+            gt_q, gt_pos = gt.get("quadrant"), gt.get("tooth_position")
+            gt_diag = normalize_dental_diagnosis(gt.get("diagnosis"))
+            for pred_idx, pred in enumerate(predictions):
+                if pred_idx in used_preds:
+                    continue
+                p_q, p_pos = pred.get("quadrant"), pred.get("tooth_position")
+                p_diag = normalize_dental_diagnosis(pred.get("diagnosis"))
+                if gt_q is not None and gt_pos is not None and gt_q == p_q and gt_pos == p_pos and gt_diag == p_diag:
+                    used_preds.add(pred_idx)
+                    used_gt.add(gt_idx)
+                    fdi_tp += 1
+                    exact_tp += 1
+                    matched_pairs.append({
+                        "gt": gt, "pred": pred, "fdi_match": True, "exact_match": True,
+                        "closeness": 1.0, "spatial": 1.0, "diag_sim": 1.0,
+                    })
+                    break
+
+        for gt_idx, gt in enumerate(ground_truths):
+            if gt_idx in used_gt:
                 continue
-            p_q = pred.get("quadrant")
-            p_pos = pred.get("tooth_position")
-            
-            if gt_q is not None and gt_pos is not None and gt_q == p_q and gt_pos == p_pos:
-                used_preds.add(pred_idx)
-                used_gt.add(gt_idx)
-                c_score, s_score, d_score = compute_finding_closeness(gt, pred)
-                matched_pairs.append({
-                    "gt": gt,
-                    "pred": pred,
-                    "fdi_match": True,
-                    "exact_match": False,
-                    "closeness": c_score,
-                    "spatial": s_score,
-                    "diag_sim": d_score,
-                })
-                break
-                
-    fdi_tp = len(matched_pairs)
+            gt_q, gt_pos = gt.get("quadrant"), gt.get("tooth_position")
+            for pred_idx, pred in enumerate(predictions):
+                if pred_idx in used_preds:
+                    continue
+                p_q, p_pos = pred.get("quadrant"), pred.get("tooth_position")
+                if gt_q is not None and gt_pos is not None and gt_q == p_q and gt_pos == p_pos:
+                    used_preds.add(pred_idx)
+                    used_gt.add(gt_idx)
+                    fdi_tp += 1
+                    c_score, s_score, d_score = compute_finding_closeness(gt, pred)
+                    matched_pairs.append({
+                        "gt": gt, "pred": pred, "fdi_match": True, "exact_match": False,
+                        "closeness": c_score, "spatial": s_score, "diag_sim": d_score,
+                    })
+                    break
+
     fdi_fp = n_pred - fdi_tp
     fdi_fn = n_gt - fdi_tp
-    
-    exact_tp = sum(1 for m in matched_pairs if m["exact_match"])
     exact_fp = n_pred - exact_tp
     exact_fn = n_gt - exact_tp
-    
+
     fdi_p = fdi_tp / max(1, n_pred) if n_pred > 0 else (1.0 if n_gt == 0 else 0.0)
     fdi_r = fdi_tp / max(1, n_gt) if n_gt > 0 else (1.0 if n_pred == 0 else 0.0)
     fdi_f1 = (2 * fdi_p * fdi_r) / (fdi_p + fdi_r) if (fdi_p + fdi_r) > 0 else 0.0
-    
+
     exact_p = exact_tp / max(1, n_pred) if n_pred > 0 else (1.0 if n_gt == 0 else 0.0)
     exact_r = exact_tp / max(1, n_gt) if n_gt > 0 else (1.0 if n_pred == 0 else 0.0)
     exact_f1 = (2 * exact_p * exact_r) / (exact_p + exact_r) if (exact_p + exact_r) > 0 else 0.0

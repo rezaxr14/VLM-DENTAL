@@ -311,7 +311,7 @@ def extract_findings_from_reasoning_text(text: str) -> list[dict]:
                     "quadrant": q,
                     "tooth_position": pos,
                     "diagnosis": diag_text,
-                    "confidence": 0.8,
+                    "confidence": None,
                 })
 
     return findings

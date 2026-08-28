@@ -358,6 +358,30 @@ def test_extract_findings_separated_quadrant_tooth():
     assert (3, 7) not in positions  # Negated: normal with no caries
 
 
+def test_hungarian_bipartite_matching():
+    """Verify that Hungarian matching finds the globally optimal pairing of multi-findings."""
+    from dental_agent.evaluation.metrics import match_multi_findings
+
+    # Patient has 2 findings: 16 Caries and 17 Deep Caries
+    gt = [
+        {"quadrant": 1, "tooth_position": 6, "diagnosis": "Caries"},
+        {"quadrant": 1, "tooth_position": 7, "diagnosis": "Deep Caries"},
+    ]
+    
+    # Model predicts them in reversed order: [17 Deep Caries, 16 Caries]
+    preds = [
+        {"quadrant": 1, "tooth_position": 7, "diagnosis": "Deep Caries"},
+        {"quadrant": 1, "tooth_position": 6, "diagnosis": "Caries"},
+    ]
+    
+    res = match_multi_findings(gt, preds)
+    assert res["exact_tp"] == 2
+    assert res["exact_f1"] == 1.0
+    assert res["fdi_tp"] == 2
+    assert res["closeness_score"] == 1.0
+
+
+
 
 
 
