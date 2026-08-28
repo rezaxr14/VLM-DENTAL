@@ -23,22 +23,19 @@ import os
 import statistics as stats
 from collections import Counter, defaultdict
 from pathlib import Path
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from dental_agent.tools.registry import ToolRegistry
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-TOOL_NAMES = [
-    "window_level",
-    "locate_tooth",
-    "zoom_crop",
-    "nudge_crop",
-    "fdi_label",
-    "denoise",
-    "enhance_contrast",
-    "contralateral_compare",
-]
+# Dynamically load the tool registry to filter out hallucinations and pseudo-tools
+registry = ToolRegistry.create_default()
+TOOL_NAMES = [t.name for t in registry.list_tools()]
 
 DIAGNOSIS_NAMES = ["Caries", "Deep Caries", "Periapical Lesion", "Impacted Tooth"]
 
@@ -147,7 +144,7 @@ def extract_stats(traces):
         for turn in turns:
             for tc in turn.get("tool_calls_this_turn", []):
                 name = tc.get("tool_name", "unknown")
-                if name == "final_answer":
+                if name not in TOOL_NAMES:
                     continue
                 tools_in_trace[name] += 1
                 tool_call_counts[name] += 1
@@ -157,7 +154,10 @@ def extract_stats(traces):
 
         # Findings
         for finding in final_answer:
-            diag_counter[finding.get("diagnosis", "Unknown")] += 1
+            diag = finding.get("diagnosis", "Unknown")
+            if diag == "Impacted":
+                diag = "Impacted Tooth"
+            diag_counter[diag] += 1
 
         # Token estimates (input = everything before last assistant turn, output = assistant turns)
         total_bytes = len(json.dumps(t, ensure_ascii=False))
@@ -331,8 +331,7 @@ def make_charts(per_trace, tool_call_counts, diag_counter, output_dir: str):
 
     # 1. Tool usage bar chart
     fig, ax = plt.subplots(figsize=(10, 5))
-    tools  = [t for t in TOOL_NAMES if t != "final_answer"]
-    tools  = sorted(tools, key=lambda t: tool_call_counts.get(t, 0))
+    tools  = sorted(TOOL_NAMES, key=lambda t: tool_call_counts.get(t, 0))
     counts = [tool_call_counts.get(t, 0) for t in tools]
     colors = [ACCENT if c == max(counts, default=0) else TEAL for c in counts]
     bars = ax.barh(tools, counts, color=colors, edgecolor="#1a1a2e", linewidth=0.5)
@@ -349,15 +348,16 @@ def make_charts(per_trace, tool_call_counts, diag_counter, output_dir: str):
     # 2. Diagnosis pie chart
     labels = list(diag_counter.keys())
     sizes  = list(diag_counter.values())
-    palette = ["#e94560", "#16c79a", "#f5a623", "#7b68ee"][:len(labels)]
-    fig, ax = plt.subplots(figsize=(7, 7), subplot_kw=dict(aspect="equal"))
+    palette = ["#e94560", "#16c79a", "#f5a623", "#7b68ee", "#0f3460", "#eaeaea"][:max(len(labels), 6)]
+    fig, ax = plt.subplots(figsize=(8, 7), subplot_kw=dict(aspect="equal"))
     wedges, texts, autotexts = ax.pie(
-        sizes, labels=labels, autopct="%1.1f%%",
+        sizes, labels=None, autopct="%1.1f%%", pctdistance=0.85,
         colors=palette, startangle=140,
         wedgeprops=dict(edgecolor="#1a1a2e", linewidth=1.5)
     )
     for at in autotexts:
-        at.set_color("#1a1a2e"); at.set_fontsize(9)
+        at.set_color("#1a1a2e"); at.set_fontsize(9); at.set_weight("bold")
+    ax.legend(wedges, labels, title="Diagnoses", loc="center left", bbox_to_anchor=(0.9, 0.5), facecolor="#1a1a2e", edgecolor="#0f3460", labelcolor="#eaeaea")
     ax.set_title("Diagnosis Distribution")
     plt.tight_layout()
     fig.savefig(os.path.join(output_dir, "diagnosis_dist.png"), dpi=150)

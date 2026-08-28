@@ -78,6 +78,12 @@ This is the heart of the project containing all reusable logic. It is imported b
 - `reporting.py`: **The visualizer.** Takes all calculated metrics, and outputs formatted markdown/CSV evaluation tables.
 - `sweep.py`: **The optimizer.** Takes hyperparameter ranges, runs multiple evaluations, and outputs the optimal configuration settings.
 
+### `dental_agent/paper/` (Documentation Generation)
+*Modular scripts for building the massive methods/results appendix and extracting high-quality trace demonstrations.*
+- `builder.py`: **The compiler.** Reads outputted markdown traces, dynamically injects verbatim prompts and charts, and outputs the fully-rendered `paper_notes.md` file.
+- `prompts.py`: **Prompt extractor.** Programmatically grabs the exact string literals for system prompts from the core modules.
+- `figures.py`: **Case study generator.** Extracts intermediate tool crops (e.g., `turn2_locate.png`, `turn5_zoom_nudged.png`) to visually prove self-correction in the paper.
+
 ### `dental_agent/utils/` (Shared Helpers)
 - `serialization.py`: **JSON Encoder.** Takes complex Python objects (like PIL Images or numpy arrays), safely encodes them, and outputs standard JSON-compatible strings.
 - `persistence.py`: **The cacher.** Takes intermediate pipeline results, saves them to disk to survive Colab crashes, and outputs loaded data upon restart.
@@ -124,7 +130,7 @@ These are the executable scripts you run from the terminal. They wire the core p
 ### Utilities
 - **`verify_tools_on_real_data.py`**: Takes local images, runs tool functions, and outputs visualized results to manually verify tools are working.
 - **`export_agent.py`**: Takes trained LoRA weights and the base model, merges them into a single structure, and outputs deployment-ready weights.
-- **`export_prompt_demo.py`**: Generates example prompt formatting demonstrations for documentation.
+- **`export_prompt_demo.py`**: Interactively (via CLI or `input()`) extracts highly detailed, formatted markdown traces for specific image IDs, including visual walk-throughs of tool outputs.
 
 ---
 
