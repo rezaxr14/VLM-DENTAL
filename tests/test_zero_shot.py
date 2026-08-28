@@ -320,5 +320,68 @@ def test_load_completed_ids_retry_empty(tmp_path):
     assert len(lines) == 2
 
 
+def test_parse_zero_shot_thought_unwrapping():
+    """Test that JSON containing only a 'thought' key is unwrapped and findings extracted."""
+    from dental_agent.evaluation.baselines import parse_zero_shot_response
+    from dental_agent.evaluation.metrics import extract_predicted_findings
+
+    sample_thought_json = json.dumps({
+        "thought": "Examined all four quadrants. Upper Right (Quadrant 1) shows a possible impacted wisdom tooth (Tooth 8) and subtle caries on Tooth 16. Quadrant 4 shows an impacted tooth 8."
+    })
+    parsed = parse_zero_shot_response(sample_thought_json)
+    assert parsed is not None
+    assert "findings" in parsed
+    
+    clean = extract_predicted_findings(parsed)
+    assert len(clean) >= 2
+    quad_pos = [(p["quadrant"], p["tooth_position"]) for p in clean]
+    assert (1, 8) in quad_pos
+    assert (4, 8) in quad_pos
+
+
+def test_extract_findings_separated_quadrant_tooth():
+    """Test diverse separated quadrant and tooth phrasing."""
+    from dental_agent.evaluation.baselines import extract_findings_from_reasoning_text
+
+    text = """
+    - Quadrant 1, Tooth 8: Diagnosed as Impacted Wisdom Tooth.
+    - In the Upper Left, Tooth 6 shows signs of Caries.
+    - Position 6 in Quadrant 4 has Deep Caries.
+    - Lower Left tooth 7 is intact and normal with no caries.
+    """
+    findings = extract_findings_from_reasoning_text(text)
+    positions = [(f["quadrant"], f["tooth_position"]) for f in findings]
+    
+    assert (1, 8) in positions
+    assert (2, 6) in positions
+    assert (4, 6) in positions
+    assert (3, 7) not in positions  # Negated: normal with no caries
+
+
+def test_hungarian_bipartite_matching():
+    """Verify that Hungarian matching finds the globally optimal pairing of multi-findings."""
+    from dental_agent.evaluation.metrics import match_multi_findings
+
+    # Patient has 2 findings: 16 Caries and 17 Deep Caries
+    gt = [
+        {"quadrant": 1, "tooth_position": 6, "diagnosis": "Caries"},
+        {"quadrant": 1, "tooth_position": 7, "diagnosis": "Deep Caries"},
+    ]
+    
+    # Model predicts them in reversed order: [17 Deep Caries, 16 Caries]
+    preds = [
+        {"quadrant": 1, "tooth_position": 7, "diagnosis": "Deep Caries"},
+        {"quadrant": 1, "tooth_position": 6, "diagnosis": "Caries"},
+    ]
+    
+    res = match_multi_findings(gt, preds)
+    assert res["exact_tp"] == 2
+    assert res["exact_f1"] == 1.0
+    assert res["fdi_tp"] == 2
+    assert res["closeness_score"] == 1.0
+
+
+
+
 
 
