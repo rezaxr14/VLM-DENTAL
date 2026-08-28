@@ -201,3 +201,62 @@ def test_continuous_closeness_scoring():
     assert c == 0.875
 
 
+def test_extract_findings_from_truncated_reasoning_trace():
+    """Test realistic truncated Qwen 3.6 reasoning output where the model was cut off
+    mid-thought before writing the final JSON."""
+    truncated_raw = """
+    <think>
+    The user wants me to analyze a panoramic dental radiograph (OPG) and identify abnormal teeth.
+    1. Examine Quadrant 1:
+       - Tooth 18 (Upper Right Third Molar): It appears impacted. Diagnosis: Impacted Tooth.
+       - Tooth 16 (Upper Right First Molar): There is a coronal radiolucency. Diagnosis: Caries.
+    2. Examine Quadrant 4:
+       - Tooth 48 (Lower Right Third Molar): Clearly visible as an impacted tooth.
+       - Tooth 46 (Lower Right First Molar): There is periapical radiolucency. Diagnosis: Periapical Lesion.
+    3. Examine Quadrant 3:
+       - Tooth 38 is impacted horizontally against 37.
+    """
+    from dental_agent.evaluation.baselines import extract_findings_from_reasoning_text
+    from dental_agent.evaluation.metrics import extract_predicted_findings
+
+    extracted = extract_findings_from_reasoning_text(truncated_raw)
+    assert len(extracted) >= 4
+
+    clean = extract_predicted_findings(extracted)
+    quad_positions = [(p["quadrant"], p["tooth_position"]) for p in clean]
+    assert (1, 8) in quad_positions
+    assert (1, 6) in quad_positions
+    assert (4, 8) in quad_positions
+    assert (3, 8) in quad_positions
+
+
+def test_parse_zero_shot_alternative_key_formats():
+    """Test diverse LLM output variations with alternate key names."""
+    from dental_agent.evaluation.metrics import extract_predicted_findings
+
+    # Model using 'fdi' string and 'condition'
+    sample1 = [{"fdi": "48", "condition": "Impacted", "confidence": 0.9}]
+    clean1 = extract_predicted_findings(sample1)
+    assert len(clean1) == 1
+    assert clean1[0]["quadrant"] == 4
+    assert clean1[0]["tooth_position"] == 8
+    assert clean1[0]["diagnosis"] == "Impacted"
+
+    # Model using 'tooth' int and 'pathology'
+    sample2 = [{"tooth": 36, "pathology": "caries", "confidence": 0.85}]
+    clean2 = extract_predicted_findings(sample2)
+    assert len(clean2) == 1
+    assert clean2[0]["quadrant"] == 3
+    assert clean2[0]["tooth_position"] == 6
+    assert clean2[0]["diagnosis"] == "Caries"
+
+    # Model using nested 'findings' with 'disease'
+    sample3 = {"findings": [{"quadrant": 2, "tooth_position": 5, "disease": "Periapical Lesion"}]}
+    clean3 = extract_predicted_findings(sample3)
+    assert len(clean3) == 1
+    assert clean3[0]["quadrant"] == 2
+    assert clean3[0]["tooth_position"] == 5
+    assert clean3[0]["diagnosis"] == "Periapical Lesion"
+
+
+
