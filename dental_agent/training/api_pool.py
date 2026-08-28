@@ -404,10 +404,19 @@ def _call_llm_once(
             if stream_requested:
                 collected = []
                 for chunk in response:
-                    if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
-                        text = chunk.choices[0].delta.content
-                        print(text, end="", flush=True)
-                        collected.append(text)
+                    if chunk.choices and chunk.choices[0].delta:
+                        delta = chunk.choices[0].delta
+                        delta_extra = getattr(delta, "model_extra", None) or {}
+                        text = (
+                            getattr(delta, "content", None)
+                            or getattr(delta, "reasoning", None)
+                            or getattr(delta, "reasoning_content", None)
+                            or delta_extra.get("reasoning")
+                            or delta_extra.get("reasoning_content")
+                        )
+                        if text:
+                            print(text, end="", flush=True)
+                            collected.append(str(text))
                 print() # newline
                 full_text = "".join(collected)
                 if kwargs.get("return_metadata", False):
@@ -417,6 +426,22 @@ def _call_llm_once(
                 choice = response.choices[0] if response.choices else None
                 finish_reason = getattr(choice, "finish_reason", "stop") if choice else "stop"
                 content = choice.message.content or "" if choice and choice.message else ""
+                
+                # Extract reasoning/thinking tokens for reasoning models (e.g. OpenRouter Nemotron / DeepSeek)
+                if choice and choice.message:
+                    msg_extra = getattr(choice.message, "model_extra", None) or {}
+                    reasoning = (
+                        getattr(choice.message, "reasoning", None)
+                        or getattr(choice.message, "reasoning_content", None)
+                        or msg_extra.get("reasoning")
+                        or msg_extra.get("reasoning_content")
+                    )
+                    if reasoning:
+                        if content:
+                            content = f"{reasoning}\n\n{content}"
+                        else:
+                            content = str(reasoning)
+
                 usage = getattr(response, "usage", None)
                 usage_dict = {
                     "prompt_tokens": getattr(usage, "prompt_tokens", 0) if usage else 0,
