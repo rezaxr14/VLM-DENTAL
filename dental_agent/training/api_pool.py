@@ -381,11 +381,15 @@ def _call_llm_once(
                 built_messages.append({"role": "user", "content": user_parts})
 
             extra_headers = None
+            extra_body = kwargs.get("extra_body", {})
             if provider == "openrouter":
                 extra_headers = {
                     "HTTP-Referer": os.environ.get("OPENROUTER_REFERER", "https://github.com/rezaxr14/VLM-DENTAL"),
                     "X-Title": os.environ.get("OPENROUTER_TITLE", "VLM-DENTAL"),
                 }
+                extra_body = dict(extra_body)
+                if "include_reasoning" not in extra_body:
+                    extra_body["include_reasoning"] = True
 
             stream_requested = kwargs.get("stream", False)
             if stream_requested:
@@ -398,16 +402,26 @@ def _call_llm_once(
                 max_tokens=max_tokens,
                 temperature=temperature,
                 extra_headers=extra_headers,
+                extra_body=extra_body if extra_body else None,
                 stream=stream_requested,
             )
             
             if stream_requested:
                 collected = []
                 for chunk in response:
-                    if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
-                        text = chunk.choices[0].delta.content
-                        print(text, end="", flush=True)
-                        collected.append(text)
+                    if chunk.choices and chunk.choices[0].delta:
+                        delta = chunk.choices[0].delta
+                        delta_extra = getattr(delta, "model_extra", None) or {}
+                        text = (
+                            getattr(delta, "content", None)
+                            or getattr(delta, "reasoning", None)
+                            or getattr(delta, "reasoning_content", None)
+                            or delta_extra.get("reasoning")
+                            or delta_extra.get("reasoning_content")
+                        )
+                        if text:
+                            print(text, end="", flush=True)
+                            collected.append(str(text))
                 print() # newline
                 full_text = "".join(collected)
                 if kwargs.get("return_metadata", False):
@@ -417,6 +431,38 @@ def _call_llm_once(
                 choice = response.choices[0] if response.choices else None
                 finish_reason = getattr(choice, "finish_reason", "stop") if choice else "stop"
                 content = choice.message.content or "" if choice and choice.message else ""
+                
+                # Extract reasoning/thinking tokens for reasoning models (e.g. OpenRouter Nemotron / DeepSeek)
+                if choice and choice.message:
+                    msg = choice.message
+                    msg_dict = {}
+                    if hasattr(msg, "model_dump"):
+                        try:
+                            msg_dict = msg.model_dump() or {}
+                        except Exception:
+                            pass
+                    elif hasattr(msg, "to_dict"):
+                        try:
+                            msg_dict = msg.to_dict() or {}
+                        except Exception:
+                            pass
+                    msg_extra = getattr(msg, "model_extra", None) or {}
+                    reasoning = (
+                        getattr(msg, "reasoning", None)
+                        or getattr(msg, "reasoning_content", None)
+                        or msg_extra.get("reasoning")
+                        or msg_extra.get("reasoning_content")
+                        or msg_dict.get("reasoning")
+                        or msg_dict.get("reasoning_content")
+                        or msg_dict.get("thought")
+                        or msg_dict.get("thinking")
+                    )
+                    if reasoning:
+                        if content:
+                            content = f"{reasoning}\n\n{content}"
+                        else:
+                            content = str(reasoning)
+
                 usage = getattr(response, "usage", None)
                 usage_dict = {
                     "prompt_tokens": getattr(usage, "prompt_tokens", 0) if usage else 0,
@@ -432,6 +478,10 @@ def _call_llm_once(
 
     except Exception as e:
         err_str = str(e)
+        if "free-models-per-day" in err_str or "openrouter_free_tier_daily" in err_str:
+            print(f"\n🛑 [OPENROUTER 429 DAILY QUOTA EXHAUSTED] Free-tier daily limit (50 requests/day) reached across all free models on this API key. Resets at midnight UTC or with credits.", flush=True)
+            raise RPDLimitExhausted("openrouter", 50, 50)
+
         if "Rate limit reached" in err_str or "rate_limit_exceeded" in err_str or "429" in err_str:
             import re
             tpm_match = re.search(r"Limit\s+(\d+),\s*Used\s+(\d+),\s*Requested\s+(\d+)", err_str)
@@ -473,6 +523,8 @@ def call_llm(
                 max_tokens=max_tokens, temperature=temperature,
                 response_mime_type=response_mime_type, role=role, **kwargs,
             )
+        except RPDLimitExhausted:
+            raise
         except Exception as e:
             msg = str(e)
             status_code = getattr(getattr(e, "response", None), "status_code", None) or getattr(e, "status_code", None)

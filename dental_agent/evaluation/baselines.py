@@ -204,12 +204,30 @@ def parse_zero_shot_response(text: str) -> dict[str, Any] | list[dict[str, Any]]
             except Exception:
                 pass
 
-    # 3. Fallback to parse_agent_json
+    # 3. Fallback to individual finding dict recovery (partial/truncated JSON)
+    individual_dicts = []
+    for cand_match in re.finditer(r"\{[^{}]*?(?:quadrant|tooth_position|diagnosis)[^{}]*?\}", text, re.IGNORECASE):
+        try:
+            d = json.loads(cand_match.group(0))
+            if isinstance(d, dict) and ("quadrant" in d or "diagnosis" in d or "tooth_position" in d):
+                individual_dicts.append(d)
+        except Exception:
+            sub_d = re.sub(r",\s*([\]}])", r"\1", cand_match.group(0))
+            try:
+                d = json.loads(sub_d)
+                if isinstance(d, dict) and ("quadrant" in d or "diagnosis" in d or "tooth_position" in d):
+                    individual_dicts.append(d)
+            except Exception:
+                pass
+    if individual_dicts:
+        return {"findings": individual_dicts}
+
+    # 4. Fallback to parse_agent_json
     agent_res = parse_agent_json(text)
     if agent_res:
         return agent_res
 
-    # 4. Fallback to reasoning text clinical finding extraction
+    # 5. Fallback to reasoning text clinical finding extraction
     text_findings = extract_findings_from_reasoning_text(text)
     if text_findings:
         return {"findings": text_findings}

@@ -84,3 +84,24 @@ Dental panoramic radiographs frequently contain multiple labeled abnormalities p
 - **Rule:** Every evaluation, reward calculation, and verification pass MUST process the **full list of ground truth findings** for that image using set-level matching (`match_multi_findings` in `dental_agent.evaluation.metrics`).
 - **Rule:** When evaluating model predictions against multi-finding ground truths, compute full **FDI Localization Precision/Recall/F1** and **Exact Diagnostic Match Precision/Recall/F1** over the complete ground-truth set.
 
+## 14. Preservation of Working Functionality (CRITICAL)
+When refactoring, fixing bugs, or adding new features:
+- **Rule:** Altering, modifying, enhancing, and combining existing functions is encouraged, but **deleting working functionality or dropping existing capabilities/flags/notebook cells is strictly forbidden**.
+- **Rule:** Always check what existing scripts, notebooks, or tests depend on before modifying a component. Ensure all working pipelines (e.g., Option 7b LangGraph trace generation, baseline zero-shot runs) remain fully operational with backward-compatible defaults.
+
+## 15. Mandatory Adversarial Code Self-Critique (CRITICAL)
+Before concluding any coding task or marking an implementation complete, the agent MUST proactively critique and attack its own code across 5 core defensive vectors:
+1. **Cross-Platform Path Normalization**: Normalize paths across Windows backslashes (`\`) and POSIX slashes (`/`). Never rely on raw `Path().name` or `os.path.basename` without slash normalization when parsing cross-environment paths.
+2. **Null & Key Safety**: Guard against missing dictionary keys and `None` returns. Use `(val or "")[:N]` for string slicing to prevent `TypeError: 'NoneType' object is not subscriptable`.
+3. **I/O & Search Bottlenecks**: Implement in-memory memoization caches (e.g. `_RESOLVED_PATH_CACHE`) to avoid repeating $O(N)$ filesystem scans and globbing across large datasets.
+4. **Mutability Side-Effects**: Deep copy (`dict()`, `list()`) mutable nested structures before modifying values in-place (e.g., trajectory messages).
+5. **Concurrency & Determinism**: Sort collections converted from sets (`sorted(set(...))`) before chunking/slicing to guarantee deterministic behavior across parallel workers.
+
+## 16. Local Asset Re-Use & Surgical Download Invariant (CRITICAL)
+Downloading entire datasets or redundant image batches wastes bandwidth, causes disk thrashing, and stalls execution.
+- **Rule:** NEVER download or fetch assets from remote repositories (HuggingFace Hub, cloud storage, external URLs) if the files already exist locally on disk (in local directories, dataset cache, or prior downloads).
+- **Rule:** When downloading is strictly required, NEVER download the entire dataset or an entire slice indiscriminately. You MUST compute the exact set of missing/needed image IDs and download ONLY those specific IDs (`needed_ids = [id for id in target_ids if not exists_locally(id) and id not in completed_ids]`).
+- **Rule:** In all batch pipelines (generation, verification, repair, zero-shot evaluation), always load and filter completed items (`load_completed_ids`) BEFORE triggering any image download or pre-fetch routine.
+
+
+

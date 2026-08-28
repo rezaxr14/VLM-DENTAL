@@ -83,7 +83,9 @@ DEFAULT_OUTPUT_DIR = "data/evaluations"
 
 def load_completed_ids(output_path: Path, retry_empty: bool = True) -> set[int]:
     """Read existing output file and extract processed image IDs for resume.
-    If retry_empty is True, excludes records where predictions are empty or format failed."""
+    If retry_empty is True, excludes records where predictions are empty or format failed.
+    Truncated records (finish_reason='length') are ALWAYS excluded regardless of retry_empty,
+    because a cut-off response is definitionally incomplete and must be re-evaluated."""
     completed: set[int] = set()
     if not output_path.exists():
         return completed
@@ -97,6 +99,9 @@ def load_completed_ids(output_path: Path, retry_empty: bool = True) -> set[int]:
                 record = json.loads(line)
                 if "image_id" in record:
                     img_id = int(record["image_id"])
+                    # Always re-run truncated responses — a cut-off reply is never valid
+                    if record.get("finish_reason") == "length":
+                        continue
                     if retry_empty:
                         preds = record.get("predictions", [])
                         format_ok = record.get("format_ok", False)
@@ -330,6 +335,9 @@ def _run_zero_shot_for_target(
     completed_ids = load_completed_ids(output_path, retry_empty=retry_empty)
     remaining_imgs = eligible_imgs[~eligible_imgs["id"].isin(completed_ids)]
 
+    if getattr(args, "start_image_id", None) is not None:
+        remaining_imgs = remaining_imgs[remaining_imgs["id"] >= args.start_image_id]
+
     slice_info = f" (Slice {args.slice_index}/{args.total_slices})" if args.total_slices > 1 else ""
     print(f"Targeting{slice_info}: {len(eligible_imgs)} eligible images (Completed: {len(completed_ids)}, Remaining: {len(remaining_imgs)}).")
     print_banner(provider, model, len(completed_ids), total_eligible, output_path)
@@ -488,9 +496,9 @@ def _run_zero_shot_for_target(
                     preview = raw_reply.replace("\n", " ").strip()
                     if len(preview) > 140:
                         preview = preview[:140] + "..."
-                    print(f"  ⚠️  [ZERO PREDICTIONS] Raw output had no valid findings. Preview: {preview}")
+                    print(f"  ℹ️  [NO ABNORMALITIES REPORTED] Model output {len(raw_reply.split())} words (finish='{finish_reason}'). Preview: {preview}")
                 else:
-                    print("  ⚠️  [ZERO PREDICTIONS] Model returned empty response!")
+                    print(f"  ⚠️  [EMPTY API RESPONSE] Provider returned 0 content tokens (finish='{finish_reason}')")
             print(
                 f"  Score: FDI Match: {match_res['fdi_tp']}/{len(gt_findings)} (P: {match_res['fdi_precision']:.2f}, R: {match_res['fdi_recall']:.2f}, F1: {match_res['fdi_f1']:.2f}) | "
                 f"Exact Match: {match_res['exact_tp']}/{len(gt_findings)} (P: {match_res['exact_precision']:.2f}, R: {match_res['exact_recall']:.2f}, F1: {match_res['exact_f1']:.2f}) | "
@@ -680,6 +688,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pacing-delay", type=float, default=1.5, help="Delay (seconds) between successive LLM requests")
     parser.add_argument("--git-sync-every", type=int, default=0, help="Push checkpoint to Git every N images (0 = disabled)")
     parser.add_argument("--max-images", type=int, default=None, help="Cap number of images to evaluate in this run")
+    parser.add_argument("--start-image-id", "--start-id", type=int, default=None, help="Only evaluate images with ID >= start-image-id")
     
     # Output & Scaling
     parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR, help="Directory for evaluation JSONL outputs")

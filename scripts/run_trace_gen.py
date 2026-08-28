@@ -232,17 +232,20 @@ def _run_generate_for_dataset(args: argparse.Namespace, cfg: Any, dataset_name: 
         slice_ids = get_slice_ids(eligible_imgs["id"].tolist(), args.total_slices, args.slice_index, args.slice_seed)
         eligible_imgs = eligible_imgs[eligible_imgs["id"].isin(slice_ids)]
 
+    completed_ids = load_completed_ids(output_path, only_successful=True)
+    needed_ids = eligible_imgs[~eligible_imgs["id"].isin(completed_ids)]["id"].tolist()
+
     if dataset_name == "tufts":
         repo_id = os.environ.get("TUFTS_IMAGES_REPO")
     else:
         repo_id = os.environ.get("DENTEX_IMAGES_REPO")
-    if repo_id:
-        print(f"Fetching targeted images from {repo_id}...")
+    if repo_id and needed_ids:
+        print(f"Fetching targeted images for {len(needed_ids)} needed image(s) from {repo_id}...")
         if dataset_name == "tufts":
             from dental_agent.data.tufts import download_tufts_slice as _download_slice
         else:
             from dental_agent.data.dentex import download_dentex_slice as _download_slice
-        local_paths_map = _download_slice(eligible_imgs["id"].tolist(), repo_id=repo_id, cache_dir=cfg.data_dir)
+        local_paths_map = _download_slice(needed_ids, repo_id=repo_id, cache_dir=cfg.data_dir)
         def _update_path(row):
             pid = row["id"]
             if pid in local_paths_map and local_paths_map[pid] is not None:
@@ -256,7 +259,6 @@ def _run_generate_for_dataset(args: argparse.Namespace, cfg: Any, dataset_name: 
     eligible_imgs = eligible_imgs[eligible_imgs["local_path"].notna() & (eligible_imgs["local_path"] != "None")]
 
     total_eligible = len(eligible_imgs)
-    completed_ids = load_completed_ids(output_path, only_successful=True)
     remaining_imgs = eligible_imgs[~eligible_imgs["id"].isin(completed_ids)]
 
     slice_info = f" (Slice {args.slice_index}/{args.total_slices})" if args.total_slices > 1 else ""
@@ -591,6 +593,7 @@ def _run_verify_for_dataset(args: argparse.Namespace, cfg: Any, unverified_path:
         max_images=args.max_images,
         provider=os.environ.get("VERIFIER_PROVIDER"),
         model=os.environ.get("VERIFIER_MODEL"),
+        git_sync_every=args.git_sync_every,
     )
 
     total_time = time.time() - session_start
