@@ -435,15 +435,31 @@ def _run_zero_shot_for_target(
                 })
 
             prefix = provider.upper().replace('_NIM', '')
+
+            # Configuration Precedence: CLI Arguments > .env variables > Provider Defaults
+            # 1. Image Max Dimension
             env_dim = os.environ.get(f"{prefix}_IMAGE_MAX_DIM")
-            dim_to_use = args.image_max_dim if args.image_max_dim > 0 else (int(env_dim) if env_dim is not None and int(env_dim) > 0 else 0)
+            if args.image_max_dim is not None:
+                dim_to_use = args.image_max_dim
+            elif env_dim is not None and env_dim.strip():
+                dim_to_use = int(env_dim)
+            else:
+                default_max_dims = {"GROQ": 1280, "OPENROUTER": 1600}
+                dim_to_use = default_max_dims.get(prefix, 0)
 
             image = Image.open(image_path).convert("RGB")
             if dim_to_use > 0:
                 image.thumbnail((dim_to_use, dim_to_use), Image.Resampling.LANCZOS)
 
+            # 2. Max Tokens
             env_tokens = os.environ.get(f"{prefix}_MAX_TOKENS")
-            tokens_to_use = int(env_tokens) if env_tokens and args.max_tokens == 4096 else args.max_tokens
+            if args.max_tokens is not None:
+                tokens_to_use = args.max_tokens
+            elif env_tokens is not None and env_tokens.strip():
+                tokens_to_use = int(env_tokens)
+            else:
+                default_max_tokens = {"GROQ": 2048, "GEMINI": 16384, "OPENROUTER": 16384}
+                tokens_to_use = default_max_tokens.get(prefix, 4096)
 
             # Call VLM with ZERO_SHOT_PROMPT (with reasoning & multi-finding guidelines)
             resp_out = call_llm(
@@ -693,9 +709,9 @@ def build_parser() -> argparse.ArgumentParser:
     # Output & Scaling
     parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR, help="Directory for evaluation JSONL outputs")
     parser.add_argument("--output", default=None, help="Explicit output file path override")
-    parser.add_argument("--image-max-dim", type=int, default=0, help="Max image dimension (0 = full resolution)")
+    parser.add_argument("--image-max-dim", type=int, default=None, help="Max image dimension (0 = full resolution). Falls back to .env then provider defaults if omitted.")
     parser.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature")
-    parser.add_argument("--max-tokens", type=int, default=4096, help="Max tokens for VLM response (reasoning thought + findings JSON)")
+    parser.add_argument("--max-tokens", type=int, default=None, help="Max tokens for VLM response (reasoning thought + findings JSON). Falls back to .env then provider defaults if omitted.")
     
     # Flags
     parser.add_argument("--fresh", "--overwrite", action="store_true", help="Start evaluation from scratch and overwrite existing output JSONL")
