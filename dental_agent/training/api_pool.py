@@ -409,14 +409,37 @@ def _call_llm_once(
                         print(text, end="", flush=True)
                         collected.append(text)
                 print() # newline
-                return "".join(collected)
+                full_text = "".join(collected)
+                if kwargs.get("return_metadata", False):
+                    return full_text, {"finish_reason": "stop", "usage": {}}
+                return full_text
             else:
-                return response.choices[0].message.content or ""
+                choice = response.choices[0] if response.choices else None
+                finish_reason = getattr(choice, "finish_reason", "stop") if choice else "stop"
+                content = choice.message.content or "" if choice and choice.message else ""
+                usage = getattr(response, "usage", None)
+                usage_dict = {
+                    "prompt_tokens": getattr(usage, "prompt_tokens", 0) if usage else 0,
+                    "completion_tokens": getattr(usage, "completion_tokens", 0) if usage else 0,
+                    "total_tokens": getattr(usage, "total_tokens", 0) if usage else 0,
+                }
+                if kwargs.get("return_metadata", False):
+                    return content, {"finish_reason": finish_reason, "usage": usage_dict}
+                return content
 
         else:
             raise ValueError(f"Unknown provider '{provider}'")
 
     except Exception as e:
+        err_str = str(e)
+        if "Rate limit reached" in err_str or "rate_limit_exceeded" in err_str or "429" in err_str:
+            import re
+            tpm_match = re.search(r"Limit\s+(\d+),\s*Used\s+(\d+),\s*Requested\s+(\d+)", err_str)
+            retry_match = re.search(r"try again in\s+([\d\.]+s)", err_str)
+            if tpm_match:
+                lim, used, req = tpm_match.groups()
+                retry_s = retry_match.group(1) if retry_match else "15s"
+                print(f"\n🛑 [{provider.upper()} 429 RATE LIMIT] Limit: {lim} TPM | Used: {used} TPM | Requested: {req} TPM | Retry after: {retry_s}", flush=True)
         raise RuntimeError(f"API Error ({e})")
 
 

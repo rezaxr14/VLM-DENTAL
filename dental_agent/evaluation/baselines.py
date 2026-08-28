@@ -189,7 +189,8 @@ def parse_zero_shot_response(text: str) -> dict[str, Any] | list[dict[str, Any]]
 
 def extract_findings_from_reasoning_text(text: str) -> list[dict]:
     """Fallback extractor when a reasoning model (e.g. Qwen 3.6) produces rich clinical
-    reasoning but is truncated before completing its final JSON structure."""
+    reasoning but is truncated before completing its final JSON structure.
+    Includes strict negation-awareness to avoid extracting ruled-out normal teeth."""
     if not text or not isinstance(text, str):
         return []
 
@@ -197,28 +198,33 @@ def extract_findings_from_reasoning_text(text: str) -> list[dict]:
     findings = []
     seen = set()
 
-    # Match patterns like:
-    # "Tooth 18 ... Impacted", "Tooth 48: Diagnosis: Impacted Tooth", "Tooth 38 is impacted"
-    patterns = [
-        r"(?:Tooth|FDI|tooth)\s*([1-4])([1-8])\b[^\.\n]*?(?:diagnosis|diagnosed as|consistent with|shows|is|appears)?\s*[:\-]?\s*(Impacted(?: Tooth)?|Deep Caries|Caries|Periapical Lesion)",
-        r"(?:Tooth|FDI|tooth)\s*([1-4])([1-8])\b[^\.\n]*?\b(impacted|caries|deep caries|periapical lesion)\b",
-        r"\b([1-4])([1-8])\s*(?:is|looks|appears)?\s*(impacted|caries|deep caries|periapical lesion)",
-    ]
+    # Process each bullet point / line independently
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
 
-    for pat in patterns:
-        for match in re.finditer(pat, text, re.IGNORECASE):
-            q = int(match.group(1))
-            pos = int(match.group(2))
-            raw_diag = match.group(3).strip()
-            key = (q, pos)
-            if key not in seen:
-                seen.add(key)
-                findings.append({
-                    "quadrant": q,
-                    "tooth_position": pos,
-                    "diagnosis": raw_diag,
-                    "confidence": 0.8,
-                })
+    for line in lines:
+        tooth_matches = list(re.finditer(r"(?:Tooth|FDI|tooth|#)?\s*\b([1-4])([1-8])\b", line, re.IGNORECASE))
+        for tm in tooth_matches:
+            q, pos = int(tm.group(1)), int(tm.group(2))
+            sub = line[tm.start():]
+            sub_lower = sub.lower()
+
+            # Negation guard: skip if ruled out or marked normal
+            if any(neg in sub_lower for neg in ["no caries", "no periapical", "no impaction", "no evidence", "ruled out", "normal", "intact", "unremarkable"]):
+                continue
+
+            diag_m = re.search(r"\b(deep\s+caries|caries|periapical\s+lesion|impacted(?:\s+tooth)?)\b", sub, re.IGNORECASE)
+            if diag_m:
+                raw_diag = diag_m.group(1).strip()
+                key = (q, pos)
+                if key not in seen:
+                    seen.add(key)
+                    findings.append({
+                        "quadrant": q,
+                        "tooth_position": pos,
+                        "diagnosis": raw_diag,
+                        "confidence": 0.8,
+                    })
+
     return findings
 
 

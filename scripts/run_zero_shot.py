@@ -81,8 +81,9 @@ DEFAULT_OUTPUT_DIR = "data/evaluations"
 # Helpers
 # ---------------------------------------------------------------------------
 
-def load_completed_ids(output_path: Path) -> set[int]:
-    """Read existing output file and extract processed image IDs for resume."""
+def load_completed_ids(output_path: Path, retry_empty: bool = True) -> set[int]:
+    """Read existing output file and extract processed image IDs for resume.
+    If retry_empty is True, excludes records where predictions are empty or format failed."""
     completed: set[int] = set()
     if not output_path.exists():
         return completed
@@ -95,10 +96,42 @@ def load_completed_ids(output_path: Path) -> set[int]:
             try:
                 record = json.loads(line)
                 if "image_id" in record:
-                    completed.add(int(record["image_id"]))
+                    img_id = int(record["image_id"])
+                    if retry_empty:
+                        preds = record.get("predictions", [])
+                        format_ok = record.get("format_ok", False)
+                        if not preds or not format_ok:
+                            continue  # Treat as incomplete so it gets re-evaluated
+                    completed.add(img_id)
             except Exception:
                 pass
     return completed
+
+
+def save_evaluation_record_atomic(output_path: Path, record: dict[str, Any]) -> None:
+    """Save record to JSONL atomically, replacing any existing entry for this image_id in-place."""
+    records_by_id: dict[int, dict[str, Any]] = {}
+    if output_path.exists():
+        with open(output_path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    r = json.loads(line)
+                    if "image_id" in r:
+                        records_by_id[int(r["image_id"])] = r
+                except Exception:
+                    pass
+
+    records_by_id[int(record["image_id"])] = record
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = output_path.with_suffix(".tmp")
+    with open(temp_path, "w", encoding="utf-8") as f:
+        for r in records_by_id.values():
+            f.write(json.dumps(r) + "\n")
+    temp_path.replace(output_path)
 
 
 def resolve_provider_and_model(args: argparse.Namespace) -> tuple[str, str]:
@@ -293,11 +326,12 @@ def _run_zero_shot_for_target(
         print(f"  [FRESH] Removed existing output file: {output_path}")
 
     total_eligible = len(eligible_imgs)
-    completed_ids = load_completed_ids(output_path)
+    retry_empty = getattr(args, "retry_empty", True)
+    completed_ids = load_completed_ids(output_path, retry_empty=retry_empty)
     remaining_imgs = eligible_imgs[~eligible_imgs["id"].isin(completed_ids)]
 
     slice_info = f" (Slice {args.slice_index}/{args.total_slices})" if args.total_slices > 1 else ""
-    print(f"Targeting{slice_info}: {len(eligible_imgs)} eligible images.")
+    print(f"Targeting{slice_info}: {len(eligible_imgs)} eligible images (Completed: {len(completed_ids)}, Remaining: {len(remaining_imgs)}).")
     print_banner(provider, model, len(completed_ids), total_eligible, output_path)
 
     if args.status_only:
@@ -330,7 +364,7 @@ def _run_zero_shot_for_target(
     if remaining_imgs.empty:
         print(f"[DONE] All {total_eligible} images have already been evaluated!")
         _print_final_summary(output_path, provider, model, args)
-        return
+        return False
 
     print(f"Starting Zero-Shot evaluation: {len(remaining_imgs)} image(s) (Pacing delay: {args.pacing_delay}s)...")
 
@@ -401,7 +435,7 @@ def _run_zero_shot_for_target(
             tokens_to_use = int(env_tokens) if env_tokens and args.max_tokens == 4096 else args.max_tokens
 
             # Call VLM with ZERO_SHOT_PROMPT (with reasoning & multi-finding guidelines)
-            raw_reply = call_llm(
+            resp_out = call_llm(
                 provider=provider,
                 model=model,
                 system_prompt="You are an expert dental radiologist analyzing panoramic dental radiographs. Provide concise reasoning and always complete your response with the final JSON object.",
@@ -409,7 +443,20 @@ def _run_zero_shot_for_target(
                 image=image,
                 temperature=args.temperature,
                 max_tokens=tokens_to_use,
+                return_metadata=True,
             )
+
+            if isinstance(resp_out, tuple):
+                raw_reply, meta = resp_out
+            else:
+                raw_reply, meta = resp_out, {}
+
+            finish_reason = meta.get("finish_reason", "stop")
+            usage_info = meta.get("usage", {})
+            comp_tokens = usage_info.get("completion_tokens", 0)
+
+            if finish_reason == "length":
+                print(f"  ⚠️  [TRUNCATED] Model hit max_tokens limit ({tokens_to_use}) before completing reasoning!", flush=True)
 
             # Parse and match predictions against ALL ground truth findings
             parsed_raw = parse_zero_shot_response(raw_reply)
@@ -433,11 +480,14 @@ def _run_zero_shot_for_target(
             
             print(f"  GT ({len(gt_findings)}): {gt_str}")
             print(f"  Pred ({len(pred_findings)}): {pred_str}")
-            if not pred_findings and raw_reply:
-                preview = raw_reply.replace("\n", " ").strip()
-                if len(preview) > 120:
-                    preview = preview[:120] + "..."
-                print(f"  [Raw Output Preview]: {preview}")
+            if not pred_findings:
+                if raw_reply:
+                    preview = raw_reply.replace("\n", " ").strip()
+                    if len(preview) > 140:
+                        preview = preview[:140] + "..."
+                    print(f"  ⚠️  [ZERO PREDICTIONS] Raw output had no valid findings. Preview: {preview}")
+                else:
+                    print("  ⚠️  [ZERO PREDICTIONS] Model returned empty response!")
             print(
                 f"  Score: FDI Match: {match_res['fdi_tp']}/{len(gt_findings)} (P: {match_res['fdi_precision']:.2f}, R: {match_res['fdi_recall']:.2f}, F1: {match_res['fdi_f1']:.2f}) | "
                 f"Exact Match: {match_res['exact_tp']}/{len(gt_findings)} (P: {match_res['exact_precision']:.2f}, R: {match_res['exact_recall']:.2f}, F1: {match_res['exact_f1']:.2f}) | "
@@ -472,14 +522,13 @@ def _run_zero_shot_for_target(
                 "final_answer": primary_matched,
                 "raw_output": raw_reply,
                 "format_ok": format_ok,
+                "finish_reason": finish_reason,
                 "confidence": confidence,
                 "timestamp": time.time(),
             })
 
-            # Append to JSONL
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(output_path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(record) + "\n")
+            # Save to JSONL atomically (replaces in-place if image_id was already present)
+            save_evaluation_record_atomic(output_path, record)
 
             evaluated_in_session += 1
             since_last_sync += 1
@@ -637,6 +686,7 @@ def build_parser() -> argparse.ArgumentParser:
     
     # Flags
     parser.add_argument("--fresh", "--overwrite", action="store_true", help="Start evaluation from scratch and overwrite existing output JSONL")
+    parser.add_argument("--retry-empty", action=argparse.BooleanOptionalAction, default=True, help="Re-evaluate images whose previous run yielded 0 predictions (e.g. truncated).")
     parser.add_argument("--ignore-429", action="store_true", help="Opt into retrying 429 rate limit errors (up to 10 retries)")
     parser.add_argument("--ignore-api-errors", action="store_true", help="Continue evaluating remaining images on API errors")
     parser.add_argument("--status-only", action="store_true", help="Inspect slice progress and exit without calling APIs")
