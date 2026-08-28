@@ -381,11 +381,15 @@ def _call_llm_once(
                 built_messages.append({"role": "user", "content": user_parts})
 
             extra_headers = None
+            extra_body = kwargs.get("extra_body", {})
             if provider == "openrouter":
                 extra_headers = {
                     "HTTP-Referer": os.environ.get("OPENROUTER_REFERER", "https://github.com/rezaxr14/VLM-DENTAL"),
                     "X-Title": os.environ.get("OPENROUTER_TITLE", "VLM-DENTAL"),
                 }
+                extra_body = dict(extra_body)
+                if "include_reasoning" not in extra_body:
+                    extra_body["include_reasoning"] = True
 
             stream_requested = kwargs.get("stream", False)
             if stream_requested:
@@ -398,6 +402,7 @@ def _call_llm_once(
                 max_tokens=max_tokens,
                 temperature=temperature,
                 extra_headers=extra_headers,
+                extra_body=extra_body if extra_body else None,
                 stream=stream_requested,
             )
             

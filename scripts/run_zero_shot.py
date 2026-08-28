@@ -491,9 +491,9 @@ def _run_zero_shot_for_target(
                     preview = raw_reply.replace("\n", " ").strip()
                     if len(preview) > 140:
                         preview = preview[:140] + "..."
-                    print(f"  ⚠️  [ZERO PREDICTIONS] Raw output had no valid findings. Preview: {preview}")
+                    print(f"  ℹ️  [NO ABNORMALITIES REPORTED] Model output {len(raw_reply.split())} words (finish='{finish_reason}'). Preview: {preview}")
                 else:
-                    print("  ⚠️  [ZERO PREDICTIONS] Model returned empty response!")
+                    print(f"  ⚠️  [EMPTY API RESPONSE] Provider returned 0 content tokens (finish='{finish_reason}')")
             print(
                 f"  Score: FDI Match: {match_res['fdi_tp']}/{len(gt_findings)} (P: {match_res['fdi_precision']:.2f}, R: {match_res['fdi_recall']:.2f}, F1: {match_res['fdi_f1']:.2f}) | "
                 f"Exact Match: {match_res['exact_tp']}/{len(gt_findings)} (P: {match_res['exact_precision']:.2f}, R: {match_res['exact_recall']:.2f}, F1: {match_res['exact_f1']:.2f}) | "
