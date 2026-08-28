@@ -525,10 +525,10 @@ def run_verify(args: argparse.Namespace, cfg: Any) -> None:
 
         if len(dataset_list) > 1:
             print(f"\n{'=' * 70}\nDataset: {dataset_name}\n{'=' * 70}")
-        _run_verify_for_dataset(args, cfg, unverified_path)
+        _run_verify_for_dataset(args, cfg, unverified_path, dataset_name=dataset_name)
 
 
-def _run_verify_for_dataset(args: argparse.Namespace, cfg: Any, unverified_path: Path) -> None:
+def _run_verify_for_dataset(args: argparse.Namespace, cfg: Any, unverified_path: Path, dataset_name: str = "dentex") -> None:
     """Read one dataset's unverified traces and verify them via external API verifiers."""
     verified_path = Path(DEFAULT_VERIFIED)
     if args.no_tools:
@@ -557,6 +557,23 @@ def _run_verify_for_dataset(args: argparse.Namespace, cfg: Any, unverified_path:
         print("Run without --status-only to begin verification.")
         return
 
+    # Pre-fetch images if DENTEX_IMAGES_REPO / TUFTS_IMAGES_REPO is configured
+    pending_to_verify = list(unverified_ids - verified_ids)
+    if dataset_name == "tufts":
+        repo_id = os.environ.get("TUFTS_IMAGES_REPO")
+    else:
+        repo_id = os.environ.get("DENTEX_IMAGES_REPO")
+    if repo_id and pending_to_verify:
+        print(f"Pre-fetching up to {len(pending_to_verify)} verification images from {repo_id}...")
+        try:
+            if dataset_name == "tufts":
+                from dental_agent.data.tufts import download_tufts_slice as _download_slice
+            else:
+                from dental_agent.data.dentex import download_dentex_slice as _download_slice
+            _download_slice(pending_to_verify, repo_id=repo_id, cache_dir=cfg.data_dir)
+        except Exception as e:
+            print(f"Warning: Slice pre-fetch skipped ({e})")
+
     print(f"Starting verification pass...")
     print(f"Input:  {unverified_path}")
     print(f"Output: {verified_path}\n")
@@ -565,6 +582,7 @@ def _run_verify_for_dataset(args: argparse.Namespace, cfg: Any, unverified_path:
     result = verify_pending(
         unverified_path=unverified_path,
         verified_path=verified_path,
+        data_dir=cfg.data_dir,
         max_repairs=args.max_repairs,
         total_slices=args.total_slices,
         slice_index=args.slice_index,
@@ -652,6 +670,7 @@ def run_repair(args: argparse.Namespace, cfg: Any) -> None:
     result = repair_pending(
         unverified_path=unverified_path,
         verified_path=verified_path,
+        data_dir=cfg.data_dir,
         provider=prov,
         model=mod,
         total_slices=args.total_slices,

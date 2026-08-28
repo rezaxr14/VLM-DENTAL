@@ -598,10 +598,132 @@ def generate_only_no_tools(
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+
+def resolve_trace_image_path(
+    image_path: str | Path | None,
+    image_id: int,
+    dataset_name: str = "dentex",
+    images_df: pd.DataFrame | None = None,
+    data_dir: str | Path | None = None,
+) -> Path | None:
+    """Resolve an image path across heterogeneous runtime environments (Kaggle -> Colab -> Local).
+
+    If the raw image_path stored in a trace JSONL was recorded on a different filesystem
+    (e.g., /kaggle/working/... when running in Colab), this helper tries:
+      1. Checking if the path exists directly as-is on the current filesystem.
+      2. Checking if images_df contains a valid local_path for this image_id.
+      3. Searching standard local dataset folders (data/, data/dentex/, etc.) for {id}.png/jpg.
+      4. Searching HF hub cache snapshots on disk.
+      5. Dynamically downloading the slice image via DENTEX_IMAGES_REPO / TUFTS_IMAGES_REPO.
+    """
+    if image_path:
+        p = Path(image_path)
+        if p.exists() and p.is_file():
+            return p
+
+    # 1. Lookup in images_df if provided
+    if images_df is not None and "id" in images_df.columns and "local_path" in images_df.columns:
+        match = images_df[images_df["id"] == image_id]
+        if not match.empty:
+            df_path = match.iloc[0].get("local_path")
+            if df_path and os.path.exists(str(df_path)):
+                return Path(df_path)
+
+    # 2. Search local candidate directories
+    ds_norm = dataset_name.lower()
+    fname = Path(image_path).name if image_path else f"{image_id}.png"
+    if ds_norm == "dentex":
+        candidate_names = [fname, f"{image_id}.png", f"val_{image_id}.png", f"train_{image_id}.png"]
+        search_roots: list[Path] = []
+        if data_dir:
+            search_roots.append(Path(data_dir))
+        search_roots.extend([
+            Path("data/dentex"),
+            Path("data/dentex/DENTEX"),
+            Path("data/training_data"),
+            Path("data/validation_data"),
+            Path("data/dentex/training_data"),
+            Path("data/dentex/validation_data"),
+        ])
+    elif ds_norm == "tufts":
+        candidate_names = [fname, f"{image_id}.jpg", f"{image_id}.JPG", f"{image_id}.png"]
+        search_roots = []
+        if data_dir:
+            search_roots.append(Path(data_dir))
+        search_roots.extend([
+            Path("data/Tufts"),
+            Path("data/tufts"),
+            Path("data/Tufts/Radiographs"),
+            Path("data/tufts/Radiographs"),
+        ])
+    else:
+        candidate_names = [fname, f"{image_id}.png", f"{image_id}.jpg"]
+        search_roots = [Path(data_dir)] if data_dir else [Path("data")]
+
+    for root in search_roots:
+        if not root.exists():
+            continue
+        for name in candidate_names:
+            candidate = root / name
+            if candidate.exists() and candidate.is_file():
+                return candidate
+            candidate_nested = root / "images" / name
+            if candidate_nested.exists() and candidate_nested.is_file():
+                return candidate_nested
+
+    # 3. Glob match in local dataset folders
+    for root in search_roots:
+        if root.exists():
+            for name in candidate_names:
+                for match in root.glob(f"**/{name}"):
+                    if match.is_file():
+                        return match
+
+    # 4. Check HuggingFace hub cache
+    repo_id = os.environ.get("DENTEX_IMAGES_REPO" if ds_norm == "dentex" else "TUFTS_IMAGES_REPO")
+    hf_cache_root = Path.home() / ".cache" / "huggingface" / "hub"
+    if repo_id and hf_cache_root.exists():
+        hf_repo_dir = hf_cache_root / f"datasets--{repo_id.replace('/', '--')}"
+        if hf_repo_dir.exists():
+            for name in candidate_names:
+                for match in hf_repo_dir.glob(f"**/{name}"):
+                    if match.is_file():
+                        return match
+
+    # 5. Dynamic slice download if repo is configured
+    if ds_norm == "dentex":
+        repo_id = os.environ.get("DENTEX_IMAGES_REPO")
+        if repo_id:
+            try:
+                from dental_agent.data.dentex import download_dentex_slice
+                paths_map = download_dentex_slice([image_id], repo_id=repo_id, cache_dir=data_dir)
+                if image_id in paths_map and paths_map[image_id] is not None:
+                    p_down = Path(paths_map[image_id])
+                    if p_down.exists():
+                        return p_down
+            except Exception as e:
+                print(f"Warning: Failed to fetch image {image_id} from {repo_id}: {e}")
+    elif ds_norm == "tufts":
+        repo_id = os.environ.get("TUFTS_IMAGES_REPO")
+        if repo_id:
+            try:
+                from dental_agent.data.tufts import download_tufts_slice
+                paths_map = download_tufts_slice([image_id], repo_id=repo_id, cache_dir=data_dir)
+                if image_id in paths_map and paths_map[image_id] is not None:
+                    p_down = Path(paths_map[image_id])
+                    if p_down.exists():
+                        return p_down
+            except Exception as e:
+                print(f"Warning: Failed to fetch image {image_id} from {repo_id}: {e}")
+
+    return None
+
+
 def verify_pending(
     unverified_path: str | Path,
     verified_path: str | Path,
     images_df: pd.DataFrame | None = None,
+    data_dir: str | Path | None = None,
     call_llm_fn: Callable[..., str] = call_llm,
     max_repairs: int = 1,
     total_slices: int = 1,
@@ -679,8 +801,18 @@ def verify_pending(
         trajectory = record.get("trajectory", {})
         dataset_name = record.get("dataset", "dentex")
 
-        if not trajectory or not os.path.exists(str(image_path)):
-            return False, image_id, "Skipped (no trajectory or image)"
+        resolved_path = resolve_trace_image_path(
+            image_path=image_path,
+            image_id=image_id,
+            dataset_name=dataset_name,
+            images_df=images_df,
+            data_dir=data_dir,
+        )
+
+        if not trajectory or resolved_path is None or not resolved_path.exists():
+            return False, image_id, f"Skipped (no trajectory or missing image: {image_path})"
+
+        image_path = str(resolved_path)
 
         try:
             image = Image.open(image_path).convert("RGB")
@@ -839,6 +971,7 @@ def repair_pending(
     unverified_path: str | Path,
     verified_path: str | Path,
     images_df: pd.DataFrame | None = None,
+    data_dir: str | Path | None = None,
     provider: str | None = None,
     model: str | None = None,
     total_slices: int = 1,
@@ -913,10 +1046,20 @@ def repair_pending(
         ground_truth = record.get("ground_truth", [])
         dataset_name = record.get("dataset", "dentex")
 
-        if not os.path.exists(str(img_path)):
+        resolved_path = resolve_trace_image_path(
+            image_path=img_path,
+            image_id=img_id,
+            dataset_name=dataset_name,
+            images_df=images_df,
+            data_dir=data_dir,
+        )
+
+        if resolved_path is None or not resolved_path.exists():
             print(f"[{idx}/{len(needs_repair)}] Img {img_id}: image missing ({img_path}). Skipping.")
             n_failed += 1
             continue
+
+        img_path = str(resolved_path)
 
         try:
             image = Image.open(img_path).convert("RGB")
