@@ -429,12 +429,28 @@ def _call_llm_once(
                 
                 # Extract reasoning/thinking tokens for reasoning models (e.g. OpenRouter Nemotron / DeepSeek)
                 if choice and choice.message:
-                    msg_extra = getattr(choice.message, "model_extra", None) or {}
+                    msg = choice.message
+                    msg_dict = {}
+                    if hasattr(msg, "model_dump"):
+                        try:
+                            msg_dict = msg.model_dump() or {}
+                        except Exception:
+                            pass
+                    elif hasattr(msg, "to_dict"):
+                        try:
+                            msg_dict = msg.to_dict() or {}
+                        except Exception:
+                            pass
+                    msg_extra = getattr(msg, "model_extra", None) or {}
                     reasoning = (
-                        getattr(choice.message, "reasoning", None)
-                        or getattr(choice.message, "reasoning_content", None)
+                        getattr(msg, "reasoning", None)
+                        or getattr(msg, "reasoning_content", None)
                         or msg_extra.get("reasoning")
                         or msg_extra.get("reasoning_content")
+                        or msg_dict.get("reasoning")
+                        or msg_dict.get("reasoning_content")
+                        or msg_dict.get("thought")
+                        or msg_dict.get("thinking")
                     )
                     if reasoning:
                         if content:
