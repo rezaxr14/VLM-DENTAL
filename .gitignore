@@ -28,6 +28,8 @@ ENV/
 hf_cache/
 checkpoints/
 data/dentex/
+data/Tufts/
+data/tufts/
 data/yolo_dentex/
 data/sample_images/
 data/tool_verification/

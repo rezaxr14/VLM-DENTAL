@@ -284,6 +284,41 @@ def _run_generate_for_dataset(args: argparse.Namespace, cfg: Any, dataset_name: 
     since_last_sync = 0
     session_start_time = time.time()
 
+    max_immediate_retries = args.max_retries_per_image if args.max_retries_per_image is not None else (3 if args.retry_failed else 1)
+    max_second_pass_retries = args.max_second_pass_retries if args.max_second_pass_retries is not None else (3 if args.retry_failed else 0)
+    failed_queue: list[dict[str, Any]] = []
+
+    def _execute_gen_attempt(target_id: int) -> tuple[dict[str, Any] | None, float]:
+        t0 = time.time()
+        if args.no_tools:
+            res = generate_only_no_tools(
+                image_id=target_id,
+                images_df=imgs_df,
+                annots_df=annots_df,
+                categories_df=cats_df,
+                max_tokens=args.max_tokens or 2048,
+            )
+        else:
+            res = generate_only(
+                image_id=target_id,
+                images_df=imgs_df,
+                annots_df=annots_df,
+                categories_df=cats_df,
+                max_turns=args.max_turns,
+                max_tool_calls=args.max_tool_calls,
+                max_tokens_per_turn=args.max_tokens,
+                min_turns=args.min_turns,
+                turns_per_finding_buffer=args.turns_per_finding_buffer,
+                context_trim_threshold=args.context_trim_threshold,
+                perturb_small_probability=args.perturb_small_prob,
+                perturb_big_probability=args.perturb_big_prob,
+                max_blobs_per_turn=args.max_blobs_per_turn,
+                max_padding_turns=args.max_padding_turns,
+                max_identical_repeats=args.max_identical_repeats,
+            )
+        elapsed = time.time() - t0
+        return res, elapsed
+
     for idx, img_record in enumerate(todo_images, start=1):
         image_id = int(img_record["id"])
         image_file = os.path.basename(str(img_record.get("local_path", "")))
@@ -301,55 +336,44 @@ def _run_generate_for_dataset(args: argparse.Namespace, cfg: Any, dataset_name: 
                     print(f"  vLLM unresponsive. Waiting 5s... ({health_retries}/24)")
                     time.sleep(5)
 
-            t0 = time.time()
-            if args.no_tools:
-                result = generate_only_no_tools(
-                    image_id=image_id,
-                    images_df=imgs_df,
-                    annots_df=annots_df,
-                    categories_df=cats_df,
-                    max_tokens=args.max_tokens or 2048,
-                )
-            else:
-                result = generate_only(
-                    image_id=image_id,
-                    images_df=imgs_df,
-                    annots_df=annots_df,
-                    categories_df=cats_df,
-                    max_turns=args.max_turns,
-                    max_tool_calls=args.max_tool_calls,
-                    max_tokens_per_turn=args.max_tokens,
-                    min_turns=args.min_turns,
-                    turns_per_finding_buffer=args.turns_per_finding_buffer,
-                    context_trim_threshold=args.context_trim_threshold,
-                    perturb_small_probability=args.perturb_small_prob,
-                    perturb_big_probability=args.perturb_big_prob,
-                    max_blobs_per_turn=args.max_blobs_per_turn,
-                    max_padding_turns=args.max_padding_turns,
-                    max_identical_repeats=args.max_identical_repeats,
-                )
-            elapsed = time.time() - t0
+            img_success = False
+            last_result = None
+            elapsed = 0.0
 
-            if result is None:
-                print(f"  [SKIP] No valid image/annotations for ID {image_id}", flush=True)
+            for attempt in range(1, max_immediate_retries + 1):
+                if attempt > 1:
+                    print(f"  [RETRY {attempt}/{max_immediate_retries}] Retrying generation for Image ID {image_id}...", flush=True)
+                    if args.pacing_delay > 0:
+                        time.sleep(args.pacing_delay)
+
+                result, elapsed = _execute_gen_attempt(image_id)
+                if result is None:
+                    print(f"  [SKIP] No valid image/annotations for ID {image_id}", flush=True)
+                    break
+
+                last_result = result
+                status = result.get("status", "unknown")
+                if status == "unverified":
+                    img_success = True
+                    break
+                else:
+                    reason = result.get("failure_reason", "unknown")
+                    print(f"  [FAIL attempt {attempt}/{max_immediate_retries}] {reason} ({elapsed:.1f}s)", flush=True)
+
+            if last_result is None:
                 continue
 
-            # Tagged so verify_pending (shared across datasets) can key
-            # dedup on (dataset, image_id) rather than bare image_id --
-            # without this, a DENTEX image already verified would silently
-            # cause a same-numbered Tufts image to be skipped as "already
-            # done" forever, since both datasets number from a low integer.
-            result["dataset"] = dataset_name
-            append_trace(output_path, result)
-            status = result.get("status", "unknown")
+            # Tag dataset and append to unverified traces file
+            last_result["dataset"] = dataset_name
+            append_trace(output_path, last_result)
 
-            if status == "unverified":
+            if img_success:
                 generated_in_session += 1
                 print(f"  [OK] Generated in {elapsed:.1f}s (Total: {len(completed_ids) + generated_in_session})", flush=True)
             else:
                 failed_in_session += 1
-                reason = result.get("failure_reason", "unknown")
-                print(f"  [FAIL] {reason} ({elapsed:.1f}s)", flush=True)
+                if max_second_pass_retries > 0:
+                    failed_queue.append(img_record)
 
             since_last_sync += 1
             if args.git_sync_every > 0 and since_last_sync >= args.git_sync_every:
@@ -369,7 +393,6 @@ def _run_generate_for_dataset(args: argparse.Namespace, cfg: Any, dataset_name: 
 
             if idx < len(todo_images) and args.pacing_delay > 0:
                 time.sleep(args.pacing_delay)
-
 
         except RPDLimitExhausted as e:
             print(f"\n\n[DAILY LIMIT REACHED] {e}")
@@ -391,6 +414,46 @@ def _run_generate_for_dataset(args: argparse.Namespace, cfg: Any, dataset_name: 
             print(f"  [ERROR] Error on Image ID {image_id}: {e}")
             failed_in_session += 1
             time.sleep(2.0)
+
+    # End-of-Run Second Pass (Second chance for queued failed images)
+    if failed_queue and max_second_pass_retries > 0:
+        print(f"\n{'=' * 70}")
+        print(f"[SECOND PASS] Retrying {len(failed_queue)} failed images ({max_second_pass_retries} attempts each)")
+        print(f"{'=' * 70}", flush=True)
+        
+        for idx_sp, img_record in enumerate(failed_queue, start=1):
+            image_id = int(img_record["id"])
+            image_file = os.path.basename(str(img_record.get("local_path", "")))
+            print(f"[Second Pass {idx_sp}/{len(failed_queue)}] Retrying Image ID {image_id} ({image_file})...", flush=True)
+            sp_success = False
+            last_sp_result = None
+
+            for attempt in range(1, max_second_pass_retries + 1):
+                if attempt > 1 or args.pacing_delay > 0:
+                    time.sleep(args.pacing_delay)
+                try:
+                    result, elapsed = _execute_gen_attempt(image_id)
+                    if result is None:
+                        break
+                    last_sp_result = result
+                    status = result.get("status", "unknown")
+                    if status == "unverified":
+                        sp_success = True
+                        break
+                    else:
+                        reason = result.get("failure_reason", "unknown")
+                        print(f"  [Second Pass FAIL attempt {attempt}/{max_second_pass_retries}] {reason} ({elapsed:.1f}s)", flush=True)
+                except Exception as e:
+                    print(f"  [Second Pass ERROR attempt {attempt}] {e}", flush=True)
+
+            if last_sp_result is not None:
+                last_sp_result["dataset"] = dataset_name
+                append_trace(output_path, last_sp_result)
+
+            if sp_success:
+                generated_in_session += 1
+                failed_in_session -= 1
+                print(f"  [OK - Second Pass Resolved] Image ID {image_id} generated successfully! (Total: {len(completed_ids) + generated_in_session})", flush=True)
 
     # Session Summary
     total_time = time.time() - session_start_time
@@ -819,7 +882,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--retry-failed",
         action="store_true",
-        help="Re-generate traces that failed in previous runs instead of skipping them",
+        help="Re-attempt failed traces: 3 immediate retries per image, plus an end-of-run second pass of 3 retries",
+    )
+    parser.add_argument(
+        "--max-retries-per-image",
+        type=int,
+        default=None,
+        help="Max immediate generation retries per image in main loop (default: 3 if --retry-failed else 1)",
+    )
+    parser.add_argument(
+        "--max-second-pass-retries",
+        type=int,
+        default=None,
+        help="Max generation retries per failed image in end-of-run second pass (default: 3 if --retry-failed else 0)",
     )
     parser.add_argument(
         "--status-only",
