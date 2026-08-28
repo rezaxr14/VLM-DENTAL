@@ -184,4 +184,4 @@ Interactive environments for Colab/Kaggle execution.
 - `.env`: Private API keys and rate-limit settings (git-ignored). See `.env.example` for documentation.
 - `.env.example`: Template with all env vars, default model names, and explanatory comments.
 - `tests/`: Contains `conftest.py` and `test_*.py` files which use `pytest` to automatically verify code.
-- `download_and_cleanup.py`: Root-level dataset download helper (also callable from notebooks).
+- `scripts/download_and_cleanup.py`: Script-level dataset download helper (also callable from notebooks).
