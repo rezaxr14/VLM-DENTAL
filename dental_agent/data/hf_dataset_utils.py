@@ -40,8 +40,11 @@ def download_dataset_slice(
     if not repo_id:
         return {}
 
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     local_paths: dict[int, Path | None] = {}
-    for img_id in image_ids:
+
+    def _fetch_single(img_id: int) -> tuple[int, Path | None]:
         filename = filename_template.format(id=img_id)
         try:
             local_path = hf_hub_download(
@@ -50,10 +53,18 @@ def download_dataset_slice(
                 repo_type="dataset",
                 cache_dir=cache_dir,
             )
-            local_paths[img_id] = Path(local_path)
+            return img_id, Path(local_path)
         except Exception as e:
             print(f"Warning: Failed to download targeted slice image {img_id} ({filename}): {e}")
-            local_paths[img_id] = None
+            return img_id, None
+
+    max_workers = min(16, max(1, len(image_ids)))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(_fetch_single, iid) for iid in image_ids]
+        for f in as_completed(futures):
+            iid, path = f.result()
+            local_paths[iid] = path
+
     return local_paths
 
 

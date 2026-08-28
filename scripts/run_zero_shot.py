@@ -125,9 +125,9 @@ def resolve_provider_and_model(args: argparse.Namespace) -> tuple[str, str]:
         if not model:
             default_models = {
                 "gemini": "gemini-3.5-flash-lite",
-                "nvidia_nim": "meta/muse-glimmer-30b",
+                "nvidia_nim": "meta/llama-3.2-11b-vision-instruct",
                 "groq": "qwen/qwen3.6-27b",
-                "openrouter": "minimax/minimax-m3:free",
+                "openrouter": "google/gemma-4-31b-it:free",
                 "local": "QuantTrio/Qwen3.5-9B-AWQ",
                 "openai": "gpt-4o",
                 "anthropic": "claude-3-7-sonnet-20250219",
@@ -268,20 +268,23 @@ def _run_zero_shot_for_target(
 
     # 3. Targeted Dynamic Slice Download if configured
     repo_id = os.environ.get("TUFTS_IMAGES_REPO" if dataset_name == "tufts" else "DENTEX_IMAGES_REPO")
-    if repo_id:
-        print(f"Fetching targeted images from {repo_id}...")
-        if dataset_name == "tufts":
-            from dental_agent.data.tufts import download_tufts_slice as _download_slice
-        else:
-            from dental_agent.data.dentex import download_dentex_slice as _download_slice
-        local_paths_map = _download_slice(eligible_imgs["id"].tolist(), repo_id=repo_id, cache_dir=cfg.data_dir)
-        def _update_path(row):
-            pid = row["id"]
-            if pid in local_paths_map and local_paths_map[pid] is not None:
-                return str(local_paths_map[pid])
-            return row["local_path"]
-        imgs_df["local_path"] = imgs_df.apply(_update_path, axis=1)
-        eligible_imgs = imgs_df[imgs_df["id"].isin(eligible_imgs["id"])]
+    missing_mask = eligible_imgs["local_path"].isna() | ~eligible_imgs["local_path"].apply(lambda p: os.path.exists(str(p)) if p and str(p) != "None" else False)
+    if repo_id and missing_mask.any():
+        missing_ids = eligible_imgs[missing_mask]["id"].tolist()
+        if missing_ids:
+            print(f"Fetching {len(missing_ids)} missing images from {repo_id}...")
+            if dataset_name == "tufts":
+                from dental_agent.data.tufts import download_tufts_slice as _download_slice
+            else:
+                from dental_agent.data.dentex import download_dentex_slice as _download_slice
+            local_paths_map = _download_slice(missing_ids, repo_id=repo_id, cache_dir=cfg.data_dir)
+            def _update_path(row):
+                pid = row["id"]
+                if pid in local_paths_map and local_paths_map[pid] is not None:
+                    return str(local_paths_map[pid])
+                return row["local_path"]
+            imgs_df["local_path"] = imgs_df.apply(_update_path, axis=1)
+            eligible_imgs = imgs_df[imgs_df["id"].isin(eligible_imgs["id"])]
 
     eligible_imgs = eligible_imgs[eligible_imgs["local_path"].notna() & (eligible_imgs["local_path"] != "None")]
 
@@ -334,6 +337,7 @@ def _run_zero_shot_for_target(
     # Evaluation loop
     output_path.parent.mkdir(parents=True, exist_ok=True)
     evaluated_in_session = 0
+    failed_in_session = 0
     since_last_sync = 0
     session_start_time = time.time()
 
@@ -385,19 +389,26 @@ def _run_zero_shot_for_target(
                     "raw_diagnosis": str(d_raw),
                 })
 
+            prefix = provider.upper().replace('_NIM', '')
+            env_dim = os.environ.get(f"{prefix}_IMAGE_MAX_DIM")
+            dim_to_use = args.image_max_dim if args.image_max_dim > 0 else (int(env_dim) if env_dim is not None and int(env_dim) > 0 else 0)
+
             image = Image.open(image_path).convert("RGB")
-            if args.image_max_dim > 0:
-                image.thumbnail((args.image_max_dim, args.image_max_dim), Image.Resampling.LANCZOS)
+            if dim_to_use > 0:
+                image.thumbnail((dim_to_use, dim_to_use), Image.Resampling.LANCZOS)
+
+            env_tokens = os.environ.get(f"{prefix}_MAX_TOKENS")
+            tokens_to_use = int(env_tokens) if env_tokens and args.max_tokens == 4096 else args.max_tokens
 
             # Call VLM with ZERO_SHOT_PROMPT (with reasoning & multi-finding guidelines)
             raw_reply = call_llm(
                 provider=provider,
                 model=model,
-                system_prompt="You are an expert dental radiologist analyzing panoramic dental radiographs.",
+                system_prompt="You are an expert dental radiologist analyzing panoramic dental radiographs. Provide concise reasoning and always complete your response with the final JSON object.",
                 user_content=ZERO_SHOT_PROMPT,
                 image=image,
                 temperature=args.temperature,
-                max_tokens=args.max_tokens,
+                max_tokens=tokens_to_use,
             )
 
             # Parse and match predictions against ALL ground truth findings
@@ -422,6 +433,11 @@ def _run_zero_shot_for_target(
             
             print(f"  GT ({len(gt_findings)}): {gt_str}")
             print(f"  Pred ({len(pred_findings)}): {pred_str}")
+            if not pred_findings and raw_reply:
+                preview = raw_reply.replace("\n", " ").strip()
+                if len(preview) > 120:
+                    preview = preview[:120] + "..."
+                print(f"  [Raw Output Preview]: {preview}")
             print(
                 f"  Score: FDI Match: {match_res['fdi_tp']}/{len(gt_findings)} (P: {match_res['fdi_precision']:.2f}, R: {match_res['fdi_recall']:.2f}, F1: {match_res['fdi_f1']:.2f}) | "
                 f"Exact Match: {match_res['exact_tp']}/{len(gt_findings)} (P: {match_res['exact_precision']:.2f}, R: {match_res['exact_recall']:.2f}, F1: {match_res['exact_f1']:.2f}) | "

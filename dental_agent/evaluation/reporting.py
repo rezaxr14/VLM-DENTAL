@@ -61,20 +61,31 @@ def generate_summary_table(
     """Format comparative evaluation metrics into a publication-quality table."""
     rows = []
     for model_name, metrics in results.items():
-        ci = metrics.get("exact_match_ci_95", [0.0, 0.0])
-        ci_str = f"[{ci[0]:.3f}, {ci[1]:.3f}]" if ci else "N/A"
+        ci = metrics.get("exact_match_ci_95")
+        ci_str = f"[{ci[0]:.3f}, {ci[1]:.3f}]" if ci and len(ci) >= 2 and ci[0] is not None and ci[1] is not None else "N/A"
+        
+        fmt_val = metrics.get("format_adherence")
+        fdi_acc = metrics.get("fdi_localization_accuracy")
+        fdi_f1 = metrics.get("fdi_localization_f1", fdi_acc)
+        path_acc = metrics.get("pathology_accuracy")
+        path_f1 = metrics.get("pathology_macro_f1")
+        exact_acc = metrics.get("exact_match_accuracy")
+        close_val = metrics.get("closeness_score")
+        ece_val = metrics.get("ece", metrics.get("expected_calibration_error"))
+        tool_val = metrics.get("mean_tool_calls")
+        
         row = {
             "Method / Model": model_name,
-            "Format Ok (%)": f"{metrics.get('format_adherence', 0.0) * 100:.1f}%",
-            "FDI Acc (%)": f"{metrics.get('fdi_localization_accuracy', 0.0) * 100:.1f}%",
-            "FDI F1": f"{metrics.get('fdi_localization_f1', metrics.get('fdi_localization_accuracy', 0.0)):.3f}",
-            "Pathology Acc (%)": f"{metrics.get('pathology_accuracy', 0.0) * 100:.1f}%",
-            "Pathology F1": f"{metrics.get('pathology_macro_f1', 0.0):.3f}",
-            "Exact Match (%)": f"{metrics.get('exact_match_accuracy', 0.0) * 100:.1f}%",
+            "Format Ok (%)": f"{fmt_val * 100:.1f}%" if fmt_val is not None else "N/A",
+            "FDI Acc (%)": f"{fdi_acc * 100:.1f}%" if fdi_acc is not None else "N/A",
+            "FDI F1": f"{fdi_f1:.3f}" if fdi_f1 is not None else "N/A",
+            "Pathology Acc (%)": f"{path_acc * 100:.1f}%" if path_acc is not None else "N/A",
+            "Pathology F1": f"{path_f1:.3f}" if path_f1 is not None else "N/A",
+            "Exact Match (%)": f"{exact_acc * 100:.1f}%" if exact_acc is not None else "N/A",
             "Exact Match 95% CI": ci_str,
-            "Closeness": f"{metrics.get('closeness_score', 0.0):.3f}",
-            "ECE": f"{metrics.get('ece', 0.0):.4f}",
-            "Avg Tool Calls": f"{metrics.get('mean_tool_calls', 0.0):.2f}",
+            "Closeness": f"{close_val:.3f}" if close_val is not None else "N/A",
+            "ECE": f"{ece_val:.4f}" if ece_val is not None else "N/A",
+            "Avg Tool Calls": f"{tool_val:.2f}" if tool_val is not None else "N/A",
         }
         rows.append(row)
 

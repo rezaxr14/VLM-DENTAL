@@ -75,6 +75,8 @@ from dental_agent.training.trace_generation import (
     generate_only,
     generate_only_no_tools,
     verify_pending,
+    repair_pending,
+    clean_unverified_traces,
 )
 from dental_agent.training.git_sync import sync_and_push
 from dental_agent.utils.serialization import to_jsonable
@@ -501,6 +503,13 @@ def _run_verify_for_dataset(args: argparse.Namespace, cfg: Any, unverified_path:
         unverified_path=unverified_path,
         verified_path=verified_path,
         max_repairs=args.max_repairs,
+        total_slices=args.total_slices,
+        slice_index=args.slice_index,
+        slice_seed=args.slice_seed,
+        pacing_delay=args.pacing_delay,
+        max_images=args.max_images,
+        provider=os.environ.get("VERIFIER_PROVIDER"),
+        model=os.environ.get("VERIFIER_MODEL"),
     )
 
     total_time = time.time() - session_start
@@ -537,6 +546,79 @@ def _run_verify_for_dataset(args: argparse.Namespace, cfg: Any, unverified_path:
     print(f"* API State          : {_TRACKER.get_stats(verifier_provider)}")
     print(f"* Session Duration   : {total_time / 60:.1f} minutes")
     print(f"* Verified File      : {verified_path}")
+    print("=" * 70 + "\n")
+
+
+def run_clean(args: argparse.Namespace, cfg: Any) -> None:
+    dataset_name = (args.dataset.split(",")[0] if "," in args.dataset else args.dataset).strip().lower()
+    suffix = "_no_tools" if args.no_tools else ""
+    unverified_path = Path(args.output or f"data/traces/train_cot_traces_{dataset_name}{suffix}_unverified.jsonl")
+    
+    if not unverified_path.exists() and Path(f"data/traces/train_cot_traces{suffix}_unverified.jsonl").exists():
+        unverified_path = Path(f"data/traces/train_cot_traces{suffix}_unverified.jsonl")
+        
+    print(f"\nScanning and cleaning trace file: {unverified_path}...")
+    stats = clean_unverified_traces(unverified_path, backup=True, purge_failed=getattr(args, "purge_failed", True))
+    print("=" * 60)
+    print("TRACE CLEANING COMPLETE")
+    print("=" * 60)
+    print(f"* Valid Traces Retained      : {stats['kept']}")
+    print(f"* Corrupted XML/Blobs Purged : {stats['corrupted']}")
+    print(f"* Failed Traces Purged       : {stats['failed']}")
+    print("=" * 60 + "\n")
+
+
+def run_repair(args: argparse.Namespace, cfg: Any) -> None:
+    dataset_name = (args.dataset.split(",")[0] if "," in args.dataset else args.dataset).strip().lower()
+    suffix = "_no_tools" if args.no_tools else ""
+    unverified_path = Path(args.output or f"data/traces/train_cot_traces_{dataset_name}{suffix}_unverified.jsonl")
+    verified_path = Path(DEFAULT_VERIFIED if not args.no_tools else "data/traces/train_cot_traces_no_tools.jsonl")
+
+    if not unverified_path.exists() and Path(f"data/traces/train_cot_traces{suffix}_unverified.jsonl").exists():
+        unverified_path = Path(f"data/traces/train_cot_traces{suffix}_unverified.jsonl")
+
+    session_start = time.time()
+    
+    # Auto-resolve default verifier if unset
+    prov = args.verifier_provider or os.environ.get("VERIFIER_PROVIDER")
+    mod = args.verifier_model or os.environ.get("VERIFIER_MODEL")
+    if not prov:
+        prov = "gemini" if args.no_tools else "openrouter"
+        mod = "gemini-3.5-flash-lite" if args.no_tools else "minimax/minimax-m3:free"
+        
+    result = repair_pending(
+        unverified_path=unverified_path,
+        verified_path=verified_path,
+        provider=prov,
+        model=mod,
+        total_slices=args.total_slices,
+        slice_index=args.slice_index,
+        slice_seed=args.slice_seed,
+        pacing_delay=args.pacing_delay,
+        max_images=args.max_images,
+    )
+
+    total_time = time.time() - session_start
+    total_verified = len(load_completed_ids(verified_path))
+
+    if args.git_sync_every > 0 and result["repaired_and_promoted"] > 0:
+        try:
+            sync_and_push(
+                [verified_path],
+                f"trace-repair: +{result['repaired_and_promoted']} repaired & promoted",
+            )
+        except Exception as e:
+            print(f"  [git-sync] unexpected error during sync: {e}", flush=True)
+
+    print("\n" + "=" * 70)
+    print("VERIFIER SELF-REPAIR SESSION SUMMARY")
+    print("=" * 70)
+    print(f"* Unverified at start : {result['pending_repair']}")
+    print(f"* Repaired & Promoted : {result['repaired_and_promoted']}")
+    print(f"* Still Unverified    : {result['still_unverified']}")
+    print(f"* Total Verified File : {total_verified}")
+    print(f"* Session Duration    : {total_time / 60:.1f} minutes")
+    print(f"* Output File         : {verified_path}")
     print("=" * 70 + "\n")
 
 
@@ -592,8 +674,19 @@ def parse_args() -> argparse.Namespace:
         "--mode",
         type=str,
         default="generate",
-        choices=["generate", "verify"],
-        help="Operational mode: 'generate' (LangGraph traces) or 'verify' (cross-family verification). Default: generate",
+        choices=["generate", "verify", "repair", "clean"],
+        help="Operational mode: 'generate' (traces), 'verify' (strict pass), 'repair' (intelligent verifier repair), 'clean' (purge corruption). Default: generate",
+    )
+    parser.add_argument(
+        "--clean-corrupted",
+        action="store_true",
+        help="Scan and purge historical multi-blob / XML artifact traces and failed generations before processing",
+    )
+    parser.add_argument(
+        "--purge-failed",
+        action="store_true",
+        default=True,
+        help="Purge generation_failed entries during cleaning so image IDs can be cleanly regenerated without duplicates",
     )
     parser.add_argument(
         "--output",
@@ -806,10 +899,17 @@ def main() -> None:
         os.environ[f"{g_prefix}_IMAGE_MAX_DIM"] = str(args.image_max_dim)
         os.environ[f"{v_prefix}_IMAGE_MAX_DIM"] = str(args.image_max_dim)
 
+    if getattr(args, "clean_corrupted", False) or args.mode == "clean":
+        run_clean(args, cfg)
+        if args.mode == "clean":
+            return
+
     if args.mode == "generate":
         run_generate(args, cfg)
     elif args.mode == "verify":
         run_verify(args, cfg)
+    elif args.mode == "repair":
+        run_repair(args, cfg)
 
 
 if __name__ == "__main__":

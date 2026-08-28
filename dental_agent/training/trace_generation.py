@@ -94,11 +94,23 @@ def _resolve_verifier() -> tuple[str, str]:
 
 
 VERIFIER_SYSTEM_PROMPT = (
-    "You are a strict verifier, not a rewriter. Given an X-ray image, the KNOWN correct "
-    "ground truth, and a candidate multi-turn reasoning trace, judge ONLY whether every claim "
-    "in the trace is actually supported by the image and the tools used. Reject any trace asserting "
-    "things that cannot be seen in the visual evidence, even if the final answer is technically correct.\n"
-    'Respond with EXACTLY ONE JSON object and NO OTHER TEXT: {"grounded": true, "reason": "..."}.'
+    "You are a strict, expert dental radiologist verifier. Given a panoramic dental radiograph, "
+    "the KNOWN ground-truth findings, and a candidate diagnostic reasoning trace:\n"
+    "1. Judge whether the reasoning, tooth localization, and diagnostic claims are clinically accurate and supported by the visual evidence.\n"
+    "2. NUDGE AWARENESS: Note that `nudge_crop` is an intentional self-correction tool used to refine bounding box alignment. Using nudge_crop or recovering from a slightly offset initial crop is valid expert radiologist behavior and must NOT be rejected.\n"
+    "3. MULTI-LINE REASONING: Detailed multi-line clinical thought processes (analyzing radiolucency, enamel margins, alveolar bone, etc.) are valid and encouraged.\n"
+    "4. MULTI-BLOB / FORMATTING REJECTION: Reject traces that contain unparsed XML artifacts (e.g. `<fake_tool_call>`), fabricate multiple action outputs in a single turn without execution, or contradict the ground-truth pathology.\n"
+    'Respond with EXACTLY ONE JSON object: {"grounded": true|false, "reason": "<concise explanation>"}.'
+)
+
+VERIFIER_REPAIR_SYSTEM_PROMPT = (
+    "You are an expert dental radiology editor and clinical teacher. Your task is to repair and clean a candidate diagnostic trace that failed verification.\n\n"
+    "GUIDELINES FOR REPAIR:\n"
+    "1. Ground Truth Alignment: Ensure the final diagnosis and FDI tooth notation (Quadrant 1-4, Position 1-8) strictly match the verified Ground Truth findings.\n"
+    "2. Preserve Chain of Thought: Retain and refine multi-line clinical reasoning (evaluating radiolucency, crown margins, bone level, pulp depth). Do NOT strip clinical reasoning into a dry single line.\n"
+    "3. Clean Multi-Blob & XML Artifacts: Remove any historical pseudo-tool calls, fabricated observations in the same turn, or unparsed XML tags (`<fake_tool_call>`, `<tool_call>`). Ensure clean, valid JSON formatted turns.\n"
+    "4. Nudge & Tool Consistency: Maintain valid tool sequence flow (e.g. locate_tooth -> zoom_crop -> [nudge_crop] -> final_answer).\n\n"
+    "Respond with the complete, repaired trace JSON object: {\"thought\": \"<repaired clinical reasoning>\", \"final_answer\": [{\"quadrant\": ..., \"tooth_position\": ..., \"diagnosis\": ..., \"confidence\": ...}]}"
 )
 
 
@@ -592,8 +604,15 @@ def verify_pending(
     images_df: pd.DataFrame | None = None,
     call_llm_fn: Callable[..., str] = call_llm,
     max_repairs: int = 1,
+    total_slices: int = 1,
+    slice_index: int = 1,
+    slice_seed: int = 42,
+    pacing_delay: float = 1.5,
+    max_images: int | None = None,
+    provider: str | None = None,
+    model: str | None = None,
 ) -> dict[str, int]:
-    """Read unverified traces, verify each concurrently, and append passing traces to the verified file."""
+    """Read unverified traces, verify each, and append passing traces to the verified file."""
     unverified_path = Path(unverified_path)
     verified_path = Path(verified_path)
 
@@ -611,9 +630,6 @@ def verify_pending(
                 try:
                     record = json.loads(line)
                     if "image_id" in record:
-                        # .get("dataset", "dentex"): every trace record before this
-                        # field existed was DENTEX-only, so that's the correct
-                        # default for old files, not just an arbitrary fallback.
                         verified_ids.add((record.get("dataset", "dentex"), int(record["image_id"])))
                 except Exception:
                     pass
@@ -629,22 +645,34 @@ def verify_pending(
                 img_id = int(record.get("image_id", -1))
                 record_dataset = record.get("dataset", "dentex")
                 status = record.get("status", "")
-                if (record_dataset, img_id) not in verified_ids and status == "unverified":
+                if (record_dataset, img_id) not in verified_ids and status != "generation_failed":
                     pending.append(record)
             except Exception:
                 pass
+
+    if total_slices > 1 and len(pending) > 0:
+        all_ids = sorted(list({int(r.get("image_id", -1)) for r in pending if int(r.get("image_id", -1)) >= 0}))
+        from dental_agent.data.slicing import compute_slice_assignment
+        assigned_slice = compute_slice_assignment(all_ids, total_slices, slice_seed)
+        slice_target_ids = {img_id for img_id, sl in assigned_slice.items() if sl == (slice_index - 1)}
+        pending = [r for r in pending if int(r.get("image_id", -1)) in slice_target_ids]
+        print(f"  [Slice {slice_index}/{total_slices}] Filtered to {len(pending)} pending traces for this worker.")
+
+    if max_images is not None and max_images > 0:
+        pending = pending[:max_images]
+        print(f"  [Max Images] Limited verification session to {len(pending)} traces.")
 
     print(f"Verification: {len(pending)} pending, {len(verified_ids)} already verified")
 
     n_verified = 0
     n_rejected = 0
     file_lock = threading.Lock()
-    
-    # Section 6: Concurrent Dispatch (Serialized to protect API keys)
     max_workers = 1
-    print(f"Starting ThreadPoolExecutor with {max_workers} workers to prevent rate-limit bans.")
 
     def process_record(record, idx):
+        if pacing_delay > 0 and idx > 1:
+            time.sleep(pacing_delay)
+
         image_id = int(record["image_id"])
         image_path = record.get("image_path", "")
         ground_truth = record.get("ground_truth", [])
@@ -656,7 +684,15 @@ def verify_pending(
 
         try:
             image = Image.open(image_path).convert("RGB")
-            v_result = verify_trace(image, ground_truth, trajectory, call_llm_fn=call_llm_fn, max_repairs=max_repairs)
+            v_result = verify_trace(
+                image,
+                ground_truth,
+                trajectory,
+                provider=provider,
+                model=model,
+                call_llm_fn=call_llm_fn,
+                max_repairs=max_repairs,
+            )
             
             if v_result.get("grounded"):
                 trajectory["verifier_reason"] = v_result.get("reason")
@@ -704,9 +740,6 @@ def verify_pending(
                     for f in futures:
                         f.cancel()
                     break
-                except Exception as e:
-                    n_rejected += 1
-                    print(f"  [Img {record['image_id']}] ERROR ({e})", flush=True)
     except KeyboardInterrupt:
         print("\nVerification interrupted.")
 
@@ -714,6 +747,305 @@ def verify_pending(
         "pending": len(pending),
         "verified": n_verified,
         "rejected": n_rejected,
+    }
+
+
+def repair_and_clean_trace(
+    image: Image.Image,
+    ground_truth: list[dict[str, Any]],
+    record: dict[str, Any],
+    verifier_provider: str | None = None,
+    verifier_model: str | None = None,
+    call_llm_fn: Callable[..., str] = call_llm,
+) -> tuple[bool, dict[str, Any] | None, str]:
+    """Take an unverified/rejected trace, prompt the verifier model with VERIFIER_REPAIR_SYSTEM_PROMPT
+    along with ground truth and the original trace, clean out artifacts, and verify the repaired trace."""
+    v_prov, v_mod = (verifier_provider, verifier_model) if verifier_provider and verifier_model else _resolve_verifier()
+    
+    trajectory = record.get("trajectory") or record.get("partial_trajectory") or {}
+    messages = trajectory.get("messages", [])
+    assistant_msgs = [m.get("content", "") for m in messages if isinstance(m, dict) and m.get("role") == "assistant"]
+    trace_text = "\n\n".join(assistant_msgs) if assistant_msgs else json.dumps(trajectory)
+    
+    gt_text = json.dumps(ground_truth, indent=2)
+    user_prompt = (
+        f"GROUND TRUTH FINDINGS:\n{gt_text}\n\n"
+        f"CANDIDATE TRACE TO REPAIR:\n{trace_text}\n\n"
+        "Please rewrite and clean this diagnostic trace so it accurately reasons through the radiograph, "
+        "matches the ground truth FDI findings, and removes any multi-blob or XML artifacts."
+    )
+    
+    try:
+        raw_repaired = call_llm_fn(
+            v_prov,
+            v_mod,
+            VERIFIER_REPAIR_SYSTEM_PROMPT,
+            user_prompt,
+            image=image,
+            temperature=0.2,
+            max_tokens=4096,
+            label="repair_and_clean_trace",
+            role="verifier",
+        )
+    except Exception as e:
+        return False, None, f"Repair LLM call failed: {e}"
+        
+    parsed_repair = parse_agent_json(raw_repaired)
+    if not parsed_repair or not parsed_repair.get("final_answer"):
+        return False, None, "Repaired trace could not be parsed into valid final_answer schema"
+        
+    # Build updated trajectory
+    repaired_trajectory = dict(trajectory)
+    repaired_trajectory["final_answer"] = parsed_repair["final_answer"]
+    repaired_trajectory["repaired"] = True
+    
+    # Update messages
+    repaired_messages = list(messages) if messages else []
+    if repaired_messages and isinstance(repaired_messages[-1], dict) and repaired_messages[-1].get("role") == "assistant":
+        repaired_messages[-1]["content"] = raw_repaired
+    else:
+        repaired_messages.append({"role": "assistant", "content": raw_repaired})
+    repaired_trajectory["messages"] = repaired_messages
+
+    # Synchronize turns so downstream SFT and RL reward functions see the repaired output
+    if "turns" in repaired_trajectory and isinstance(repaired_trajectory["turns"], list) and len(repaired_trajectory["turns"]) > 0:
+        repaired_turns = list(repaired_trajectory["turns"])
+        if isinstance(repaired_turns[-1], dict):
+            last_turn = dict(repaired_turns[-1])
+            last_turn["raw_output"] = raw_repaired
+            last_turn["parsed"] = parsed_repair
+            repaired_turns[-1] = last_turn
+            repaired_trajectory["turns"] = repaired_turns
+    
+    # Re-verify the repaired trajectory
+    v_res = verify_trace(
+        image,
+        ground_truth,
+        repaired_trajectory,
+        provider=v_prov,
+        model=v_mod,
+        call_llm_fn=call_llm_fn,
+        max_repairs=0,
+    )
+    
+    if v_res.get("grounded"):
+        repaired_trajectory["verifier_reason"] = v_res.get("reason", "Verified after automated repair")
+        return True, repaired_trajectory, v_res.get("reason", "Repaired and verified")
+    else:
+        return False, None, f"Repaired trace failed verification: {v_res.get('reason')}"
+
+
+def repair_pending(
+    unverified_path: str | Path,
+    verified_path: str | Path,
+    images_df: pd.DataFrame | None = None,
+    provider: str | None = None,
+    model: str | None = None,
+    total_slices: int = 1,
+    slice_index: int = 1,
+    slice_seed: int = 42,
+    pacing_delay: float = 1.5,
+    max_images: int | None = None,
+    call_llm_fn: Callable[..., str] = call_llm,
+) -> dict[str, int]:
+    """Phase 2: Read all traces in unverified_path that have NOT yet been verified into verified_path,
+    attempt intelligent clinical repair and re-verification, and append passing traces to verified_path."""
+    unverified_path = Path(unverified_path)
+    verified_path = Path(verified_path)
+
+    if not unverified_path.exists():
+        print(f"No unverified trace file found at {unverified_path}")
+        return {"pending_repair": 0, "repaired_and_promoted": 0, "still_unverified": 0}
+
+    verified_ids: set[tuple[str, int]] = set()
+    if verified_path.exists():
+        with open(verified_path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                    if "image_id" in record:
+                        verified_ids.add((record.get("dataset", "dentex"), int(record["image_id"])))
+                except Exception:
+                    pass
+
+    needs_repair = []
+    with open(unverified_path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+                img_id = int(record.get("image_id", -1))
+                rec_dataset = record.get("dataset", "dentex")
+                if (rec_dataset, img_id) not in verified_ids:
+                    needs_repair.append(record)
+            except Exception:
+                pass
+
+    if total_slices > 1 and len(needs_repair) > 0:
+        all_ids = sorted(list({int(r.get("image_id", -1)) for r in needs_repair if int(r.get("image_id", -1)) >= 0}))
+        from dental_agent.data.slicing import compute_slice_assignment
+        assigned_slice = compute_slice_assignment(all_ids, total_slices, slice_seed)
+        slice_target_ids = {img_id for img_id, sl in assigned_slice.items() if sl == (slice_index - 1)}
+        needs_repair = [r for r in needs_repair if int(r.get("image_id", -1)) in slice_target_ids]
+        print(f"  [Slice {slice_index}/{total_slices}] Filtered to {len(needs_repair)} traces for repair on this worker.")
+
+    if max_images is not None and max_images > 0:
+        needs_repair = needs_repair[:max_images]
+        print(f"  [Max Images] Limited repair session to {len(needs_repair)} traces.")
+
+    print(f"\n--- Phase 2: Verifier Self-Repair & Editor Pass ---")
+    print(f"Targeting {len(needs_repair)} unverified/rejected traces for intelligent clinical repair...")
+
+    n_promoted = 0
+    n_failed = 0
+
+    for idx, record in enumerate(needs_repair, start=1):
+        if pacing_delay > 0 and idx > 1:
+            time.sleep(pacing_delay)
+
+        img_id = int(record.get("image_id", -1))
+        img_path = record.get("image_path", "")
+        ground_truth = record.get("ground_truth", [])
+        dataset_name = record.get("dataset", "dentex")
+
+        if not os.path.exists(str(img_path)):
+            print(f"[{idx}/{len(needs_repair)}] Img {img_id}: image missing ({img_path}). Skipping.")
+            n_failed += 1
+            continue
+
+        try:
+            image = Image.open(img_path).convert("RGB")
+            ok, repaired_traj, reason = repair_and_clean_trace(
+                image,
+                ground_truth,
+                record,
+                verifier_provider=provider,
+                verifier_model=model,
+                call_llm_fn=call_llm_fn,
+            )
+
+            if ok and repaired_traj is not None:
+                repaired_traj["image_id"] = img_id
+                repaired_traj["image_path"] = img_path
+                repaired_traj["ground_truth"] = ground_truth
+                repaired_traj["dataset"] = dataset_name
+                repaired_traj["status"] = "verified"
+
+                verified_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(verified_path, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(to_jsonable(repaired_traj)) + "\n")
+
+                verified_ids.add((dataset_name, img_id))
+                n_promoted += 1
+                print(f"[{idx}/{len(needs_repair)}] Img {img_id}: REPAIRED & VERIFIED ({reason[:60]})", flush=True)
+            else:
+                n_failed += 1
+                print(f"[{idx}/{len(needs_repair)}] Img {img_id}: REPAIR FAILED ({reason[:60]})", flush=True)
+
+        except Exception as e:
+            from dental_agent.training.api_pool import RPDLimitExhausted
+            if isinstance(e, RPDLimitExhausted):
+                print(f"\n[RPD LIMIT REACHED] {e}")
+                break
+            n_failed += 1
+            print(f"[{idx}/{len(needs_repair)}] Img {img_id}: ERROR ({e})", flush=True)
+
+    print(f"\nRepair Pass Complete: {n_promoted} promoted, {n_failed} remaining unverified.")
+    return {
+        "pending_repair": len(needs_repair),
+        "repaired_and_promoted": n_promoted,
+        "still_unverified": n_failed,
+    }
+
+
+def clean_unverified_traces(
+    unverified_path: str | Path,
+    backup: bool = True,
+    purge_failed: bool = True,
+) -> dict[str, int]:
+    """Scan and clean train_cot_traces_unverified.jsonl to purge historical multi-blob
+    tool hallucinations, XML artifacts, and generation_failed entries. Deduplicates keeping
+    the latest/most recent entry per image ID."""
+    unverified_path = Path(unverified_path)
+    if not unverified_path.exists():
+        print(f"No file found at {unverified_path}")
+        return {"kept": 0, "corrupted": 0, "failed": 0}
+
+    if backup:
+        backup_path = unverified_path.with_suffix(".jsonl.bak")
+        try:
+            import shutil
+            shutil.copy2(unverified_path, backup_path)
+            print(f"  [Backup] Created backup at {backup_path.name}")
+        except Exception as e:
+            print(f"  [WARN] Failed to create backup: {e}")
+
+    kept_map: dict[tuple[str, int], dict[str, Any]] = {}
+    n_corrupted = 0
+    n_failed = 0
+
+    with open(unverified_path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except Exception:
+                n_corrupted += 1
+                continue
+
+            img_id = rec.get("image_id")
+            rec_dataset = rec.get("dataset", "dentex")
+            status = rec.get("status", "")
+
+            # 1. Purge failed generations to prevent duplicate ID collisions on retry
+            if status == "generation_failed" and purge_failed:
+                n_failed += 1
+                continue
+
+            # 2. Check for XML artifacts or pseudo-tool hallucinations in turns
+            traj = rec.get("trajectory", {})
+            turns = traj.get("turns", []) if isinstance(traj, dict) else []
+            messages = traj.get("messages", []) if isinstance(traj, dict) else []
+
+            raw_texts = []
+            for t in turns:
+                if isinstance(t, dict):
+                    raw_texts.append(t.get("raw_output", ""))
+            for m in messages:
+                if isinstance(m, dict) and m.get("role") == "assistant":
+                    raw_texts.append(m.get("content", ""))
+
+            combined_text = "\n".join(raw_texts)
+            has_corrupt_xml = "<fake_tool_call>" in combined_text or "<tool_call>" in combined_text
+            has_multi_blob = combined_text.count('"action":') > 3 and combined_text.count('"turn":') <= 1
+
+            if has_corrupt_xml or has_multi_blob:
+                n_corrupted += 1
+                continue
+
+            key = (rec_dataset, img_id)
+            # Latest entry replaces earlier entry in the file
+            kept_map[key] = rec
+
+    kept_records = list(kept_map.values())
+
+    # Write cleaned records back
+    with open(unverified_path, "w", encoding="utf-8") as f:
+        for r in kept_records:
+            f.write(json.dumps(to_jsonable(r)) + "\n")
+
+    print(f"Trace Cleaner: {len(kept_records)} valid traces kept, {n_corrupted} corrupted purged, {n_failed} failed purged.")
+    return {
+        "kept": len(kept_records),
+        "corrupted": n_corrupted,
+        "failed": n_failed,
     }
 
 

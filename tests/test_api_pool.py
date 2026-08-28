@@ -74,8 +74,10 @@ def test_call_llm_image_max_dim(mock_get_client, mock_thumbnail):
     dummy_img = Image.new('RGB', (2000, 2000))
     
     # 1. Groq uses default 1280 if not set in os.environ
-    call_llm(provider="groq", model="groq", system_prompt="", user_content="test", image=dummy_img)
-    mock_thumbnail.assert_called_with((1280, 1280), Image.Resampling.LANCZOS)
+    env_without_dim = {k: v for k, v in os.environ.items() if k != "GROQ_IMAGE_MAX_DIM"}
+    with patch.dict(os.environ, env_without_dim, clear=True):
+        call_llm(provider="groq", model="groq", system_prompt="", user_content="test", image=dummy_img)
+        mock_thumbnail.assert_called_with((1280, 1280), Image.Resampling.LANCZOS)
     mock_thumbnail.reset_mock()
     
     # 2. Local vLLM uses default 0 (no scaling)

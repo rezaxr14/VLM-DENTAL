@@ -109,6 +109,9 @@ def parse_zero_shot_response(text: str) -> dict[str, Any] | list[dict[str, Any]]
 
     import re
     cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.IGNORECASE | re.DOTALL).strip()
+    if not cleaned or (len(cleaned) < 5 and "<think>" in text):
+        # Fallback: model might have put JSON inside unclosed <think> or entire text
+        cleaned = text
 
     # 1. Try markdown code block extraction
     code_blocks = re.findall(r"```(?:json)?\s*([\s\S]*?)\s*```", cleaned, re.IGNORECASE)
@@ -127,34 +130,35 @@ def parse_zero_shot_response(text: str) -> dict[str, Any] | list[dict[str, Any]]
             except Exception:
                 pass
 
-    # 2. Extract balanced JSON objects
-    stack = []
-    start = -1
-    in_string = False
-    escape = False
+    # 2. Extract balanced JSON objects from cleaned and full text
     candidates = []
+    for source_text in (cleaned, text):
+        stack = []
+        start = -1
+        in_string = False
+        escape = False
 
-    for i, char in enumerate(cleaned):
-        if escape:
-            escape = False
-            continue
-        if char == '\\':
-            escape = True
-            continue
-        if char == '"':
-            in_string = not in_string
-            continue
-        if not in_string:
-            if char in ('{', '['):
-                if not stack:
-                    start = i
-                stack.append(char)
-            elif char in ('}', ']'):
-                if stack:
-                    opener = stack.pop()
-                    if not stack and start != -1:
-                        candidates.append(cleaned[start:i + 1])
-                        start = -1
+        for i, char in enumerate(source_text):
+            if escape:
+                escape = False
+                continue
+            if char == '\\':
+                escape = True
+                continue
+            if char == '"':
+                in_string = not in_string
+                continue
+            if not in_string:
+                if char in ('{', '['):
+                    if not stack:
+                        start = i
+                    stack.append(char)
+                elif char in ('}', ']'):
+                    if stack:
+                        opener = stack.pop()
+                        if not stack and start != -1:
+                            candidates.append(source_text[start:i + 1])
+                            start = -1
 
     for cand in reversed(candidates):
         try:
@@ -171,7 +175,51 @@ def parse_zero_shot_response(text: str) -> dict[str, Any] | list[dict[str, Any]]
                 pass
 
     # 3. Fallback to parse_agent_json
-    return parse_agent_json(text)
+    agent_res = parse_agent_json(text)
+    if agent_res:
+        return agent_res
+
+    # 4. Fallback to reasoning text clinical finding extraction
+    text_findings = extract_findings_from_reasoning_text(text)
+    if text_findings:
+        return {"findings": text_findings}
+
+    return None
+
+
+def extract_findings_from_reasoning_text(text: str) -> list[dict]:
+    """Fallback extractor when a reasoning model (e.g. Qwen 3.6) produces rich clinical
+    reasoning but is truncated before completing its final JSON structure."""
+    if not text or not isinstance(text, str):
+        return []
+
+    import re
+    findings = []
+    seen = set()
+
+    # Match patterns like:
+    # "Tooth 18 ... Impacted", "Tooth 48: Diagnosis: Impacted Tooth", "Tooth 38 is impacted"
+    patterns = [
+        r"(?:Tooth|FDI|tooth)\s*([1-4])([1-8])\b[^\.\n]*?(?:diagnosis|diagnosed as|consistent with|shows|is|appears)?\s*[:\-]?\s*(Impacted(?: Tooth)?|Deep Caries|Caries|Periapical Lesion)",
+        r"(?:Tooth|FDI|tooth)\s*([1-4])([1-8])\b[^\.\n]*?\b(impacted|caries|deep caries|periapical lesion)\b",
+        r"\b([1-4])([1-8])\s*(?:is|looks|appears)?\s*(impacted|caries|deep caries|periapical lesion)",
+    ]
+
+    for pat in patterns:
+        for match in re.finditer(pat, text, re.IGNORECASE):
+            q = int(match.group(1))
+            pos = int(match.group(2))
+            raw_diag = match.group(3).strip()
+            key = (q, pos)
+            if key not in seen:
+                seen.add(key)
+                findings.append({
+                    "quadrant": q,
+                    "tooth_position": pos,
+                    "diagnosis": raw_diag,
+                    "confidence": 0.8,
+                })
+    return findings
 
 
 def match_zero_shot_finding(

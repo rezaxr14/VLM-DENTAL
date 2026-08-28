@@ -238,7 +238,7 @@ def score_candidate(jf: str, d: dict, split_name: str = "train") -> int:
     """Heuristic score: higher = more likely to be the fully-annotated file."""
     score = 0
     name = jf.lower()
-    if split_name in name or (split_name in ("val", "validation") and "val" in name):
+    if split_name in name or (split_name in ("val", "validation", "test") and ("val" in name or "validation" in name or "test" in name)):
         score += 2
     ann0 = d["annotations"][0] if d.get("annotations") else {}
     for key in ("category_id_1", "category_id_2", "category_id_3", "extra"):
@@ -301,17 +301,18 @@ def build_dataframes(
     images_df = pd.DataFrame(coco.get("images", []))
     annots_df = pd.DataFrame(coco.get("annotations", []))
     
-    raw_cats = (
-        coco.get("categories_3")
-        or coco.get("categories_disease")
-        or coco.get("categories")
-        or [
-            {"id": 0, "name": "Impacted", "supercategory": "Impacted"},
-            {"id": 1, "name": "Caries", "supercategory": "Caries"},
-            {"id": 2, "name": "Periapical Lesion", "supercategory": "Periapical Lesion"},
-            {"id": 3, "name": "Deep Caries", "supercategory": "Deep Caries"},
-        ]
-    )
+    raw_cats = coco.get("categories_3") or coco.get("categories_disease")
+    if not raw_cats:
+        cats_fallback = coco.get("categories", [])
+        if any(isinstance(c, dict) and c.get("name") in ("Impacted", "Caries", "Periapical Lesion", "Deep Caries") for c in cats_fallback):
+            raw_cats = cats_fallback
+        else:
+            raw_cats = [
+                {"id": 0, "name": "Impacted", "supercategory": "Impacted"},
+                {"id": 1, "name": "Caries", "supercategory": "Caries"},
+                {"id": 2, "name": "Periapical Lesion", "supercategory": "Periapical Lesion"},
+                {"id": 3, "name": "Deep Caries", "supercategory": "Deep Caries"},
+            ]
     categories_df = pd.DataFrame(raw_cats)
 
     # Ensure bbox is a plain list (for parquet serialization)

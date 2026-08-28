@@ -121,7 +121,8 @@ CLINICAL GUIDELINES:
    - tooth_position: 1 (Central Incisor) to 8 (Third Molar / Wisdom Tooth)
    - diagnosis: Exactly one of "Caries", "Deep Caries", "Periapical Lesion", "Impacted Tooth"
    - confidence: Probability score between 0.0 and 1.0
-3. First reason step-by-step through your visual observations (evaluating enamel radiolucency, pulp involvement, periapical radiolucency, and impactions), then summarize all findings in the final JSON object.
+3. Keep your clinical reasoning concise (under 100 words), then immediately summarize all findings in the final JSON object.
+4. You MUST finish your response with the valid JSON object.
 
 RESPONSE FORMAT (EXACTLY ONE JSON OBJECT):
 {
