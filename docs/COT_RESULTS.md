@@ -5,7 +5,26 @@
 
 ---
 
-## 1. Trace Generation System Prompts
+## 1. Trace Generation Models & Architecture
+
+The synthetic data generation leverages a two-phase architecture orchestrated by a LangGraph CoT loop:
+
+1. **Interactive CoT Trace Generation (With Tools):** 
+   - **Generator:** `GLM 5.3 Flash`
+   - **Verifier:** `MiniMax 3`
+2. **Standard CoT Trace Generation (Without Tools):** 
+   - **Generator:** `MiniMax 5.3`
+   - **Verifier:** `Gemini 3.5 Flash Lite` *(Note: Verification for traces without tools is currently pending/unstarted)*
+3. **Training Student:** Once verified, the traces are utilized to train the unified backbone policy: a **Qwen/Qwen3.5-9B** model serving as the Student in both Stage 1 SFT (QLoRA) and Stage 2 GRPO (dual-adapter RL).
+
+### Trace Quality & Repair Analytics
+- **Multi-Step Reasoning:** 100% of the verified interactive traces (678/678) exhibit profound multi-step reasoning, utilizing multiple turns to reach a diagnosis.
+- **Verifier Rigor:** The `MiniMax 3` verifier produces highly detailed, multi-sentence feedback that explicitly validates the agent's tool sequence (e.g., confirming appropriate usage of `nudge_crop` and `contralateral_compare`) against the clinical ground truth.
+- **Self-Healing Pipeline:** During the generation of these traces, 11 traces required active repair (successfully fixed via Cell 7f in the trace generation pipeline), highlighting the robustness of the automated generation loop in recovering from formatting or logic faults.
+
+---
+
+## 2. Trace Generation System Prompts
 
 To generate the high-quality synthetic diagnostic traces, we utilize specialized system prompts for each baseline and generation phase.
 
@@ -162,7 +181,7 @@ Respond with EXACTLY ONE JSON object: {"grounded": true|false, "reason": "<conci
 
 ---
 
-## 2. Quantitative Results & Tool Usage Analytics
+## 3. Quantitative Results & Tool Usage Analytics
 
 Our dynamic parser extracted tool utilization statistics across the verified interactive traces. The models actively utilize the 8 available tools to refine their confidence and localize findings.
 
@@ -198,7 +217,7 @@ Below are the updated charts reflecting the accurate 8-tool usage metrics:
 
 ---
 
-## 3. Qualitative Case Study: Dynamic Self-Correction (Image ID 462)
+## 4. Qualitative Case Study: Dynamic Self-Correction (Image ID 462)
 
 The most significant capability of the Interactive CoT policy is **self-correction**. Traditional VLMs fail when an object detector gives them a slightly off-center crop. Our agent uses `nudge_crop` to recenter its view before committing to a diagnosis.
 
@@ -228,7 +247,7 @@ Satisfied with the anatomical view, the agent immediately checks the contralater
 
 ---
 
-## 3b. Qualitative Case Study: Empty Crop Recovery (Image ID 401)
+## 4b. Qualitative Case Study: Empty Crop Recovery (Image ID 401)
 
 Another powerful capability of the Interactive CoT is recovering from false or empty localizations. If the detector predicts an empty box, the agent can heuristically nudge it to find the missing anatomy.
 
@@ -243,7 +262,7 @@ Instead of hallucinating a diagnosis from an empty crop or giving up, the agent 
 > **Agent's Exact Quote:**
 > *"The Q1T4 was found but its crop was empty - let me try a nudge_crop."*
 
-## 4. Full Extracted Trace Demos (For Paper Reproduction)
+## 5. Full Extracted Trace Demos (For Paper Reproduction)
 
 Below are 5 fully extracted, high-quality CoT traces containing the **actual tool results** (bounding boxes, coordinates, etc.). 
 
@@ -419,10 +438,10 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 4 
 ```
 
 **Result of window_level:**
-![Result of window_level](images/401_t1_turn2_i0_window_level.png)
+![Result of window_level](../examples/prompt_demos/paper_traces/images/401_t1_turn2_i0_window_level.png)
 
 **Result of enhance_contrast:**
-![Result of enhance_contrast](images/401_t1_turn2_i1_enhance_contrast.png)
+![Result of enhance_contrast](../examples/prompt_demos/paper_traces/images/401_t1_turn2_i1_enhance_contrast.png)
 
 ### Turn 3
 **Agent Output:**
@@ -491,10 +510,10 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 4 
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/401_t1_turn4_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/401_t1_turn4_i0_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/401_t1_turn4_i1_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/401_t1_turn4_i1_zoom_crop.png)
 
 ### Turn 5
 **Agent Output:**
@@ -594,13 +613,13 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 4 
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/401_t1_turn6_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/401_t1_turn6_i0_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/401_t1_turn6_i1_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/401_t1_turn6_i1_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/401_t1_turn6_i2_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/401_t1_turn6_i2_zoom_crop.png)
 
 ### Turn 7
 **Agent Output:**
@@ -757,10 +776,10 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 4 
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/401_t1_turn9_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/401_t1_turn9_i0_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/401_t1_turn9_i1_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/401_t1_turn9_i1_zoom_crop.png)
 
 **Result of locate_tooth:**
 ```json
@@ -819,10 +838,10 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 4 
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/401_t1_turn10_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/401_t1_turn10_i0_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/401_t1_turn10_i1_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/401_t1_turn10_i1_zoom_crop.png)
 
 **Result of locate_tooth:**
 ```json
@@ -887,13 +906,13 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 4 
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/401_t1_turn11_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/401_t1_turn11_i0_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/401_t1_turn11_i1_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/401_t1_turn11_i1_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/401_t1_turn11_i2_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/401_t1_turn11_i2_zoom_crop.png)
 
 **Result of locate_tooth:**
 ```json
@@ -1046,10 +1065,10 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 4 
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/401_t1_turn14_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/401_t1_turn14_i0_zoom_crop.png)
 
 **Result of contralateral_compare:**
-![Result of contralateral_compare](images/401_t1_turn14_i1_contralateral_compare.png)
+![Result of contralateral_compare](../examples/prompt_demos/paper_traces/images/401_t1_turn14_i1_contralateral_compare.png)
 
 **Result of locate_tooth:**
 ```json
@@ -1146,13 +1165,13 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 4 
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/401_t1_turn16_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/401_t1_turn16_i0_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/401_t1_turn16_i1_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/401_t1_turn16_i1_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/401_t1_turn16_i2_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/401_t1_turn16_i2_zoom_crop.png)
 
 ### Turn 17
 **Agent Output:**
@@ -1184,7 +1203,7 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 4 
 ```
 
 **Result of denoise:**
-![Result of denoise](images/401_t1_turn17_i0_denoise.png)
+![Result of denoise](../examples/prompt_demos/paper_traces/images/401_t1_turn17_i0_denoise.png)
 
 **Result of locate_tooth:**
 ```json
@@ -1255,16 +1274,16 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 4 
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/401_t1_turn18_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/401_t1_turn18_i0_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/401_t1_turn18_i1_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/401_t1_turn18_i1_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/401_t1_turn18_i2_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/401_t1_turn18_i2_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/401_t1_turn18_i3_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/401_t1_turn18_i3_zoom_crop.png)
 
 ### Turn 19
 **Agent Output:**
@@ -1341,10 +1360,10 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 4 
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/401_t1_turn20_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/401_t1_turn20_i0_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/401_t1_turn20_i1_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/401_t1_turn20_i1_zoom_crop.png)
 
 ### Turn 21
 **Agent Output:**
@@ -1436,13 +1455,13 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 4 
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/401_t1_turn22_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/401_t1_turn22_i0_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/401_t1_turn22_i1_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/401_t1_turn22_i1_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/401_t1_turn22_i2_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/401_t1_turn22_i2_zoom_crop.png)
 
 ### Turn 23
 **Agent Output:**
@@ -1486,7 +1505,7 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 4 
 ```
 
 **Result of contralateral_compare:**
-![Result of contralateral_compare](images/401_t1_turn23_i1_contralateral_compare.png)
+![Result of contralateral_compare](../examples/prompt_demos/paper_traces/images/401_t1_turn23_i1_contralateral_compare.png)
 
 ### Turn 24
 **Agent Output:**
@@ -1535,13 +1554,13 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 4 
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/401_t1_turn24_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/401_t1_turn24_i0_zoom_crop.png)
 
 **Result of contralateral_compare:**
-![Result of contralateral_compare](images/401_t1_turn24_i1_contralateral_compare.png)
+![Result of contralateral_compare](../examples/prompt_demos/paper_traces/images/401_t1_turn24_i1_contralateral_compare.png)
 
 **Result of contralateral_compare:**
-![Result of contralateral_compare](images/401_t1_turn24_i2_contralateral_compare.png)
+![Result of contralateral_compare](../examples/prompt_demos/paper_traces/images/401_t1_turn24_i2_contralateral_compare.png)
 
 ### Turn 25
 **Agent Output:**
@@ -1566,7 +1585,7 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 4 
 ```
 
 **Result of contralateral_compare:**
-![Result of contralateral_compare](images/401_t1_turn25_i0_contralateral_compare.png)
+![Result of contralateral_compare](../examples/prompt_demos/paper_traces/images/401_t1_turn25_i0_contralateral_compare.png)
 
 ### Turn 26
 **Agent Output:**
@@ -1838,7 +1857,7 @@ This interactive trace exemplifies rigorous clinical validation. Over the course
 ```
 
 **Result of window_level:**
-![Result of window_level](images/536_t2_turn2_i0_window_level.png)
+![Result of window_level](../examples/prompt_demos/paper_traces/images/536_t2_turn2_i0_window_level.png)
 
 ### Turn 3
 **Agent Output:**
@@ -1987,10 +2006,10 @@ This interactive trace exemplifies rigorous clinical validation. Over the course
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/536_t2_turn5_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/536_t2_turn5_i0_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/536_t2_turn5_i1_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/536_t2_turn5_i1_zoom_crop.png)
 
 ### Turn 6
 **Agent Output:**
@@ -2027,10 +2046,10 @@ This interactive trace exemplifies rigorous clinical validation. Over the course
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/536_t2_turn6_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/536_t2_turn6_i0_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/536_t2_turn6_i1_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/536_t2_turn6_i1_zoom_crop.png)
 
 ### Turn 7
 **Agent Output:**
@@ -2203,16 +2222,16 @@ This interactive trace exemplifies rigorous clinical validation. Over the course
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/536_t2_turn9_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/536_t2_turn9_i0_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/536_t2_turn9_i1_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/536_t2_turn9_i1_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/536_t2_turn9_i2_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/536_t2_turn9_i2_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/536_t2_turn9_i3_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/536_t2_turn9_i3_zoom_crop.png)
 
 ### Turn 10
 **Agent Output:**
@@ -2385,16 +2404,16 @@ This interactive trace exemplifies rigorous clinical validation. Over the course
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/536_t2_turn12_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/536_t2_turn12_i0_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/536_t2_turn12_i1_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/536_t2_turn12_i1_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/536_t2_turn12_i2_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/536_t2_turn12_i2_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/536_t2_turn12_i3_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/536_t2_turn12_i3_zoom_crop.png)
 
 ### Turn 13
 **Agent Output:**
@@ -2431,10 +2450,10 @@ This interactive trace exemplifies rigorous clinical validation. Over the course
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/536_t2_turn13_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/536_t2_turn13_i0_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/536_t2_turn13_i1_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/536_t2_turn13_i1_zoom_crop.png)
 
 ### Turn 14
 **Agent Output:**
@@ -2471,10 +2490,10 @@ This interactive trace exemplifies rigorous clinical validation. Over the course
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/536_t2_turn14_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/536_t2_turn14_i0_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/536_t2_turn14_i1_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/536_t2_turn14_i1_zoom_crop.png)
 
 ### Turn 15
 **Agent Output:**
@@ -2511,10 +2530,10 @@ This interactive trace exemplifies rigorous clinical validation. Over the course
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/536_t2_turn15_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/536_t2_turn15_i0_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/536_t2_turn15_i1_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/536_t2_turn15_i1_zoom_crop.png)
 
 ### Turn 16
 **Agent Output:**
@@ -2551,10 +2570,10 @@ This interactive trace exemplifies rigorous clinical validation. Over the course
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/536_t2_turn16_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/536_t2_turn16_i0_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/536_t2_turn16_i1_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/536_t2_turn16_i1_zoom_crop.png)
 
 ### Turn 17
 **Agent Output:**
@@ -2591,10 +2610,10 @@ This interactive trace exemplifies rigorous clinical validation. Over the course
 ```
 
 **Result of contralateral_compare:**
-![Result of contralateral_compare](images/536_t2_turn17_i0_contralateral_compare.png)
+![Result of contralateral_compare](../examples/prompt_demos/paper_traces/images/536_t2_turn17_i0_contralateral_compare.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/536_t2_turn17_i1_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/536_t2_turn17_i1_zoom_crop.png)
 
 ### Turn 18
 **Agent Output:**
@@ -2631,10 +2650,10 @@ This interactive trace exemplifies rigorous clinical validation. Over the course
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/536_t2_turn18_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/536_t2_turn18_i0_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/536_t2_turn18_i1_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/536_t2_turn18_i1_zoom_crop.png)
 
 ### Turn 19
 **Agent Output:**
@@ -2671,10 +2690,10 @@ This interactive trace exemplifies rigorous clinical validation. Over the course
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/536_t2_turn19_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/536_t2_turn19_i0_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/536_t2_turn19_i1_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/536_t2_turn19_i1_zoom_crop.png)
 
 ### Turn 20
 **Agent Output:**
@@ -2705,10 +2724,10 @@ This interactive trace exemplifies rigorous clinical validation. Over the course
 ```
 
 **Result of contralateral_compare:**
-![Result of contralateral_compare](images/536_t2_turn20_i0_contralateral_compare.png)
+![Result of contralateral_compare](../examples/prompt_demos/paper_traces/images/536_t2_turn20_i0_contralateral_compare.png)
 
 **Result of enhance_contrast:**
-![Result of enhance_contrast](images/536_t2_turn20_i1_enhance_contrast.png)
+![Result of enhance_contrast](../examples/prompt_demos/paper_traces/images/536_t2_turn20_i1_enhance_contrast.png)
 
 ### Turn 21
 **Agent Output:**
@@ -2745,10 +2764,10 @@ This interactive trace exemplifies rigorous clinical validation. Over the course
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/536_t2_turn21_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/536_t2_turn21_i0_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/536_t2_turn21_i1_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/536_t2_turn21_i1_zoom_crop.png)
 
 ### Turn 22
 **Agent Output:**
@@ -2785,10 +2804,10 @@ This interactive trace exemplifies rigorous clinical validation. Over the course
 ```
 
 **Result of contralateral_compare:**
-![Result of contralateral_compare](images/536_t2_turn22_i0_contralateral_compare.png)
+![Result of contralateral_compare](../examples/prompt_demos/paper_traces/images/536_t2_turn22_i0_contralateral_compare.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/536_t2_turn22_i1_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/536_t2_turn22_i1_zoom_crop.png)
 
 ### Turn 23
 **Agent Output:**
@@ -2825,10 +2844,10 @@ This interactive trace exemplifies rigorous clinical validation. Over the course
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/536_t2_turn23_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/536_t2_turn23_i0_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/536_t2_turn23_i1_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/536_t2_turn23_i1_zoom_crop.png)
 
 ### Turn 24
 **Agent Output:**
@@ -2865,10 +2884,10 @@ This interactive trace exemplifies rigorous clinical validation. Over the course
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/536_t2_turn24_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/536_t2_turn24_i0_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/536_t2_turn24_i1_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/536_t2_turn24_i1_zoom_crop.png)
 
 ### Turn 25
 **Agent Output:**
@@ -2900,10 +2919,10 @@ This interactive trace exemplifies rigorous clinical validation. Over the course
 ```
 
 **Result of denoise:**
-![Result of denoise](images/536_t2_turn25_i0_denoise.png)
+![Result of denoise](../examples/prompt_demos/paper_traces/images/536_t2_turn25_i0_denoise.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/536_t2_turn25_i1_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/536_t2_turn25_i1_zoom_crop.png)
 
 ### Turn 26
 **Agent Output:**
@@ -2940,10 +2959,10 @@ This interactive trace exemplifies rigorous clinical validation. Over the course
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/536_t2_turn26_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/536_t2_turn26_i0_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/536_t2_turn26_i1_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/536_t2_turn26_i1_zoom_crop.png)
 
 ### Turn 27
 **Agent Output:**
@@ -2980,10 +2999,10 @@ This interactive trace exemplifies rigorous clinical validation. Over the course
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/536_t2_turn27_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/536_t2_turn27_i0_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/536_t2_turn27_i1_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/536_t2_turn27_i1_zoom_crop.png)
 
 ### Turn 28
 **Agent Output:**
@@ -3020,10 +3039,10 @@ This interactive trace exemplifies rigorous clinical validation. Over the course
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/536_t2_turn28_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/536_t2_turn28_i0_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/536_t2_turn28_i1_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/536_t2_turn28_i1_zoom_crop.png)
 
 ### Turn 29
 **Agent Output:**
@@ -3308,7 +3327,7 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 3 
 ```
 
 **Result of window_level:**
-![Result of window_level](images/255_t3_turn2_i0_window_level.png)
+![Result of window_level](../examples/prompt_demos/paper_traces/images/255_t3_turn2_i0_window_level.png)
 
 ### Turn 3
 **Agent Output:**
@@ -3419,16 +3438,16 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 3 
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/255_t3_turn4_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/255_t3_turn4_i0_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/255_t3_turn4_i1_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/255_t3_turn4_i1_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/255_t3_turn4_i2_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/255_t3_turn4_i2_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/255_t3_turn4_i3_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/255_t3_turn4_i3_zoom_crop.png)
 
 ### Turn 5
 **Agent Output:**
@@ -3465,7 +3484,7 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 3 
 ```
 
 **Result of enhance_contrast:**
-![Result of enhance_contrast](images/255_t3_turn5_i0_enhance_contrast.png)
+![Result of enhance_contrast](../examples/prompt_demos/paper_traces/images/255_t3_turn5_i0_enhance_contrast.png)
 
 **Result of locate_tooth:**
 ```json
@@ -3591,10 +3610,10 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 3 
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/255_t3_turn7_i2_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/255_t3_turn7_i2_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/255_t3_turn7_i3_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/255_t3_turn7_i3_zoom_crop.png)
 
 ### Turn 8
 **Agent Output:**
@@ -3651,15 +3670,15 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 3 
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/255_t3_turn8_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/255_t3_turn8_i0_zoom_crop.png)
 
 **Result of zoom_crop:** `[Image Output Error: Coordinate 'right' is less than 'left']`
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/255_t3_turn8_i2_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/255_t3_turn8_i2_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/255_t3_turn8_i3_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/255_t3_turn8_i3_zoom_crop.png)
 
 ### Turn 9
 **Agent Output:**
@@ -3712,15 +3731,15 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 3 
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/255_t3_turn9_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/255_t3_turn9_i0_zoom_crop.png)
 
 **Result of zoom_crop:** `[Image Output Error: Coordinate 'right' is less than 'left']`
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/255_t3_turn9_i2_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/255_t3_turn9_i2_zoom_crop.png)
 
 **Result of denoise:**
-![Result of denoise](images/255_t3_turn9_i3_denoise.png)
+![Result of denoise](../examples/prompt_demos/paper_traces/images/255_t3_turn9_i3_denoise.png)
 
 ### Turn 10
 **Agent Output:**
@@ -3779,7 +3798,7 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 3 
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/255_t3_turn10_i2_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/255_t3_turn10_i2_zoom_crop.png)
 
 **Result of zoom_crop:** `[Image Output Error: Coordinate 'right' is less than 'left']`
 
@@ -3829,13 +3848,13 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 3 
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/255_t3_turn11_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/255_t3_turn11_i0_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/255_t3_turn11_i1_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/255_t3_turn11_i1_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/255_t3_turn11_i2_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/255_t3_turn11_i2_zoom_crop.png)
 
 ### Turn 12
 **Agent Output:**
@@ -3884,13 +3903,13 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 3 
 ```
 
 **Result of contralateral_compare:**
-![Result of contralateral_compare](images/255_t3_turn12_i0_contralateral_compare.png)
+![Result of contralateral_compare](../examples/prompt_demos/paper_traces/images/255_t3_turn12_i0_contralateral_compare.png)
 
 **Result of contralateral_compare:**
-![Result of contralateral_compare](images/255_t3_turn12_i1_contralateral_compare.png)
+![Result of contralateral_compare](../examples/prompt_demos/paper_traces/images/255_t3_turn12_i1_contralateral_compare.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/255_t3_turn12_i2_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/255_t3_turn12_i2_zoom_crop.png)
 
 ### Turn 13
 **Agent Output:**
@@ -3939,13 +3958,13 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 3 
 ```
 
 **Result of contralateral_compare:**
-![Result of contralateral_compare](images/255_t3_turn13_i0_contralateral_compare.png)
+![Result of contralateral_compare](../examples/prompt_demos/paper_traces/images/255_t3_turn13_i0_contralateral_compare.png)
 
 **Result of contralateral_compare:**
-![Result of contralateral_compare](images/255_t3_turn13_i1_contralateral_compare.png)
+![Result of contralateral_compare](../examples/prompt_demos/paper_traces/images/255_t3_turn13_i1_contralateral_compare.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/255_t3_turn13_i2_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/255_t3_turn13_i2_zoom_crop.png)
 
 ### Turn 14
 **Agent Output:**
@@ -3994,13 +4013,13 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 3 
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/255_t3_turn14_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/255_t3_turn14_i0_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/255_t3_turn14_i1_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/255_t3_turn14_i1_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/255_t3_turn14_i2_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/255_t3_turn14_i2_zoom_crop.png)
 
 ### Turn 15
 **Agent Output:**
@@ -4056,7 +4075,7 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 3 
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/255_t3_turn15_i1_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/255_t3_turn15_i1_zoom_crop.png)
 
 **Result of zoom_crop:** `[Image Output Error: Coordinate 'right' is less than 'left']`
 
@@ -4127,10 +4146,10 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 3 
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/255_t3_turn17_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/255_t3_turn17_i0_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/255_t3_turn17_i1_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/255_t3_turn17_i1_zoom_crop.png)
 
 ### Turn 18
 **Agent Output:**
@@ -4181,10 +4200,10 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 3 
 **Result of zoom_crop:** `[Image Output Error: Coordinate 'right' is less than 'left']`
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/255_t3_turn18_i1_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/255_t3_turn18_i1_zoom_crop.png)
 
 **Result of contralateral_compare:**
-![Result of contralateral_compare](images/255_t3_turn18_i2_contralateral_compare.png)
+![Result of contralateral_compare](../examples/prompt_demos/paper_traces/images/255_t3_turn18_i2_contralateral_compare.png)
 
 ### Turn 19
 **Agent Output:**
@@ -4221,10 +4240,10 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 3 
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/255_t3_turn19_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/255_t3_turn19_i0_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/255_t3_turn19_i1_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/255_t3_turn19_i1_zoom_crop.png)
 
 ### Turn 20
 **Agent Output:**
@@ -4273,10 +4292,10 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 3 
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/255_t3_turn20_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/255_t3_turn20_i0_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/255_t3_turn20_i1_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/255_t3_turn20_i1_zoom_crop.png)
 
 **Result of zoom_crop:** `[Image Output Error: Coordinate 'right' is less than 'left']`
 
@@ -4363,10 +4382,10 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 3 
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/255_t3_turn22_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/255_t3_turn22_i0_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/255_t3_turn22_i1_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/255_t3_turn22_i1_zoom_crop.png)
 
 ### Turn 23
 **Agent Output:**
@@ -4403,10 +4422,10 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 3 
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/255_t3_turn23_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/255_t3_turn23_i0_zoom_crop.png)
 
 **Result of contralateral_compare:**
-![Result of contralateral_compare](images/255_t3_turn23_i1_contralateral_compare.png)
+![Result of contralateral_compare](../examples/prompt_demos/paper_traces/images/255_t3_turn23_i1_contralateral_compare.png)
 
 ### Turn 24
 **Agent Output:**
@@ -4631,10 +4650,10 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 2 
 ```
 
 **Result of enhance_contrast:**
-![Result of enhance_contrast](images/639_t4_turn2_i0_enhance_contrast.png)
+![Result of enhance_contrast](../examples/prompt_demos/paper_traces/images/639_t4_turn2_i0_enhance_contrast.png)
 
 **Result of window_level:**
-![Result of window_level](images/639_t4_turn2_i1_window_level.png)
+![Result of window_level](../examples/prompt_demos/paper_traces/images/639_t4_turn2_i1_window_level.png)
 
 ### Turn 3
 **Agent Output:**
@@ -4737,10 +4756,10 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 2 
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/639_t4_turn5_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/639_t4_turn5_i0_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/639_t4_turn5_i1_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/639_t4_turn5_i1_zoom_crop.png)
 
 ### Turn 6
 **Agent Output:**
@@ -4772,10 +4791,10 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 2 
 ```
 
 **Result of denoise:**
-![Result of denoise](images/639_t4_turn6_i0_denoise.png)
+![Result of denoise](../examples/prompt_demos/paper_traces/images/639_t4_turn6_i0_denoise.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/639_t4_turn6_i1_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/639_t4_turn6_i1_zoom_crop.png)
 
 ### Turn 7
 **Agent Output:**
@@ -4945,10 +4964,10 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 2 
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/639_t4_turn9_i2_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/639_t4_turn9_i2_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/639_t4_turn9_i3_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/639_t4_turn9_i3_zoom_crop.png)
 
 ### Turn 10
 **Agent Output:**
@@ -5009,16 +5028,16 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 2 
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/639_t4_turn10_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/639_t4_turn10_i0_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/639_t4_turn10_i1_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/639_t4_turn10_i1_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/639_t4_turn10_i2_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/639_t4_turn10_i2_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/639_t4_turn10_i3_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/639_t4_turn10_i3_zoom_crop.png)
 
 ### Turn 11
 **Agent Output:**
@@ -5062,7 +5081,7 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 2 
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/639_t4_turn11_i1_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/639_t4_turn11_i1_zoom_crop.png)
 
 ### Turn 12
 **Agent Output:**
@@ -5106,7 +5125,7 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 2 
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/639_t4_turn12_i1_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/639_t4_turn12_i1_zoom_crop.png)
 
 ### Turn 13
 **Agent Output:**
@@ -5143,10 +5162,10 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 2 
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/639_t4_turn13_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/639_t4_turn13_i0_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/639_t4_turn13_i1_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/639_t4_turn13_i1_zoom_crop.png)
 
 ### Turn 14
 **Agent Output:**
@@ -5183,10 +5202,10 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 2 
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/639_t4_turn14_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/639_t4_turn14_i0_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/639_t4_turn14_i1_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/639_t4_turn14_i1_zoom_crop.png)
 
 ### Turn 15
 **Agent Output:**
@@ -5223,10 +5242,10 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 2 
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/639_t4_turn15_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/639_t4_turn15_i0_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/639_t4_turn15_i1_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/639_t4_turn15_i1_zoom_crop.png)
 
 ### Turn 16
 **Agent Output:**
@@ -5251,7 +5270,7 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 2 
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/639_t4_turn16_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/639_t4_turn16_i0_zoom_crop.png)
 
 ### Turn 17
 **Agent Output:**
@@ -5276,7 +5295,7 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 2 
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/639_t4_turn17_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/639_t4_turn17_i0_zoom_crop.png)
 
 ### Turn 18
 **Agent Output:**
@@ -5301,7 +5320,7 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 2 
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/639_t4_turn18_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/639_t4_turn18_i0_zoom_crop.png)
 
 ### Turn 19
 **Agent Output:**
@@ -5326,7 +5345,7 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 2 
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/639_t4_turn19_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/639_t4_turn19_i0_zoom_crop.png)
 
 ### Turn 20
 **Agent Output:**
@@ -5351,7 +5370,7 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 2 
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/639_t4_turn20_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/639_t4_turn20_i0_zoom_crop.png)
 
 ### Turn 21
 **Agent Output:**
@@ -5382,7 +5401,7 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 2 
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/639_t4_turn21_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/639_t4_turn21_i0_zoom_crop.png)
 
 **Result of locate_tooth:**
 ```json
@@ -5412,7 +5431,7 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 2 
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/639_t4_turn22_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/639_t4_turn22_i0_zoom_crop.png)
 
 ### Turn 23
 **Agent Output:**
@@ -5449,10 +5468,10 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 2 
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/639_t4_turn23_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/639_t4_turn23_i0_zoom_crop.png)
 
 **Result of contralateral_compare:**
-![Result of contralateral_compare](images/639_t4_turn23_i1_contralateral_compare.png)
+![Result of contralateral_compare](../examples/prompt_demos/paper_traces/images/639_t4_turn23_i1_contralateral_compare.png)
 
 ### Turn 24
 **Agent Output:**
@@ -5489,10 +5508,10 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 2 
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/639_t4_turn24_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/639_t4_turn24_i0_zoom_crop.png)
 
 **Result of contralateral_compare:**
-![Result of contralateral_compare](images/639_t4_turn24_i1_contralateral_compare.png)
+![Result of contralateral_compare](../examples/prompt_demos/paper_traces/images/639_t4_turn24_i1_contralateral_compare.png)
 
 ### Turn 25
 **Agent Output:**
@@ -5529,10 +5548,10 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 2 
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/639_t4_turn25_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/639_t4_turn25_i0_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/639_t4_turn25_i1_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/639_t4_turn25_i1_zoom_crop.png)
 
 ### Turn 26
 **Agent Output:**
@@ -5569,10 +5588,10 @@ Crucially, it actively engaged in **self-correction**, utilizing `nudge_crop` 2 
 ```
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/639_t4_turn26_i0_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/639_t4_turn26_i0_zoom_crop.png)
 
 **Result of zoom_crop:**
-![Result of zoom_crop](images/639_t4_turn26_i1_zoom_crop.png)
+![Result of zoom_crop](../examples/prompt_demos/paper_traces/images/639_t4_turn26_i1_zoom_crop.png)
 
 ### Turn 27
 **Agent Output:**

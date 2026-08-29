@@ -42,27 +42,14 @@
     "format_adherence": 1.0,
     "fdi_localization_accuracy": 0.6756756756756757,
     "pathology_macro_f1": 0.43243243243243246,
-    "exact_match_accuracy": 0.43243243243243246,
+    "exact_match_accuracy": 0.24324324324324326,
     "exact_match_ci_95": [
-      0.2702702702702703,
-      0.5945945945945946
+      0.10810810810810811,
+      0.3783783783783784
     ],
     "ece": 0.0,
     "mean_tool_calls": 0.0,
     "total_samples": 37.0
-  },
-  "dentex_test_local_QuantTrio--Qwen3.5-9B-AWQ": {
-    "format_adherence": 0.13333333333333333,
-    "fdi_localization_accuracy": 0.06666666666666667,
-    "pathology_macro_f1": 0.06666666666666667,
-    "exact_match_accuracy": 0.06666666666666667,
-    "exact_match_ci_95": [
-      0.0,
-      0.2
-    ],
-    "ece": 0.0,
-    "mean_tool_calls": 0.0,
-    "total_samples": 15.0
   },
   "dentex_test_nvidia_nim_meta--llama-3.2-11b-vision-instruct": {
     "format_adherence": 1.0,
@@ -92,16 +79,16 @@
   },
   "dentex_test_nvidia_nim_moonshotai--kimi-k3": {
     "format_adherence": 1.0,
-    "fdi_localization_accuracy": 0.5555555555555556,
-    "pathology_macro_f1": 0.2222222222222222,
-    "exact_match_accuracy": 0.2222222222222222,
+    "fdi_localization_accuracy": 0.5384615384615384,
+    "pathology_macro_f1": 0.3076923076923077,
+    "exact_match_accuracy": 0.3076923076923077,
     "exact_match_ci_95": [
-      0.0,
-      0.5555555555555556
+      0.07692307692307693,
+      0.5384615384615384
     ],
-    "ece": 0.48555554615126706,
+    "ece": 0.40846153176747835,
     "mean_tool_calls": 0.0,
-    "total_samples": 9.0
+    "total_samples": 13.0
   },
   "dentex_test_openrouter_google--gemma-4-31b-it-free": {
     "format_adherence": 1.0,
@@ -130,16 +117,16 @@
     "total_samples": 46.0
   },
   "dentex_test_openrouter_nvidia--nemotron-3-nano-omni-30b-a3b-reasoning-free": {
-    "format_adherence": 0.6153846153846154,
-    "fdi_localization_accuracy": 0.3076923076923077,
-    "pathology_macro_f1": 0.23076923076923078,
-    "exact_match_accuracy": 0.23076923076923078,
+    "format_adherence": 1.0,
+    "fdi_localization_accuracy": 0.26666666666666666,
+    "pathology_macro_f1": 0.2,
+    "exact_match_accuracy": 0.13333333333333333,
     "exact_match_ci_95": [
       0.0,
-      0.46153846153846156
+      0.3333333333333333
     ],
     "ece": 0.0,
     "mean_tool_calls": 0.0,
-    "total_samples": 13.0
+    "total_samples": 15.0
   }
 }

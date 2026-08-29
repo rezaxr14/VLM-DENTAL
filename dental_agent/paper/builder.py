@@ -27,7 +27,26 @@ def build_paper_notes():
 
 ---
 
-## 1. Trace Generation System Prompts
+## 1. Trace Generation Models & Architecture
+
+The synthetic data generation leverages a two-phase architecture orchestrated by a LangGraph CoT loop:
+
+1. **Interactive CoT Trace Generation (With Tools):** 
+   - **Generator:** `GLM 5.3 Flash`
+   - **Verifier:** `MiniMax 3`
+2. **Standard CoT Trace Generation (Without Tools):** 
+   - **Generator:** `MiniMax 5.3`
+   - **Verifier:** `Gemini 3.5 Flash Lite` *(Note: Verification for traces without tools is currently pending/unstarted)*
+3. **Training Student:** Once verified, the traces are utilized to train the unified backbone policy: a **Qwen/Qwen3.5-9B** model serving as the Student in both Stage 1 SFT (QLoRA) and Stage 2 GRPO (dual-adapter RL).
+
+### Trace Quality & Repair Analytics
+- **Multi-Step Reasoning:** 100% of the verified interactive traces (678/678) exhibit profound multi-step reasoning, utilizing multiple turns to reach a diagnosis.
+- **Verifier Rigor:** The `MiniMax 3` verifier produces highly detailed, multi-sentence feedback that explicitly validates the agent's tool sequence (e.g., confirming appropriate usage of `nudge_crop` and `contralateral_compare`) against the clinical ground truth.
+- **Self-Healing Pipeline:** During the generation of these traces, 11 traces required active repair (successfully fixed via Cell 7f in the trace generation pipeline), highlighting the robustness of the automated generation loop in recovering from formatting or logic faults.
+
+---
+
+## 2. Trace Generation System Prompts
 
 To generate the high-quality synthetic diagnostic traces, we utilize specialized system prompts for each baseline and generation phase.
 
@@ -81,7 +100,7 @@ Generated traces are subjected to a strict verification pass by a separate front
 
 ---
 
-## 2. Quantitative Results & Tool Usage Analytics
+## 3. Quantitative Results & Tool Usage Analytics
 
 Our dynamic parser extracted tool utilization statistics across the verified interactive traces. The models actively utilize the 8 available tools to refine their confidence and localize findings.
 
@@ -117,7 +136,7 @@ Below are the updated charts reflecting the accurate 8-tool usage metrics:
 
 ---
 
-## 3. Qualitative Case Study: Dynamic Self-Correction (Image ID 462)
+## 4. Qualitative Case Study: Dynamic Self-Correction (Image ID 462)
 
 The most significant capability of the Interactive CoT policy is **self-correction**. Traditional VLMs fail when an object detector gives them a slightly off-center crop. Our agent uses `nudge_crop` to recenter its view before committing to a diagnosis.
 
@@ -147,7 +166,7 @@ Satisfied with the anatomical view, the agent immediately checks the contralater
 
 ---
 
-## 3b. Qualitative Case Study: Empty Crop Recovery (Image ID 401)
+## 4b. Qualitative Case Study: Empty Crop Recovery (Image ID 401)
 
 Another powerful capability of the Interactive CoT is recovering from false or empty localizations. If the detector predicts an empty box, the agent can heuristically nudge it to find the missing anatomy.
 
@@ -162,7 +181,7 @@ Instead of hallucinating a diagnosis from an empty crop or giving up, the agent 
 > **Agent's Exact Quote:**
 > *"The Q1T4 was found but its crop was empty - let me try a nudge_crop."*
 
-## 4. Full Extracted Trace Demos (For Paper Reproduction)
+## 5. Full Extracted Trace Demos (For Paper Reproduction)
 
 Below are 5 fully extracted, high-quality CoT traces containing the **actual tool results** (bounding boxes, coordinates, etc.). 
 

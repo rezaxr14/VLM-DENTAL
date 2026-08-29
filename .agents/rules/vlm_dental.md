@@ -103,5 +103,6 @@ Downloading entire datasets or redundant image batches wastes bandwidth, causes 
 - **Rule:** When downloading is strictly required, NEVER download the entire dataset or an entire slice indiscriminately. You MUST compute the exact set of missing/needed image IDs and download ONLY those specific IDs (`needed_ids = [id for id in target_ids if not exists_locally(id) and id not in completed_ids]`).
 - **Rule:** In all batch pipelines (generation, verification, repair, zero-shot evaluation), always load and filter completed items (`load_completed_ids`) BEFORE triggering any image download or pre-fetch routine.
 
-
-
+## 17. Strict Planning Mode Enforcement (CRITICAL)
+- **Rule:** Before making any modifications to the codebase (touching a single line of project code, running modifying scripts, etc.), agents MUST FIRST generate an `implementation_plan.md` artifact and explicitly await user approval.
+- **Rule:** Executing code-modifying tools or destructive shell commands prior to receiving explicit user approval on the implementation plan is strictly forbidden and will result in immediate termination of the agent.
