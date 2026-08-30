@@ -88,9 +88,10 @@ PANORAMIC_DATASETS: list[DatasetEntry] = [
         registration_required=False,
         url="https://zenodo.org/records/7812323",
         has_diagnosis_labels=True,
-        notes="Primary dataset already in use (dentex.py). Still the only panoramic dataset "
-              "found so far pairing tooth position with real pathology labels (caries/deep "
-              "caries/periapical lesion/impaction) in this project's exact format.",
+        notes="Primary dataset already in use (dentex.py). The only panoramic dataset in this "
+              "project pairing tooth position with all 4 pathology labels (caries/deep "
+              "caries/periapical lesion/impaction) -- Tufts (below) pairs tooth position with "
+              "real pathology too, but only Periapical Lesion has a Tufts analog.",
     ),
     DatasetEntry(
         name="Tufts Panoramic Dataset",
@@ -98,17 +99,35 @@ PANORAMIC_DATASETS: list[DatasetEntry] = [
         n_images=1000,
         country="United States",
         license="unspecified",
-        annotation_type="label (per Uribe et al. 2024); independent web sources describe additional "
-                         "per-tooth/abnormality segmentation masks -- see tufts.py's module "
-                         "docstring for why that discrepancy isn't resolved by guessing",
+        annotation_type="verified against the real files (Segmentation/teeth_bbox.json, "
+                         "Expert/expert.json, Student/student.json, all 1,000 records each): "
+                         "per-tooth bounding boxes (Universal Numbering, permanent 1-32 + "
+                         "primary A-T) plus per-finding pathology polygons, free-text "
+                         "description, and a 4-level clinical classification hierarchy. "
+                         "Segmentation masks (teeth_polygon.json, teeth_mask/) exist in the "
+                         "archive but are not yet inspected -- see tufts.py's "
+                         "load_tufts_segmentation docstring.",
         registration_required=True,
         url="https://tdd.ece.tufts.edu/",
         has_diagnosis_labels=True,
-        source_note="Uribe et al. 2024 lists this dataset's research areas as caries, oral "
-                     "pathology, and endodontics -- diagnosis-relevant, but the exact category "
-                     "taxonomy is unconfirmed (same caveat as the annotation-type discrepancy).",
-        notes="In progress (tufts.py). 2 annotators, ground truth by expert decision, JPEG, "
-              "840x1615.",
+        source_note="Real taxonomy (verified, supersedes the Uribe et al. 2024 estimate of "
+                     "caries/oral-pathology/endodontics): expert.json's abnormality titles are "
+                     "None (660), Periapical (217), Non-Odontogenic (105), Pericoronal (48), "
+                     "Inter-Radicular (4) -- 340 abnormal / 660 normal images. Only Periapical "
+                     "maps onto one of DENTEX's 4 classes (Periapical Lesion) -- Tufts has no "
+                     "caries findings in this layer at all (6/1000 descriptions mention caries "
+                     "at all, all incidental). Impacted has a real but unexploited path: 32/1000 "
+                     "descriptions say 'impacted', clustering in the 48 Pericoronal findings -- "
+                     "not yet extracted/implemented, would need per-finding text review, not a "
+                     "blanket Pericoronal->Impacted remap (most Pericoronal findings aren't "
+                     "impaction-related). See tufts.py's module docstring for the full mapping "
+                     "rationale and the tooth-assignment recall caveat (periapical lesions often "
+                     "sit just outside their tooth's own bbox by clinical definition).",
+        notes="Loader implemented (tufts.py: load_tufts_dataset for diagnosis-bearing rows -- "
+              "~202 images, Periapical Lesion only; load_tufts_tooth_boxes for the full "
+              "~25,000-box grounding corpus across all 1,000 images, diagnosis-agnostic). "
+              "2 annotators (Expert + Student, same schema, useful for inter-rater ablation), "
+              "JPEG, 1615x840.",
     ),
     DatasetEntry(
         name="Dental Radiography",

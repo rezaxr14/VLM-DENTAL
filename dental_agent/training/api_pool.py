@@ -436,18 +436,25 @@ def _call_llm_once(
                 if choice and choice.message:
                     msg = choice.message
                     msg_dict = {}
-                    if hasattr(msg, "model_dump"):
+                    if hasattr(msg, "model_dump") and callable(msg.model_dump):
                         try:
-                            msg_dict = msg.model_dump() or {}
+                            dump_res = msg.model_dump()
+                            if isinstance(dump_res, dict):
+                                msg_dict = dump_res
                         except Exception:
                             pass
-                    elif hasattr(msg, "to_dict"):
+                    elif hasattr(msg, "to_dict") and callable(msg.to_dict):
                         try:
-                            msg_dict = msg.to_dict() or {}
+                            dict_res = msg.to_dict()
+                            if isinstance(dict_res, dict):
+                                msg_dict = dict_res
                         except Exception:
                             pass
-                    msg_extra = getattr(msg, "model_extra", None) or {}
-                    reasoning = (
+
+                    extra = getattr(msg, "model_extra", None)
+                    msg_extra = extra if isinstance(extra, dict) else {}
+
+                    raw_reasoning = (
                         getattr(msg, "reasoning", None)
                         or getattr(msg, "reasoning_content", None)
                         or msg_extra.get("reasoning")
@@ -457,11 +464,11 @@ def _call_llm_once(
                         or msg_dict.get("thought")
                         or msg_dict.get("thinking")
                     )
-                    if reasoning:
+                    if isinstance(raw_reasoning, str) and raw_reasoning.strip():
                         if content:
-                            content = f"{reasoning}\n\n{content}"
+                            content = f"{raw_reasoning.strip()}\n\n{content}"
                         else:
-                            content = str(reasoning)
+                            content = raw_reasoning.strip()
 
                 usage = getattr(response, "usage", None)
                 usage_dict = {

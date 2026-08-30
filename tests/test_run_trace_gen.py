@@ -42,3 +42,63 @@ def test_main_interactive_prompt_fallback(mock_run_generate, mock_prompt, mock_l
     assert mock_prompt.call_count == 1
     mock_run_generate.assert_called_once()
 
+
+from pathlib import Path
+from scripts.run_trace_gen import resolve_trace_paths
+
+
+def test_resolve_trace_paths_dentex_canonical():
+    unverified, verified = resolve_trace_paths("dentex", no_tools=False)
+    assert unverified == Path("data/traces/train_cot_traces_unverified_dentex.jsonl")
+    assert verified == Path("data/traces/train_cot_traces.jsonl")
+
+
+def test_resolve_trace_paths_dentex_no_tools():
+    unverified, verified = resolve_trace_paths("dentex", no_tools=True)
+    assert unverified == Path("data/traces/train_cot_traces_unverified_dentex_no_tools.jsonl")
+    assert verified == Path("data/traces/train_cot_traces_no_tools.jsonl")
+
+
+def test_resolve_trace_paths_tufts_canonical():
+    unverified, verified = resolve_trace_paths("tufts", no_tools=False)
+    assert unverified == Path("data/traces/train_cot_traces_unverified_tufts.jsonl")
+    assert verified == Path("data/traces/train_cot_traces.jsonl")
+
+
+def test_resolve_trace_paths_tufts_no_tools():
+    unverified, verified = resolve_trace_paths("tufts", no_tools=True)
+    assert unverified == Path("data/traces/train_cot_traces_unverified_tufts_no_tools.jsonl")
+    assert verified == Path("data/traces/train_cot_traces_no_tools.jsonl")
+
+
+def test_resolve_trace_paths_explicit_overrides():
+    unverified, verified = resolve_trace_paths(
+        "dentex",
+        no_tools=False,
+        explicit_output="custom/path/unverified.jsonl",
+        explicit_verified_output="custom/path/verified.jsonl",
+    )
+    assert unverified == Path("custom/path/unverified.jsonl")
+    assert verified == Path("custom/path/verified.jsonl")
+
+
+def test_resolve_trace_paths_legacy_fallback(tmp_path, monkeypatch):
+    # If canonical does not exist but legacy file does, it resolves to legacy
+    legacy_file = tmp_path / "train_cot_traces_unverified.jsonl"
+    legacy_file.touch()
+
+    # Monkeypatch the cwd to tmp_path
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "data" / "traces").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "data" / "traces" / "train_cot_traces_unverified.jsonl").touch()
+
+    unverified, _ = resolve_trace_paths("unknown_dataset", no_tools=False)
+    assert unverified == Path("data/traces/train_cot_traces_unverified.jsonl")
+
+
+def test_parse_args_verified_output():
+    with patch("sys.argv", ["run_trace_gen.py", "--verified-output", "custom_verified.jsonl"]):
+        args = parse_args()
+        assert args.verified_output == "custom_verified.jsonl"
+
+

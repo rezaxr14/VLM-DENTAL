@@ -3,7 +3,12 @@ import gc
 import json
 import os
 import shutil
+import sys
 from pathlib import Path
+
+repo_root = str(Path(__file__).resolve().parent.parent)
+if repo_root not in sys.path:
+    sys.path.insert(0, repo_root)
 
 import torch
 from ultralytics import YOLO
@@ -17,12 +22,33 @@ def get_model_root() -> Path:
     return Path("data/models")
 
 
+def _dataset_dir_suffix(datasets_arg: str) -> str:
+    """Same naming convention as prepare_yolo_dataset.py's dir_suffix, so
+    --datasets dentex,tufts here always points at the exact directory that
+    script produced for the same value -- kept in one place so the two
+    scripts can't silently drift apart."""
+    dataset_list = [d.strip() for d in datasets_arg.split(",") if d.strip()]
+    return "_".join(dataset_list) if dataset_list != ["dentex"] else "dentex"
+
+
+def _model_subdir_prefix(dir_suffix: str) -> str:
+    """Empty for the default "dentex"-only case (preserves every existing
+    dentex-only run's exact output paths -- cv_fold_0, grounding_tool_cv_best,
+    etc. -- so nothing already on disk or already backed up to HF silently
+    stops being found). Non-default combos (e.g. "dentex_tufts") get their
+    own prefixed subtree instead of overwriting/conflating with the
+    dentex-only one, the same collision risk dataset_tag exists to prevent
+    in prepare_yolo_dataset.py's convert_single_image."""
+    return "" if dir_suffix == "dentex" else f"{dir_suffix}_"
+
+
 def train_single(yaml_path: str, args) -> dict:
     """Train a single YOLO model and return metrics."""
     model_root = get_model_root()
+    prefix = _model_subdir_prefix(_dataset_dir_suffix(getattr(args, "datasets", "dentex")))
     resume = getattr(args, "resume", False)
     if resume:
-        last_pt = model_root / "grounding_tool" / "weights" / "last.pt"
+        last_pt = model_root / f"{prefix}grounding_tool" / "weights" / "last.pt"
         if last_pt.exists():
             print(f"Resuming from {last_pt}")
             model = YOLO(str(last_pt))
@@ -39,7 +65,7 @@ def train_single(yaml_path: str, args) -> dict:
         batch=args.batch,
         device=args.device,
         project=str(model_root),
-        name="grounding_tool",
+        name=f"{prefix}grounding_tool",
         exist_ok=True,
     )
     if hasattr(args, "patience") and args.patience:
@@ -59,12 +85,15 @@ def train_single(yaml_path: str, args) -> dict:
 def cross_validate(args):
     """Train YOLO independently on each CV fold, report metrics, select best."""
     model_root = get_model_root()
-    cv_dir = Path("data/yolo_dentex_cv")
+    dir_suffix = _dataset_dir_suffix(getattr(args, "datasets", "dentex"))
+    prefix = _model_subdir_prefix(dir_suffix)
+    cv_dir = Path(f"data/yolo_{dir_suffix}_cv")
     summary_path = cv_dir / "fold_summary.json"
 
     if not summary_path.exists():
         raise FileNotFoundError(
-            f"Cannot find {summary_path}. Run: python scripts/prepare_yolo_dataset.py --mode cv"
+            f"Cannot find {summary_path}. Run: python scripts/prepare_yolo_dataset.py "
+            f"--mode cv --datasets {getattr(args, 'datasets', 'dentex')}"
         )
 
     summary = json.loads(summary_path.read_text())
@@ -78,7 +107,7 @@ def cross_validate(args):
         if not yaml_path.exists():
             raise FileNotFoundError(f"Missing {yaml_path}")
 
-        fold_dir = model_root / f"cv_fold_{fold}"
+        fold_dir = model_root / f"{prefix}cv_fold_{fold}"
         best_pt = fold_dir / "weights" / "best.pt"
         last_pt = fold_dir / "weights" / "last.pt"
 
@@ -121,7 +150,7 @@ def cross_validate(args):
             batch=args.batch,
             device=args.device,
             project=str(model_root),
-            name=f"cv_fold_{fold}",
+            name=f"{prefix}cv_fold_{fold}",
             exist_ok=True,
         )
         if hasattr(args, "patience") and args.patience:
@@ -151,22 +180,22 @@ def cross_validate(args):
     best_fold = best["fold"]
 
     # --- Copy best fold weights to final location ---
-    best_src = model_root / f"cv_fold_{best_fold}" / "weights" / "best.pt"
-    best_dst = model_root / "grounding_tool_cv_best" / "weights" / "best.pt"
+    best_src = model_root / f"{prefix}cv_fold_{best_fold}" / "weights" / "best.pt"
+    best_dst = model_root / f"{prefix}grounding_tool_cv_best" / "weights" / "best.pt"
     best_dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(best_src, best_dst)
     
     # Copy all training results (PR curves, confusion matrix, args.yaml, results.csv, etc.)
-    best_fold_dir = model_root / f"cv_fold_{best_fold}"
+    best_fold_dir = model_root / f"{prefix}cv_fold_{best_fold}"
     for file_path in best_fold_dir.iterdir():
         if file_path.is_file():
-            shutil.copy2(file_path, model_root / "grounding_tool_cv_best" / file_path.name)
+            shutil.copy2(file_path, model_root / f"{prefix}grounding_tool_cv_best" / file_path.name)
 
     # Keep every fold's best model reachable for later ensemble/ablation work.
     for fold in range(n_folds):
-        src = model_root / f"cv_fold_{fold}" / "weights" / "best.pt"
+        src = model_root / f"{prefix}cv_fold_{fold}" / "weights" / "best.pt"
         if src.exists():
-            ensemble_dst = model_root / "fold_best_models" / f"fold_{fold}_best.pt"
+            ensemble_dst = model_root / f"{prefix}fold_best_models" / f"fold_{fold}_best.pt"
             ensemble_dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, ensemble_dst)
 
@@ -203,14 +232,14 @@ def cross_validate(args):
         "mean_map50_95": mean_map50_95,
         "std_map50_95": std_map50_95,
     }
-    results_path = model_root / "grounding_tool_cv_best" / "cv_results.json"
+    results_path = model_root / f"{prefix}grounding_tool_cv_best" / "cv_results.json"
     results_path.parent.mkdir(parents=True, exist_ok=True)
     results_path.write_text(json.dumps(results_data, indent=2))
     print(f"  Results saved to: {results_path}")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Train YOLOv8 Grounding Tool on DENTEX.")
+    parser = argparse.ArgumentParser(description="Train YOLOv8 Grounding Tool.")
     parser.add_argument("--epochs", type=int, default=50, help="Number of training epochs")
     parser.add_argument("--patience", type=int, default=None, help="Early stopping patience (epochs without improvement)")
     parser.add_argument("--batch", type=int, default=16, help="Batch size")
@@ -220,14 +249,26 @@ def main():
     parser.add_argument("--cross-validate", action="store_true", help="Run 5-fold cross-validation instead of single training")
     parser.add_argument("--folds", type=int, default=5, help="Number of CV folds (only used with --cross-validate)")
     parser.add_argument("--resume", action="store_true", help="Resume training from last checkpoint if available")
+    parser.add_argument(
+        "--datasets", type=str, default="dentex",
+        help="Comma-separated dataset names -- must match whatever --datasets value was "
+             "passed to prepare_yolo_dataset.py when building the input directory this reads "
+             "(default: dentex, unchanged behavior/paths). e.g. --datasets dentex,tufts. "
+             "Also tags this run's own output directories (cv_fold_N, grounding_tool_cv_best, "
+             "etc.) so a combined run's results/checkpoints never overwrite or get mistaken "
+             "for a dentex-only run's -- see _model_subdir_prefix's docstring.",
+    )
     args = parser.parse_args()
 
     if args.cross_validate:
         cross_validate(args)
     else:
-        yaml_path = Path("data/yolo_dentex/dataset.yaml").absolute()
+        dir_suffix = _dataset_dir_suffix(args.datasets)
+        yaml_path = Path(f"data/yolo_{dir_suffix}/dataset.yaml").absolute()
         if not yaml_path.exists():
-            raise FileNotFoundError(f"Cannot find {yaml_path}. Run prepare_yolo_dataset.py first.")
+            raise FileNotFoundError(
+                f"Cannot find {yaml_path}. Run: python scripts/prepare_yolo_dataset.py --datasets {args.datasets}"
+            )
 
         print(f"Loading YOLO model: {args.model}")
         train_single(str(yaml_path), args)

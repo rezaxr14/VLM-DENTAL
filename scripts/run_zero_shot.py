@@ -39,7 +39,8 @@ if repo_root not in sys.path:
     sys.path.insert(0, repo_root)
 
 from dental_agent.config import load_config, load_env
-from dental_agent.data.dentex import load_dentex_dataset, dentex_row_to_fdi
+from dental_agent.data.dentex import load_dentex_dataset
+from dental_agent.data.fdi_utils import row_to_fdi
 from dental_agent.data.tufts import load_tufts_dataset
 from dental_agent.data.slicing import get_slice_ids
 from dental_agent.training.api_pool import (
@@ -412,7 +413,9 @@ def _run_zero_shot_for_target(
                     print(f"  vLLM unresponsive. Waiting 5s... ({health_retries}/24)")
                     time.sleep(5)
 
-            # Extract ALL ground truth findings for this image using dentex_row_to_fdi (Rule 1)
+            # Extract ALL ground truth findings for this image, dataset-aware (fdi_utils.row_to_fdi) --
+            # this used to call dentex_row_to_fdi unconditionally, which would have silently
+            # double-incremented every quadrant/tooth_position on the tufts branch above.
             anns = annots_df[annots_df["image_id"] == image_id]
             if anns.empty:
                 print(f"  [WARN] No annotations for image {image_id}. Skipping.")
@@ -420,7 +423,7 @@ def _run_zero_shot_for_target(
 
             gt_findings = []
             for _, ann_row in anns.iterrows():
-                q, pos = dentex_row_to_fdi(ann_row)
+                q, pos = row_to_fdi(ann_row)
                 d_id = ann_row.get("category_id_3")
                 try:
                     d_id_int = int(d_id)

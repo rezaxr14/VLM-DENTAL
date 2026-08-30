@@ -83,11 +83,68 @@ from dental_agent.utils.serialization import to_jsonable
 
 
 # ---------------------------------------------------------------------------
-# Output path defaults
+# Output path defaults & Resolution
 # ---------------------------------------------------------------------------
 
-DEFAULT_UNVERIFIED = "data/traces/train_cot_traces_unverified.jsonl"
+DEFAULT_UNVERIFIED = "data/traces/train_cot_traces_unverified_dentex.jsonl"
 DEFAULT_VERIFIED = "data/traces/train_cot_traces.jsonl"
+
+
+def resolve_trace_paths(
+    dataset_name: str = "dentex",
+    no_tools: bool = False,
+    explicit_output: str | Path | None = None,
+    explicit_verified_output: str | Path | None = None,
+) -> tuple[Path, Path]:
+    """Authoritative resolver for (unverified_path, verified_path).
+
+    Standardized Naming Schema:
+      Unverified:
+        - DENTEX tool-based: data/traces/train_cot_traces_unverified_dentex.jsonl
+        - DENTEX no-tools:   data/traces/train_cot_traces_unverified_dentex_no_tools.jsonl
+        - Custom tool-based: data/traces/train_cot_traces_unverified_{dataset}.jsonl
+        - Custom no-tools:   data/traces/train_cot_traces_unverified_{dataset}_no_tools.jsonl
+      Verified (shared canonical destination for all datasets):
+        - Tool-based:        data/traces/train_cot_traces.jsonl
+        - No-tools:          data/traces/train_cot_traces_no_tools.jsonl
+
+    Backward Compatibility:
+      If canonical unverified path does not exist on disk, checks legacy un-suffixed
+      fallbacks (e.g. train_cot_traces_unverified.jsonl) before defaulting to canonical.
+    """
+    clean_ds = (dataset_name.split(",")[0] if "," in dataset_name else dataset_name).strip().lower()
+    suffix = "_no_tools" if no_tools else ""
+
+    # 1. Resolve unverified path
+    if explicit_output:
+        unverified_path = Path(explicit_output)
+    else:
+        canonical_unverified = Path(f"data/traces/train_cot_traces_unverified_{clean_ds}{suffix}.jsonl")
+        if canonical_unverified.exists():
+            unverified_path = canonical_unverified
+        else:
+            # Check legacy fallbacks in order of historical precedence
+            legacy_candidates = [
+                Path(f"data/traces/train_cot_traces_unverified{suffix}.jsonl"),
+                Path(f"data/traces/train_cot_traces_{clean_ds}{suffix}_unverified.jsonl"),
+                Path(f"data/traces/train_cot_traces{suffix}_unverified.jsonl"),
+            ]
+            found = False
+            for cand in legacy_candidates:
+                if cand.exists():
+                    unverified_path = cand
+                    found = True
+                    break
+            if not found:
+                unverified_path = canonical_unverified
+
+    # 2. Resolve verified path
+    if explicit_verified_output:
+        verified_path = Path(explicit_verified_output)
+    else:
+        verified_path = Path(f"data/traces/train_cot_traces{suffix}.jsonl")
+
+    return unverified_path, verified_path
 
 
 # ---------------------------------------------------------------------------
@@ -134,10 +191,19 @@ def append_trace(output_path: Path, trace_record: dict[str, Any]) -> None:
         f.write(json.dumps(serializable) + "\n")
 
 
-def print_banner(mode: str, completed_count: int, total_images: int) -> None:
+def print_banner(
+    mode: str,
+    completed_count: int,
+    total_images: int,
+    unverified_path: Path | None = None,
+    verified_path: Path | None = None,
+) -> None:
     print("\n" + "=" * 70, flush=True)
     print(f"DENTAL AGENT: AUTONOMOUS CoT TRACE {'GENERATOR' if mode == 'generate' else 'VERIFIER'}", flush=True)
     print("=" * 70, flush=True)
+
+    out_file = str(unverified_path) if unverified_path else DEFAULT_UNVERIFIED
+    ver_file = str(verified_path) if verified_path else DEFAULT_VERIFIED
 
     if mode == "generate":
         if tg.GENERATOR_PROVIDER == "local":
@@ -149,7 +215,7 @@ def print_banner(mode: str, completed_count: int, total_images: int) -> None:
             rpd = os.environ.get(f"{prefix}_RPD_LIMIT", "None")
             print(f"* Generator Provider : {tg.GENERATOR_PROVIDER.upper()} ({tg.GENERATOR_MODEL})", flush=True)
             print(f"* Generator Limits   : {cd}s cooldown, {rpd} RPD cap", flush=True)
-        print(f"* Output             : {DEFAULT_UNVERIFIED}", flush=True)
+        print(f"* Output             : {out_file}", flush=True)
     else:
         import os
         prefix = tg.VERIFIER_PROVIDER.upper().replace('_NIM', '')
@@ -157,8 +223,8 @@ def print_banner(mode: str, completed_count: int, total_images: int) -> None:
         rpd = os.environ.get(f"{prefix}_RPD_LIMIT", "None")
         print(f"* Verifier Provider  : {tg.VERIFIER_PROVIDER.upper()} ({tg.VERIFIER_MODEL})", flush=True)
         print(f"* Verifier Limits    : {cd}s cooldown, {rpd} RPD cap", flush=True)
-        print(f"* Input              : {DEFAULT_UNVERIFIED}", flush=True)
-        print(f"* Output             : {DEFAULT_VERIFIED}", flush=True)
+        print(f"* Input              : {out_file}", flush=True)
+        print(f"* Output             : {ver_file}", flush=True)
 
     print(f"* Dataset Progress   : {completed_count} / {total_images} images", flush=True)
     print("=" * 70 + "\n", flush=True)
@@ -170,39 +236,18 @@ def print_banner(mode: str, completed_count: int, total_images: int) -> None:
 
 def run_generate(args: argparse.Namespace, cfg: Any) -> None:
     """Dispatches to _run_generate_for_dataset once per comma-separated
-    --dataset name (default: a single "dentex", unchanged behavior). Each
-    dataset gets its own output file, since resumability tracking
-    (load_completed_ids) keys on numeric image id -- letting two datasets
-    share one output file would risk a false "already done" skip if they
-    happen to have images with the same numeric id (exactly the collision
-    prepare_yolo_dataset.py's dataset_tag exists to prevent on the YOLO
-    side; the fix here is the same idea, applied by giving each dataset
-    its own file rather than tagging records within a shared one)."""
+    --dataset name. Each dataset gets its own consistently suffixed output file
+    via resolve_trace_paths()."""
     dataset_list = [d.strip() for d in args.dataset.split(",") if d.strip()]
     if not dataset_list:
         dataset_list = ["dentex"]
 
-    explicit_output = args.output  # None unless the user passed --output themselves
     for dataset_name in dataset_list:
-        if explicit_output:
-            # User gave an explicit path -- honor it exactly as before, even
-            # if it means multiple datasets share one file (their choice).
-            output_path = Path(explicit_output)
-        elif len(dataset_list) > 1:
-            output_path = Path(str(DEFAULT_UNVERIFIED).replace(".jsonl", f"_{dataset_name}.jsonl"))
-        else:
-            # Single dataset, no explicit output -- exactly today's default,
-            # unchanged, so existing single-dataset invocations are unaffected.
-            output_path = Path(DEFAULT_UNVERIFIED)
-
-        if args.no_tools and not explicit_output:
-            # Separate file from the main tool-based traces -- these feed
-            # baseline #3's SFT stage (proposal §6), never the main system's,
-            # so they must never land in the same file. Suffix applied after
-            # the dataset-name suffix above (if any), not instead of it, so
-            # --no-tools with multiple --dataset names still gets one file
-            # per dataset, just also tagged _no_tools.
-            output_path = Path(str(output_path).replace(".jsonl", "_no_tools.jsonl"))
+        output_path, _ = resolve_trace_paths(
+            dataset_name=dataset_name,
+            no_tools=args.no_tools,
+            explicit_output=args.output,
+        )
 
         if len(dataset_list) > 1:
             print(f"\n{'=' * 70}\nDataset: {dataset_name}\n{'=' * 70}")
@@ -511,37 +556,27 @@ def run_verify(args: argparse.Namespace, cfg: Any) -> None:
     if not dataset_list:
         dataset_list = ["dentex"]
 
-    explicit_output = args.output
     for dataset_name in dataset_list:
-        if explicit_output:
-            unverified_path = Path(explicit_output)
-        elif len(dataset_list) > 1:
-            unverified_path = Path(str(DEFAULT_UNVERIFIED).replace(".jsonl", f"_{dataset_name}.jsonl"))
-        else:
-            unverified_path = Path(DEFAULT_UNVERIFIED)
-
-        if args.no_tools and not explicit_output:
-            # Must match run_generate's --no-tools suffixing exactly, or
-            # verify mode would read the wrong (or a nonexistent) file.
-            unverified_path = Path(str(unverified_path).replace(".jsonl", "_no_tools.jsonl"))
+        unverified_path, verified_path = resolve_trace_paths(
+            dataset_name=dataset_name,
+            no_tools=args.no_tools,
+            explicit_output=args.output,
+            explicit_verified_output=getattr(args, "verified_output", None),
+        )
 
         if len(dataset_list) > 1:
             print(f"\n{'=' * 70}\nDataset: {dataset_name}\n{'=' * 70}")
-        _run_verify_for_dataset(args, cfg, unverified_path, dataset_name=dataset_name)
+        _run_verify_for_dataset(args, cfg, unverified_path, verified_path, dataset_name=dataset_name)
 
 
-def _run_verify_for_dataset(args: argparse.Namespace, cfg: Any, unverified_path: Path, dataset_name: str = "dentex") -> None:
+def _run_verify_for_dataset(
+    args: argparse.Namespace,
+    cfg: Any,
+    unverified_path: Path,
+    verified_path: Path,
+    dataset_name: str = "dentex",
+) -> None:
     """Read one dataset's unverified traces and verify them via external API verifiers."""
-    verified_path = Path(DEFAULT_VERIFIED)
-    if args.no_tools:
-        # Separate verified file too -- baseline #3's SFT data must never
-        # mix with the main system's (see run_generate's --no-tools handling
-        # and generate_only_no_tools's docstring). verify_pending itself
-        # doesn't care which trace kind it's verifying (see that function's
-        # docstring in trace_generation.py) -- only the file it's pointed at
-        # needs to be kept separate, which this achieves.
-        verified_path = Path(str(verified_path).replace(".jsonl", "_no_tools.jsonl"))
-
     # Count totals for banner
     unverified_ids = load_completed_ids(unverified_path)
     verified_ids = load_completed_ids(verified_path)
@@ -551,7 +586,13 @@ def _run_verify_for_dataset(args: argparse.Namespace, cfg: Any, unverified_path:
         slice_ids = get_slice_ids(list(unverified_ids), args.total_slices, args.slice_index, args.slice_seed)
         unverified_ids = unverified_ids & set(slice_ids)
 
-    print_banner("verify", len(verified_ids), len(unverified_ids))
+    print_banner(
+        "verify",
+        len(verified_ids),
+        len(unverified_ids),
+        unverified_path=unverified_path,
+        verified_path=verified_path,
+    )
 
     if args.status_only:
         pending = len(unverified_ids - verified_ids)
@@ -635,12 +676,12 @@ def _run_verify_for_dataset(args: argparse.Namespace, cfg: Any, unverified_path:
 
 def run_clean(args: argparse.Namespace, cfg: Any) -> None:
     dataset_name = (args.dataset.split(",")[0] if "," in args.dataset else args.dataset).strip().lower()
-    suffix = "_no_tools" if args.no_tools else ""
-    unverified_path = Path(args.output or f"data/traces/train_cot_traces_{dataset_name}{suffix}_unverified.jsonl")
+    unverified_path, _ = resolve_trace_paths(
+        dataset_name=dataset_name,
+        no_tools=args.no_tools,
+        explicit_output=args.output,
+    )
     
-    if not unverified_path.exists() and Path(f"data/traces/train_cot_traces{suffix}_unverified.jsonl").exists():
-        unverified_path = Path(f"data/traces/train_cot_traces{suffix}_unverified.jsonl")
-        
     print(f"\nScanning and cleaning trace file: {unverified_path}...")
     stats = clean_unverified_traces(unverified_path, backup=True, purge_failed=getattr(args, "purge_failed", True))
     print("=" * 60)
@@ -654,12 +695,12 @@ def run_clean(args: argparse.Namespace, cfg: Any) -> None:
 
 def run_repair(args: argparse.Namespace, cfg: Any) -> None:
     dataset_name = (args.dataset.split(",")[0] if "," in args.dataset else args.dataset).strip().lower()
-    suffix = "_no_tools" if args.no_tools else ""
-    unverified_path = Path(args.output or f"data/traces/train_cot_traces_{dataset_name}{suffix}_unverified.jsonl")
-    verified_path = Path(DEFAULT_VERIFIED if not args.no_tools else "data/traces/train_cot_traces_no_tools.jsonl")
-
-    if not unverified_path.exists() and Path(f"data/traces/train_cot_traces{suffix}_unverified.jsonl").exists():
-        unverified_path = Path(f"data/traces/train_cot_traces{suffix}_unverified.jsonl")
+    unverified_path, verified_path = resolve_trace_paths(
+        dataset_name=dataset_name,
+        no_tools=args.no_tools,
+        explicit_output=args.output,
+        explicit_verified_output=getattr(args, "verified_output", None),
+    )
 
     session_start = time.time()
     
@@ -778,7 +819,13 @@ def parse_args() -> argparse.Namespace:
         "-o",
         type=str,
         default=None,
-        help="Override output file path. Defaults based on mode: generate → train_cot_traces_unverified.jsonl, verify → reads from unverified",
+        help="Override unverified trace file path (for generate, verify input, clean, repair).",
+    )
+    parser.add_argument(
+        "--verified-output",
+        type=str,
+        default=None,
+        help="Override verified output trace file path (for verify, repair). Defaults to data/traces/train_cot_traces.jsonl",
     )
     parser.add_argument(
         "--split",
@@ -980,7 +1027,7 @@ def main() -> None:
         
     if args.verifier_provider:
         os.environ["VERIFIER_PROVIDER"] = args.verifier_provider
-    elif args.mode == "verify" and not os.environ.get("VERIFIER_PROVIDER"):
+    elif args.mode == "verify" and not getattr(args, "status_only", False) and not os.environ.get("VERIFIER_PROVIDER"):
         os.environ["VERIFIER_PROVIDER"] = interactive_prompt("verifier")
         
     tg.VERIFIER_PROVIDER = os.environ.get("VERIFIER_PROVIDER", "local")

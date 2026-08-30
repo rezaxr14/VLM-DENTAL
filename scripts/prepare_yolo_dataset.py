@@ -2,8 +2,13 @@ import argparse
 import json
 import os
 import shutil
+import sys
 from pathlib import Path
 from typing import Callable
+
+repo_root = str(Path(__file__).resolve().parent.parent)
+if repo_root not in sys.path:
+    sys.path.insert(0, repo_root)
 
 import pandas as pd
 import yaml
@@ -11,6 +16,7 @@ from sklearn.model_selection import KFold
 from tqdm import tqdm
 
 from dental_agent.data.dentex import load_dentex_dataset, dentex_row_to_fdi
+from dental_agent.data.tufts import load_tufts_tooth_boxes
 
 # Which loader + FDI-conversion function each supported dataset uses.
 # quadrant_position_fn takes one annotation row and returns (quadrant,
@@ -19,26 +25,26 @@ from dental_agent.data.dentex import load_dentex_dataset, dentex_row_to_fdi
 # category_id_1/category_id_2 are 0-indexed (the documented "0-Index
 # Quirk"), an artifact of DENTEX's own JSON encoding -- NOT a universal
 # convention. A dataset whose own loader already outputs correct 1-indexed
-# FDI values (as tufts.py's will, once its annotation mapping lands) must
-# NOT be run through dentex_row_to_fdi a second time, or it'd be double-
-# incremented. Add a new dataset by adding one entry here with its own
-# loader and its own (possibly identity) conversion function -- don't
-# hardcode a new dataset's quirks into convert_single_image itself.
+# FDI values (as tufts.py's does) must NOT be run through dentex_row_to_fdi
+# a second time, or it'd be double-incremented. Add a new dataset by adding
+# one entry here with its own loader and its own (possibly identity)
+# conversion function -- don't hardcode a new dataset's quirks into
+# convert_single_image itself.
 DATASET_LOADERS: dict[str, dict] = {
     "dentex": {
         "load": load_dentex_dataset,
         "quadrant_position_fn": dentex_row_to_fdi,
     },
-    # "tufts": {
-    #     "load": load_tufts_dataset,
-    #     "quadrant_position_fn": lambda row: (int(row["category_id_1"]), int(row["category_id_2"])),
-    # },
-    # Uncomment once dental_agent/data/tufts.py's tooth-position mapping is
-    # implemented (currently raises NotImplementedError by design -- see
-    # that module's docstring). tufts.py's own loader should hand back
-    # already-correct FDI values, so its conversion function is the
-    # identity, not another +1.
-    #
+    "tufts": {
+        # load_tufts_tooth_boxes, NOT load_tufts_dataset -- convert_single_image
+        # below only ever reads category_id_1/category_id_2/bbox, never
+        # diagnosis, so the full ~25,000-box grounding corpus (every
+        # annotated tooth, not just the ~200 images with a periapical
+        # finding) is what you actually want feeding YOLO. See tufts.py's
+        # module docstring for why these are two separate functions.
+        "load": load_tufts_tooth_boxes,
+        "quadrant_position_fn": lambda row: (int(row["category_id_1"]), int(row["category_id_2"])),
+    },
     # "tunisia": {
     #     "load": load_tunisia_dataset,
     #     "quadrant_position_fn": lambda row: (int(row["category_id_1"]), int(row["category_id_2"])),
