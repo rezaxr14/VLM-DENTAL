@@ -303,6 +303,8 @@ def build_dataframes(
 
     images_df = pd.DataFrame(coco.get("images", []))
     annots_df = pd.DataFrame(coco.get("annotations", []))
+    if len(annots_df):
+        annots_df["source_dataset"] = "dentex"
     
     raw_cats = coco.get("categories_3") or coco.get("categories_disease")
     if not raw_cats:
@@ -573,6 +575,8 @@ def load_combined_dentex_dataset(
     images_df = pd.DataFrame(combined_images)
     annots_df = pd.DataFrame(combined_annots)
     categories_df = pd.DataFrame(combined_categories)
+    if len(annots_df):
+        annots_df["source_dataset"] = "dentex"
 
     if "bbox" in annots_df.columns:
         annots_df["bbox"] = annots_df["bbox"].apply(list)

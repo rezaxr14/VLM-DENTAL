@@ -174,10 +174,18 @@ def format_trace_to_markdown(data: dict, out_dir: str, images_dir: str, trace_id
 
 
 def main():
+    default_interactive = "data/traces/train_cot_traces_unverified_dentex.jsonl"
+    if not os.path.exists(default_interactive) and os.path.exists("data/traces/train_cot_traces_unverified.jsonl"):
+        default_interactive = "data/traces/train_cot_traces_unverified.jsonl"
+
+    default_zeroshot = "data/traces/train_cot_traces_unverified_dentex_no_tools.jsonl"
+    if not os.path.exists(default_zeroshot) and os.path.exists("data/traces/train_cot_traces_unverified_no_tools.jsonl"):
+        default_zeroshot = "data/traces/train_cot_traces_unverified_no_tools.jsonl"
+
     parser = argparse.ArgumentParser(description="Export high-quality CoT traces for the paper.")
     parser.add_argument("--image-ids", type=str, default="", help="Comma separated image IDs to extract.")
-    parser.add_argument("--interactive-file", type=str, default="data/traces/train_cot_traces_unverified.jsonl")
-    parser.add_argument("--zeroshot-file", type=str, default="data/traces/train_cot_traces_unverified_no_tools.jsonl")
+    parser.add_argument("--interactive-file", type=str, default=default_interactive)
+    parser.add_argument("--zeroshot-file", type=str, default=default_zeroshot)
     parser.add_argument("--output-dir", type=str, default="docs/paper_traces")
     parser.add_argument("--images-dir", type=str, default="docs/images")
     

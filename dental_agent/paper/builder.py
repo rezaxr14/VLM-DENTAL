@@ -33,15 +33,15 @@ The synthetic data generation leverages a two-phase architecture orchestrated by
 
 1. **Interactive CoT Trace Generation (With Tools):** 
    - **Generator:** `GLM 5.3 Flash`
-   - **Verifier:** `MiniMax 3`
+   - **Verifier:** `MiniMax M3`
 2. **Standard CoT Trace Generation (Without Tools):** 
-   - **Generator:** `MiniMax 5.3`
-   - **Verifier:** `Gemini 3.5 Flash Lite` *(Note: Verification for traces without tools is currently pending/unstarted)*
+   - **Generator:** `GLM 5.3 Flash`
+   - **Verifier:** `MiniMax M3`
 3. **Training Student:** Once verified, the traces are utilized to train the unified backbone policy: a **Qwen/Qwen3.5-9B** model serving as the Student in both Stage 1 SFT (QLoRA) and Stage 2 GRPO (dual-adapter RL).
 
 ### Trace Quality & Repair Analytics
 - **Multi-Step Reasoning:** 100% of the verified interactive traces (678/678) exhibit profound multi-step reasoning, utilizing multiple turns to reach a diagnosis.
-- **Verifier Rigor:** The `MiniMax 3` verifier produces highly detailed, multi-sentence feedback that explicitly validates the agent's tool sequence (e.g., confirming appropriate usage of `nudge_crop` and `contralateral_compare`) against the clinical ground truth.
+- **Verifier Rigor:** The `MiniMax M3` verifier produces highly detailed, multi-sentence feedback that explicitly validates the agent's tool sequence (e.g., confirming appropriate usage of `nudge_crop` and `contralateral_compare`) against the clinical ground truth.
 - **Self-Healing Pipeline:** During the generation of these traces, 11 traces required active repair (successfully fixed via Cell 7f in the trace generation pipeline), highlighting the robustness of the automated generation loop in recovering from formatting or logic faults.
 
 ---
@@ -114,9 +114,9 @@ Our dynamic parser extracted tool utilization statistics across the verified int
 ### Diagnosis Distribution
 | Diagnosis | Count | % of Findings |
 | :--- | :--- | :--- |
-| **Caries** | 2,169 | 61.5% |
+| **Caries** | 2,171 | 61.6% |
 | **Impacted Tooth** | 606 | 17.2% |
-| **Deep Caries** | 593 | 16.8% |
+| **Deep Caries** | 591 | 16.8% |
 | **Periapical Lesion** | 158 | 4.5% |
 
 ### Generated Analytics Charts

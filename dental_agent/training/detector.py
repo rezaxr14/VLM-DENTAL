@@ -61,7 +61,7 @@ from torch.utils.data import Dataset
 from torchvision.models.detection import fasterrcnn_mobilenet_v3_large_fpn
 from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
 
-from dental_agent.data.dentex import dentex_row_to_fdi
+from dental_agent.data.fdi_utils import row_to_fdi
 
 
 def flip_quadrant(quadrant: int) -> int:
@@ -103,7 +103,7 @@ class DentexDetectionDataset(Dataset):
             if w <= 0 or h <= 0:
                 continue
             boxes.append([float(x), float(y), float(x + w), float(y + h)])
-            quad, tooth = dentex_row_to_fdi(ann)
+            quad, tooth = row_to_fdi(ann)
             labels.append((quad - 1) * 8 + tooth)  # 1-32; 0 reserved for background
 
         image_tensor = torchvision.transforms.functional.to_tensor(image)

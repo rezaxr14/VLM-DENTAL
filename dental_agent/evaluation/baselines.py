@@ -19,7 +19,7 @@ from tqdm import tqdm
 from dental_agent.agent.prompts import ZERO_SHOT_PROMPT
 from dental_agent.agent.parsing import parse_agent_json
 from dental_agent.training.api_pool import call_llm
-from dental_agent.data.dentex import dentex_row_to_fdi
+from dental_agent.data.fdi_utils import row_to_fdi
 from dental_agent.rewards.components import reward_accuracy
 from dental_agent.evaluation.metrics import compute_evaluation_metrics
 from dental_agent.utils.serialization import to_jsonable
@@ -41,12 +41,18 @@ def majority_class_baseline_metrics(
     if train_annots.empty:
         train_annots = annots_df
 
-    # +1: same DENTEX 0-index quirk fixed throughout this codebase (see
-    # dentex_row_to_fdi's docstring) -- .mode() on the raw column returns a
-    # 0-indexed value; this baseline's constant "prediction" needs to be in
-    # the same 1-indexed FDI space reward_accuracy compares against below.
-    majority_quadrant = int(train_annots["category_id_1"].mode().iloc[0]) + 1 if "category_id_1" in train_annots else 1
-    majority_tooth = int(train_annots["category_id_2"].mode().iloc[0]) + 1 if "category_id_2" in train_annots else 1
+    # Majority FDI values computed from already-converted, dataset-aware
+    # per-row FDI values (fdi_utils.row_to_fdi) rather than aggregating the
+    # raw category_id_1/category_id_2 column and adding a hardcoded +1 --
+    # that hardcoded +1 assumed DENTEX's 0-indexed convention unconditionally,
+    # which would silently be wrong the moment this ran against Tufts'
+    # already-1-indexed rows (or any future dataset with its own convention).
+    if len(train_annots):
+        fdi_pairs = [row_to_fdi(row) for _, row in train_annots.iterrows()]
+        majority_quadrant = int(pd.Series([q for q, _ in fdi_pairs]).mode().iloc[0])
+        majority_tooth = int(pd.Series([t for _, t in fdi_pairs]).mode().iloc[0])
+    else:
+        majority_quadrant, majority_tooth = 1, 1
 
     cat_lookup = (
         dict(zip(categories_df["id"], categories_df["name"]))
@@ -65,7 +71,7 @@ def majority_class_baseline_metrics(
         if anns.empty:
             continue
         ann0 = anns.iloc[0]
-        quadrant, tooth_position = dentex_row_to_fdi(ann0)
+        quadrant, tooth_position = row_to_fdi(ann0)
         gt = {
             "quadrant": quadrant,
             "tooth_position": tooth_position,
@@ -442,7 +448,7 @@ def run_zero_shot_baseline(
         if anns.empty:
             continue
         ann0 = anns.iloc[0]
-        quadrant, tooth_position = dentex_row_to_fdi(ann0)
+        quadrant, tooth_position = row_to_fdi(ann0)
         ground_truth = {
             "quadrant": quadrant,
             "tooth_position": tooth_position,

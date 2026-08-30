@@ -154,9 +154,16 @@ def extract_stats(traces):
 
         # Findings
         for finding in final_answer:
-            diag = finding.get("diagnosis", "Unknown")
-            if diag == "Impacted":
+            diag = str(finding.get("diagnosis", "Unknown")).strip()
+            diag_lower = diag.lower().replace("-", " ").replace("_", " ")
+            if "impact" in diag_lower:
                 diag = "Impacted Tooth"
+            elif "deep" in diag_lower and "carie" in diag_lower:
+                diag = "Deep Caries"
+            elif "carie" in diag_lower:
+                diag = "Caries"
+            elif "periapical" in diag_lower or "lesion" in diag_lower:
+                diag = "Periapical Lesion"
             diag_counter[diag] += 1
 
         # Token estimates (input = everything before last assistant turn, output = assistant turns)
@@ -345,25 +352,55 @@ def make_charts(per_trace, tool_call_counts, diag_counter, output_dir: str):
     plt.close(fig)
     print(f"  Saved: {output_dir}/tool_usage.png")
 
-    # 2. Diagnosis pie chart
-    labels = list(diag_counter.keys())
-    sizes  = list(diag_counter.values())
+    # 2. Diagnosis pie chart / donut chart
+    ordered_keys = [k for k in DIAGNOSIS_NAMES if k in diag_counter]
+    remaining_keys = [k for k in diag_counter if k not in ordered_keys]
+    labels = ordered_keys + remaining_keys
+    sizes  = [diag_counter[lbl] for lbl in labels]
     total_sizes = sum(sizes) if sizes else 1
     
-    # Format labels with percentages for the legend instead of putting them in the slices
-    legend_labels = [f"{lbl} ({sizes[i]}, {sizes[i]/total_sizes*100:.1f}%)" for i, lbl in enumerate(labels)]
+    # Format labels with counts and percentages for the legend
+    legend_labels = [f"{lbl} ({sizes[i]:,}, {sizes[i]/total_sizes*100:.1f}%)" for i, lbl in enumerate(labels)]
     
-    palette = ["#e94560", "#16c79a", "#f5a623", "#7b68ee", "#0f3460", "#eaeaea"][:max(len(labels), 6)]
-    fig, ax = plt.subplots(figsize=(8, 7), subplot_kw=dict(aspect="equal"))
-    wedges, texts = ax.pie(
-        sizes, labels=None, 
+    # Curated harmonious color palette for dental pathology classes
+    category_colors = {
+        "Caries": "#e94560",            # Vibrant Coral / Crimson
+        "Impacted Tooth": "#6c5ce7",    # Slate Purple / Royal Indigo
+        "Deep Caries": "#f5a623",       # Golden Amber
+        "Periapical Lesion": "#00b894", # Emerald Mint / Teal
+    }
+    palette = [category_colors.get(lbl, "#74b9ff") for lbl in labels]
+    
+    fig, ax = plt.subplots(figsize=(8.5, 6.5), subplot_kw=dict(aspect="equal"))
+    wedges, texts, autotexts = ax.pie(
+        sizes, labels=None,
+        autopct=lambda pct: f"{pct:.1f}%" if pct > 3 else "",
+        pctdistance=0.76,
         colors=palette, startangle=140,
-        wedgeprops=dict(edgecolor="#1a1a2e", linewidth=1.5)
+        wedgeprops=dict(width=0.44, edgecolor="#1a1a2e", linewidth=2.0)
     )
-    ax.legend(wedges, legend_labels, title="Diagnoses", loc="center left", bbox_to_anchor=(0.9, 0.5), facecolor="#1a1a2e", edgecolor="#0f3460", labelcolor="#eaeaea")
-    ax.set_title("Diagnosis Distribution")
+    
+    for autotext in autotexts:
+        autotext.set_color("#ffffff")
+        autotext.set_fontsize(10)
+        autotext.set_fontweight("bold")
+        
+    ax.text(0, 0, f"{total_sizes:,}\nFindings", ha="center", va="center", fontsize=13, fontweight="bold", color="#eaeaea")
+    
+    ax.legend(
+        wedges, legend_labels,
+        title="Pathology Diagnoses",
+        loc="center left",
+        bbox_to_anchor=(0.95, 0.5),
+        facecolor="#1a1a2e",
+        edgecolor="#0f3460",
+        labelcolor="#eaeaea",
+        fontsize=10,
+        title_fontsize=11
+    )
+    ax.set_title("Diagnosis Distribution", fontsize=13, pad=12)
     plt.tight_layout()
-    fig.savefig(os.path.join(output_dir, "diagnosis_dist.png"), dpi=150)
+    fig.savefig(os.path.join(output_dir, "diagnosis_dist.png"), dpi=200, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved: {output_dir}/diagnosis_dist.png")
 
@@ -419,8 +456,12 @@ def make_charts(per_trace, tool_call_counts, diag_counter, output_dir: str):
 # ---------------------------------------------------------------------------
 
 def main():
+    default_input = "data/traces/train_cot_traces_unverified_dentex.jsonl"
+    if not Path(default_input).exists() and Path("data/traces/train_cot_traces_unverified.jsonl").exists():
+        default_input = "data/traces/train_cot_traces_unverified.jsonl"
+
     ap = argparse.ArgumentParser(description="Analyze and clean VLM-DENTAL trace files")
-    ap.add_argument("--input",     default="data/traces/train_cot_traces_unverified.jsonl")
+    ap.add_argument("--input", default=default_input)
     ap.add_argument("--no-clean",  action="store_true", help="Do not overwrite input file")
     ap.add_argument("--no-charts", action="store_true", help="Skip matplotlib chart generation")
     ap.add_argument("--chart-dir", default="data/traces/analysis_charts", help="Where to save charts")

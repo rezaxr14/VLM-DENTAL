@@ -17,7 +17,7 @@ import pandas as pd
 from dental_agent.config import ProjectConfig, TrainingConfig, RewardWeights
 from dental_agent.training.grpo import train_grpo
 from dental_agent.agent.loop import run_agent
-from dental_agent.data.dentex import dentex_row_to_fdi
+from dental_agent.data.fdi_utils import row_to_fdi
 from dental_agent.rewards.composite import combine_reward
 from dental_agent.tools.registry import ToolRegistry
 
@@ -73,8 +73,8 @@ def sweep_reward_weights(
             # this function, not just training.
             ground_truth = [
                 {
-                    "quadrant": dentex_row_to_fdi(row)[0],
-                    "tooth_position": dentex_row_to_fdi(row)[1],
+                    "quadrant": row_to_fdi(row)[0],
+                    "tooth_position": row_to_fdi(row)[1],
                     "diagnosis": cat_lookup.get(row.get(diag_col), "Caries"),
                 }
                 for _, row in anns.iterrows()

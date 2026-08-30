@@ -4,8 +4,9 @@ from dental_agent.training.api_pool import call_llm
 import os
 from PIL import Image
 
+@patch("dental_agent.training.api_pool.time.sleep")
 @patch("dental_agent.training.api_pool._POOL.get_openai_compatible")
-def test_call_llm_kwargs_absorption(mock_get_client):
+def test_call_llm_kwargs_absorption(mock_get_client, mock_sleep):
     """Test that stream and label are absorbed via kwargs."""
     mock_client = MagicMock()
     mock_chunk = MagicMock()
@@ -26,8 +27,9 @@ def test_call_llm_kwargs_absorption(mock_get_client):
     assert res == "Hello!"
     mock_client.chat.completions.create.assert_called_once()
 
+@patch("dental_agent.training.api_pool.time.sleep")
 @patch("dental_agent.training.api_pool._POOL.get_openai_compatible")
-def test_call_llm_no_retries(mock_get_client):
+def test_call_llm_no_retries(mock_get_client, mock_sleep):
     """Test that a 429 Error raises RuntimeError without looping."""
     mock_client = MagicMock()
     # Mocking a rate limit error
@@ -44,9 +46,10 @@ def test_call_llm_no_retries(mock_get_client):
     # Should only be called once, proving it does not retry.
     assert mock_client.chat.completions.create.call_count == 1
 
+@patch("dental_agent.training.api_pool.time.sleep")
 @patch("google.genai.Client")
 @patch.dict(os.environ, {"GEMINI_API_KEY": "fake_key"})
-def test_call_llm_gemini_direct(mock_genai_client):
+def test_call_llm_gemini_direct(mock_genai_client, mock_sleep):
     """Test gemini is called directly."""
     mock_client_instance = MagicMock()
     mock_client_instance.models.generate_content.return_value = MagicMock(text="Gemini text")
@@ -61,9 +64,10 @@ def test_call_llm_gemini_direct(mock_genai_client):
     assert res == "Gemini text"
     mock_client_instance.models.generate_content.assert_called_once()
 
+@patch("dental_agent.training.api_pool.time.sleep")
 @patch("dental_agent.training.api_pool.Image.Image.thumbnail")
 @patch("dental_agent.training.api_pool._POOL.get_openai_compatible")
-def test_call_llm_image_max_dim(mock_get_client, mock_thumbnail):
+def test_call_llm_image_max_dim(mock_get_client, mock_thumbnail, mock_sleep):
     """Test that IMAGE_MAX_DIM correctly scales images, defaults, and overrides."""
     mock_client = MagicMock()
     mock_client.chat.completions.create.return_value = MagicMock(
@@ -103,9 +107,10 @@ def test_call_llm_5xx_retries_once(mock_get_client, mock_sleep):
     mock_client = MagicMock()
     
     # First call raises 500, second call succeeds
+    mock_msg = MagicMock(content="Success on retry!", reasoning=None, reasoning_content=None, model_extra={})
     mock_client.chat.completions.create.side_effect = [
         Exception("500 Internal server error"),
-        MagicMock(choices=[MagicMock(message=MagicMock(content="Success on retry!"))])
+        MagicMock(choices=[MagicMock(message=mock_msg)])
     ]
     mock_get_client.return_value = mock_client
     

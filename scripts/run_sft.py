@@ -10,7 +10,7 @@ from dental_agent.training.sft import train_sft
 def main() -> None:
     parser = argparse.ArgumentParser(description="Stage 1 SFT Trainer")
     parser.add_argument("--config", "-c", default=None, help="Path to config YAML")
-    parser.add_argument("--data", "-d", default="data/synthetic_traces.jsonl", help="Trace dataset JSONL")
+    parser.add_argument("--data", "-d", default="data/traces/train_cot_traces.jsonl", help="Trace dataset JSONL")
     parser.add_argument("--epochs", "-e", type=int, default=3, help="Epochs")
     parser.add_argument("--lr", type=float, default=2e-5, help="Learning rate")
     args = parser.parse_args()

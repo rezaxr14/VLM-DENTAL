@@ -113,9 +113,13 @@ def _prepare_tufts_bundle(temp_dir_path: Path, cfg):
     """Writes a fresh COCO-shaped train.json built from Tufts' own
     DataFrames -- unlike DENTEX, there's no pre-existing DENTEX-style JSON
     file to copy, so this constructs one directly (see tufts.py). Returns
-    (eligible_images_df, image_extension). Will raise NotImplementedError,
-    same as load_tufts_dataset itself, until tufts.py's tooth-position/
-    diagnosis mapping is filled in -- see that module's docstring.
+    (eligible_images_df, image_extension). Uses load_tufts_dataset (not
+    load_tufts_tooth_boxes), so this bundle only covers the ~202 images
+    with a tooth-mapped diagnosis finding -- the same scope trace-gen
+    itself uses, which is what this bundle exists to feed. YOLO training
+    doesn't go through this HF bundle at all (it reads TUFTS_LOCAL_DIR
+    directly via prepare_yolo_dataset.py), so the narrower scope here
+    doesn't limit grounding data.
     """
     from dental_agent.data.tufts import load_tufts_dataset
 
@@ -178,11 +182,11 @@ def main():
     parser = argparse.ArgumentParser(description="Upload a dataset's images to Hugging Face Hub")
     parser.add_argument(
         "--dataset", type=str, required=True, choices=list(DATASET_BUNDLERS.keys()),
-        help="Which dataset to upload. tufts and tunisia will both raise NotImplementedError "
-             "until their annotation mapping is filled in -- see dental_agent/data/tufts.py "
-             "and dental_agent/data/tunisia_panoramic.py respectively. tunisia additionally "
-             "has has_diagnosis_labels=False (dataset_catalog.py): its bundle will never "
-             "carry a diagnosis category, regardless of the mapping question.",
+        help="Which dataset to upload. tufts is implemented (see dental_agent/data/tufts.py). "
+             "tunisia will raise NotImplementedError until its annotation mapping is filled "
+             "in -- see dental_agent/data/tunisia_panoramic.py. tunisia additionally has "
+             "has_diagnosis_labels=False (dataset_catalog.py): its bundle will never carry a "
+             "diagnosis category, regardless of the mapping question.",
     )
     parser.add_argument("--repo-id", type=str, required=True, help="HF Dataset Repo ID (e.g. rezaxr14/dentex-train-images)")
     args = parser.parse_args()

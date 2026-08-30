@@ -1,7 +1,11 @@
-﻿import json
+import os
 import sys
 
-filename = 'data/traces/train_cot_traces_unverified.jsonl'
+default_file = 'data/traces/train_cot_traces_unverified_dentex.jsonl'
+if not os.path.exists(default_file) and os.path.exists('data/traces/train_cot_traces_unverified.jsonl'):
+    default_file = 'data/traces/train_cot_traces_unverified.jsonl'
+
+filename = sys.argv[1] if len(sys.argv) > 1 else default_file
 try:
     with open(filename, 'r', encoding='utf-8', errors='ignore') as f:
         lines = [l.strip() for l in f.readlines() if l.strip()]

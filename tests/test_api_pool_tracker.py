@@ -28,9 +28,10 @@ def test_tracker_increments_and_blocks(mock_tracker_file):
     with pytest.raises(RPDLimitExhausted, match="exhausted its 2 RPD limit"):
         mock_tracker_file.acquire_slot("groq")
 
+@patch("dental_agent.training.api_pool.time.sleep")
 @patch.dict(os.environ, {"GROQ_RPD_LIMIT": "1"})
 @patch("dental_agent.training.api_pool._POOL.get_openai_compatible")
-def test_call_llm_hits_rpd_limit_before_api(mock_get_client, tmp_path):
+def test_call_llm_hits_rpd_limit_before_api(mock_get_client, mock_sleep, tmp_path):
     """Test that call_llm respects the tracker and stops BEFORE calling openai."""
     from dental_agent.training.api_pool import _TRACKER
     _TRACKER.state_path = str(tmp_path / "test_api_usage_state.json")
@@ -47,7 +48,7 @@ def test_call_llm_hits_rpd_limit_before_api(mock_get_client, tmp_path):
     assert mock_client.chat.completions.create.call_count == 1
     
     # Second call hits RPD limit, raises exception, DOES NOT call api
-    with pytest.raises(RuntimeError, match="Hard stop on API errors per rule"):
+    with pytest.raises(RPDLimitExhausted, match="exhausted its 1 RPD limit"):
         call_llm(provider="groq", model="groq", system_prompt="sys", user_content="usr")
         
     assert mock_client.chat.completions.create.call_count == 1  # Still 1!
