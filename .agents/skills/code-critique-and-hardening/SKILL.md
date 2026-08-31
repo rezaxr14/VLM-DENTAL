@@ -102,4 +102,3 @@ Whenever writing code that resolves or downloads dataset assets:
        local_paths_map = download_slice(needed_ids, repo_id=repo_id, cache_dir=cache_dir)
    ```
 3. **Memoize Lookups**: Cache resolved file paths in `_RESOLVED_PATH_CACHE` to eliminate redundant disk probes.
-

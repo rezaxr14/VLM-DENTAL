@@ -255,7 +255,7 @@ def convert_to_yolo_format(output_dir: str | Path, split: str = "train", data_di
                 val/
             dataset.yaml
     """
-    datasets = datasets or ["dentex", "tufts"]
+    datasets = datasets or ["dentex"]
     output_dir = Path(output_dir)
     images_out = output_dir / "images" / split
     labels_out = output_dir / "labels" / split
@@ -414,6 +414,10 @@ def prepare_cv_folds(
 
         for d in [train_img_dir, train_lbl_dir, val_img_dir, val_lbl_dir]:
             d.mkdir(parents=True, exist_ok=True)
+
+        # Clear any stale YOLO label caches to force re-indexing of all images
+        for stale_cache in fold_dir.glob("**/*.cache"):
+            stale_cache.unlink(missing_ok=True)
 
         train_keys = {combined_keys[i] for i in train_idx}
         val_keys = {combined_keys[i] for i in val_idx}
