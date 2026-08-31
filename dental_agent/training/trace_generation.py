@@ -325,8 +325,18 @@ def verify_trace(
             if isinstance(t, dict) and t.get("raw_output")
         ]
     trace_text = "\n\n".join(assistant_msgs) if assistant_msgs else json.dumps(trajectory)
-
     user_content = f"Ground Truth: {json.dumps(ground_truth)}\n\nCandidate Trace:\n{trace_text}"
+
+    # Extract candidate final_answer
+    candidate_final_ans = trajectory.get("final_answer")
+    is_healthy_ground_truth = (ground_truth == [] or ground_truth is None)
+
+    # Deterministic Pre-Check: If scan is healthy (ground truth is empty), candidate MUST NOT predict findings
+    if is_healthy_ground_truth and candidate_final_ans is not None and candidate_final_ans != []:
+        return {
+            "grounded": False,
+            "reason": f"Ground truth is empty (healthy normal scan) but candidate reported {len(candidate_final_ans)} finding(s): {candidate_final_ans}",
+        }
 
     # Section 8: stream=True
     raw = call_llm_fn(v_provider, v_model, VERIFIER_SYSTEM_PROMPT, user_content, image=image, temperature=0.0, max_tokens=2048, response_mime_type="application/json", stream=True, label="verify_trace", role="verifier")
@@ -352,10 +362,22 @@ def verify_trace(
         extracted_reason = "verifier output unparseable"
         grounded = False
 
+    # Programmatic Post-Check: Prevent LLM verifier hallucinations on healthy scans
+    if grounded and is_healthy_ground_truth and candidate_final_ans != []:
+        grounded = False
+        extracted_reason = f"Deterministic rejection: Ground truth is empty but candidate final_answer is {candidate_final_ans}"
+
     result = {"grounded": grounded, "reason": extracted_reason}
 
     # Section 7: LLM-Based Repair
+    # Disallow single-shot text repair for tool-based traces to prevent fabricating fake tool executions
+    is_tool_based = bool(trajectory.get("tool_calls") or len(trajectory.get("turns", [])) > 1)
+
     if not grounded and current_repair_attempt < max_repairs:
+        if is_tool_based:
+            # Tool-based trajectories must be executed dynamically in LangGraph, never faked in a single text rewrite
+            return result
+
         print(f"  [verify_trace] Trace rejected: {extracted_reason}. Attempting repair {current_repair_attempt + 1}/{max_repairs}...")
         gen_prov = generator_provider or os.environ.get("GENERATOR_PROVIDER")
         gen_mod = generator_model or os.environ.get("GENERATOR_MODEL")

@@ -37,9 +37,10 @@ class TestCLIPrecedenceAndRepair(unittest.TestCase):
                 {"role": "assistant", "content": "I see impacted wisdom tooth 18."}
             ],
             "final_answer": [{"quadrant": 1, "tooth_position": 8, "diagnosis": "Impacted Tooth"}],
-            "turns": []
+            "turns": [{"turn": 0}],
+            "tool_calls": 0
         }
-        gt = [] # healthy scan
+        gt = [{"quadrant": 1, "tooth_position": 8, "diagnosis": "Impacted Tooth"}]
 
         call_records = []
         def mock_call_llm(provider, model, sys_prompt, user_content, **kwargs):
@@ -47,12 +48,12 @@ class TestCLIPrecedenceAndRepair(unittest.TestCase):
             if kwargs.get("label") == "verify_trace":
                 if len(call_records) == 1:
                     # First check: reject
-                    return '{"grounded": false, "reason": "Tooth 18 is not impacted, scan is normal."}'
+                    return '{"grounded": false, "reason": "Reasoning lacks visual depth."}'
                 else:
                     # After repair: accept
-                    return '{"grounded": true, "reason": "Repaired and confirmed healthy."}'
+                    return '{"grounded": true, "reason": "Repaired and verified."}'
             elif kwargs.get("label") == "repair_trace":
-                return '{"thought": "Corrected: scan is normal.", "final_answer": []}'
+                return '{"thought": "Detailed reasoning about tooth 18 impaction.", "final_answer": [{"quadrant": 1, "tooth_position": 8, "diagnosis": "Impacted Tooth"}]}'
             return '{}'
 
         with patch.dict(os.environ, {"GENERATOR_PROVIDER": "local", "VERIFIER_PROVIDER": "local"}):
