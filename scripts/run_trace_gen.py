@@ -255,7 +255,7 @@ def _run_generate_for_dataset(args: argparse.Namespace, cfg: Any, dataset_name: 
             imgs_df, annots_df, cats_df = load_tufts_normal_dataset(data_dir=cfg.data_dir)
         else:
             imgs_df, annots_df, cats_df = load_dentex_normal_dataset(data_dir=cfg.data_dir)
-        eligible_imgs = imgs_df[imgs_df["local_path"].notna()].copy()
+        eligible_imgs = imgs_df.copy()
     else:
         if dataset_name == "tufts":
             imgs_df, annots_df, cats_df = load_tufts_dataset(data_dir=cfg.data_dir)
@@ -264,7 +264,7 @@ def _run_generate_for_dataset(args: argparse.Namespace, cfg: Any, dataset_name: 
                 data_dir=cfg.data_dir, split_name=args.split
             )
         annotated_ids = set(annots_df["image_id"].unique())
-        eligible_imgs = imgs_df[imgs_df["id"].isin(annotated_ids)]
+        eligible_imgs = imgs_df[imgs_df["id"].isin(annotated_ids)].copy()
 
     if args.total_slices > 1:
         from dental_agent.data.slicing import get_slice_ids
@@ -302,7 +302,7 @@ def _run_generate_for_dataset(args: argparse.Namespace, cfg: Any, dataset_name: 
 
     slice_info = f" (Slice {args.slice_index}/{args.total_slices})" if args.total_slices > 1 else ""
     print(f"Targeting{slice_info}: {len(eligible_imgs)} eligible images.")
-    print_banner("generate", len(completed_ids), total_eligible)
+    print_banner("generate", len(completed_ids), total_eligible, unverified_path=output_path)
 
     if args.status_only:
         print("Status check complete. Run without --status-only to begin generation.")
@@ -556,6 +556,7 @@ def run_verify(args: argparse.Namespace, cfg: Any) -> None:
         unverified_path, verified_path = resolve_trace_paths(
             dataset_name=dataset_name,
             no_tools=args.no_tools,
+            healthy_only=getattr(args, "healthy_only", False),
             explicit_output=args.output,
             explicit_verified_output=getattr(args, "verified_output", None),
         )
