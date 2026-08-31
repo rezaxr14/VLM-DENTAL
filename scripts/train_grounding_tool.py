@@ -170,13 +170,34 @@ def cross_validate(args):
 
         result = model.train(**train_kwargs)
 
-        metrics = {
-            "fold": fold,
-            "map50": float(result.results_dict.get("metrics/mAP50(B)", 0)),
-            "map50_95": float(result.results_dict.get("metrics/mAP50-95(B)", 0)),
-            "precision": float(result.results_dict.get("metrics/precision(B)", 0)),
-            "recall": float(result.results_dict.get("metrics/recall(B)", 0)),
-        }
+        # Defensively extract metrics from results_dict, box attributes, or results.csv
+        metrics = {"fold": fold, "map50": 0.0, "map50_95": 0.0, "precision": 0.0, "recall": 0.0}
+        if hasattr(result, "results_dict") and isinstance(result.results_dict, dict) and result.results_dict:
+            res_d = result.results_dict
+            metrics["map50"] = float(res_d.get("metrics/mAP50(B)", res_d.get("metrics/mAP50", 0.0)))
+            metrics["map50_95"] = float(res_d.get("metrics/mAP50-95(B)", res_d.get("metrics/mAP50-95", 0.0)))
+            metrics["precision"] = float(res_d.get("metrics/precision(B)", res_d.get("metrics/precision", 0.0)))
+            metrics["recall"] = float(res_d.get("metrics/recall(B)", res_d.get("metrics/recall", 0.0)))
+        elif hasattr(result, "box"):
+            metrics["map50"] = float(getattr(result.box, "map50", 0.0))
+            metrics["map50_95"] = float(getattr(result.box, "map", 0.0))
+            metrics["precision"] = float(getattr(result.box, "mp", 0.0))
+            metrics["recall"] = float(getattr(result.box, "mr", 0.0))
+
+        csv_path = fold_dir / "results.csv"
+        if csv_path.exists() and (metrics["map50"] == 0.0 and metrics["map50_95"] == 0.0):
+            try:
+                import pandas as pd
+                df = pd.read_csv(csv_path)
+                df.columns = df.columns.str.strip()
+                last_row = df.iloc[-1]
+                metrics["map50"] = float(last_row.get("metrics/mAP50(B)", 0.0))
+                metrics["map50_95"] = float(last_row.get("metrics/mAP50-95(B)", 0.0))
+                metrics["precision"] = float(last_row.get("metrics/precision(B)", 0.0))
+                metrics["recall"] = float(last_row.get("metrics/recall(B)", 0.0))
+            except Exception:
+                pass
+
         results.append(metrics)
         print(f"\nFold {fold}: mAP50={metrics['map50']:.4f}  mAP50-95={metrics['map50_95']:.4f}")
 
