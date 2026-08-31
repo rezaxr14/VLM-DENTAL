@@ -466,6 +466,7 @@ def generate_only(
     max_blobs_per_turn: int = 2,
     max_padding_turns: int = 3,
     max_identical_repeats: int = 3,
+    healthy_only: bool = False,
 ) -> dict[str, Any] | None:
     """Generate a raw (unverified) trace for a single image.
     
@@ -481,8 +482,8 @@ def generate_only(
         return None
 
     image = Image.open(image_path).convert("RGB")
-    anns = annots_df[annots_df["image_id"] == image_id]
-    if anns.empty:
+    anns = annots_df[annots_df["image_id"] == image_id] if annots_df is not None and not annots_df.empty else pd.DataFrame()
+    if anns.empty and not healthy_only:
         return None
 
     cat_lookup = (
@@ -547,6 +548,7 @@ def generate_only_no_tools(
     categories_df: pd.DataFrame | None = None,
     diag_col: str = "category_id_3",
     max_tokens: int = 2048,
+    healthy_only: bool = False,
 ) -> dict[str, Any] | None:
     """Tool-free sibling of generate_only -- for baseline #3's SFT training
     data (dentex-agentic-vlm-proposal.md §6). Mirrors generate_only's exact
@@ -571,8 +573,8 @@ def generate_only_no_tools(
         return None
 
     image = Image.open(image_path).convert("RGB")
-    anns = annots_df[annots_df["image_id"] == image_id]
-    if anns.empty:
+    anns = annots_df[annots_df["image_id"] == image_id] if annots_df is not None and not annots_df.empty else pd.DataFrame()
+    if anns.empty and not healthy_only:
         return None
 
     cat_lookup = (

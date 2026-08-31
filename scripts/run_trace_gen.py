@@ -338,6 +338,7 @@ def _run_generate_for_dataset(args: argparse.Namespace, cfg: Any, dataset_name: 
                 annots_df=annots_df,
                 categories_df=cats_df,
                 max_tokens=args.max_tokens or 2048,
+                healthy_only=healthy,
             )
         else:
             res = generate_only(
@@ -356,6 +357,7 @@ def _run_generate_for_dataset(args: argparse.Namespace, cfg: Any, dataset_name: 
                 max_blobs_per_turn=args.max_blobs_per_turn,
                 max_padding_turns=args.max_padding_turns,
                 max_identical_repeats=args.max_identical_repeats,
+                healthy_only=healthy,
             )
         elapsed = time.time() - t0
         return res, elapsed

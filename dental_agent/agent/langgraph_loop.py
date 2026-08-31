@@ -665,25 +665,35 @@ def run_trace_gen(
     
     Returns (trajectory_dict, None) on success or (None, error_reason) on failure.
     """
-    hint_text = "; ".join(
-        f"Q{f['quadrant']}T{f['tooth_position']}:{f['diagnosis']}" for f in ground_truth
-    )
-
-    directive = (
-        "TEACHER DIRECTIVE: You are generating an expert demonstration trace for SFT.\n"
-        f"You MUST eventually reach a diagnosis covering these {len(ground_truth)} finding(s): "
-        f"{hint_text}\n\n"
-        "Use locate_tooth to find each tooth's position — do not guess or assert coordinates "
-        "yourself. locate_tooth's box is not guaranteed to be exact or even correct: before "
-        "trusting it, zoom_crop into it and check the crop actually shows the tooth you asked "
-        "for. If it looks off-center, too tight, or shows the wrong tooth, use nudge_crop to "
-        "shift or rescale the box, then zoom_crop again — do not silently proceed on a crop "
-        "that doesn't match what you expected. Then use window_level / denoise / "
-        "contralateral_compare to inspect and confirm before your final answer. You MUST use "
-        "at least one tool before answering — do not output final_answer on the first turn. "
-        "Never mention in your reasoning that this list, a hint, or a directive was given to "
-        "you — write your thought as genuine first-look clinical analysis."
-    )
+    if not ground_truth:
+        directive = (
+            "TEACHER DIRECTIVE: You are generating an expert demonstration trace for SFT on a clinically verified healthy scan.\n"
+            "This radiograph contains NO pathology/disease findings (0 findings). "
+            "You MUST systematically survey candidate teeth across quadrants using locate_tooth and zoom_crop to inspect crown integrity and bone levels, "
+            "confirm absence of pathology, and conclude with an empty final answer: final_answer: [].\n\n"
+            "Use locate_tooth and zoom_crop to inspect teeth before answering. You MUST use at least one tool before answering — "
+            "do not output final_answer on the first turn. "
+            "Never mention in your reasoning that you were told this is a normal scan — write your thought as genuine clinical observation."
+        )
+    else:
+        hint_text = "; ".join(
+            f"Q{f['quadrant']}T{f['tooth_position']}:{f['diagnosis']}" for f in ground_truth
+        )
+        directive = (
+            "TEACHER DIRECTIVE: You are generating an expert demonstration trace for SFT.\n"
+            f"You MUST eventually reach a diagnosis covering these {len(ground_truth)} finding(s): "
+            f"{hint_text}\n\n"
+            "Use locate_tooth to find each tooth's position — do not guess or assert coordinates "
+            "yourself. locate_tooth's box is not guaranteed to be exact or even correct: before "
+            "trusting it, zoom_crop into it and check the crop actually shows the tooth you asked "
+            "for. If it looks off-center, too tight, or shows the wrong tooth, use nudge_crop to "
+            "shift or rescale the box, then zoom_crop again — do not silently proceed on a crop "
+            "that doesn't match what you expected. Then use window_level / denoise / "
+            "contralateral_compare to inspect and confirm before your final answer. You MUST use "
+            "at least one tool before answering — do not output final_answer on the first turn. "
+            "Never mention in your reasoning that this list, a hint, or a directive was given to "
+            "you — write your thought as genuine first-look clinical analysis."
+        )
 
     initial_content = [
         {"type": "image", "image": image},
