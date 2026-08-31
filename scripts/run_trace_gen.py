@@ -64,8 +64,8 @@ if repo_root not in sys.path:
     sys.path.insert(0, repo_root)
 
 from dental_agent.config import load_config, load_env
-from dental_agent.data.dentex import load_dentex_dataset
-from dental_agent.data.tufts import load_tufts_dataset
+from dental_agent.data.dentex import load_dentex_dataset, load_dentex_normal_dataset
+from dental_agent.data.tufts import load_tufts_dataset, load_tufts_normal_dataset
 from dental_agent.training.api_pool import (
     verify_local_server_health,
     RPDLimitExhausted,
@@ -93,37 +93,23 @@ DEFAULT_VERIFIED = "data/traces/train_cot_traces.jsonl"
 def resolve_trace_paths(
     dataset_name: str = "dentex",
     no_tools: bool = False,
+    healthy_only: bool = False,
     explicit_output: str | Path | None = None,
     explicit_verified_output: str | Path | None = None,
 ) -> tuple[Path, Path]:
-    """Authoritative resolver for (unverified_path, verified_path).
-
-    Standardized Naming Schema:
-      Unverified:
-        - DENTEX tool-based: data/traces/train_cot_traces_unverified_dentex.jsonl
-        - DENTEX no-tools:   data/traces/train_cot_traces_unverified_dentex_no_tools.jsonl
-        - Custom tool-based: data/traces/train_cot_traces_unverified_{dataset}.jsonl
-        - Custom no-tools:   data/traces/train_cot_traces_unverified_{dataset}_no_tools.jsonl
-      Verified (shared canonical destination for all datasets):
-        - Tool-based:        data/traces/train_cot_traces.jsonl
-        - No-tools:          data/traces/train_cot_traces_no_tools.jsonl
-
-    Backward Compatibility:
-      If canonical unverified path does not exist on disk, checks legacy un-suffixed
-      fallbacks (e.g. train_cot_traces_unverified.jsonl) before defaulting to canonical.
-    """
+    """Authoritative resolver for (unverified_path, verified_path)."""
     clean_ds = (dataset_name.split(",")[0] if "," in dataset_name else dataset_name).strip().lower()
     suffix = "_no_tools" if no_tools else ""
+    healthy_prefix = "healthy_" if healthy_only else ""
 
     # 1. Resolve unverified path
     if explicit_output:
         unverified_path = Path(explicit_output)
     else:
-        canonical_unverified = Path(f"data/traces/train_cot_traces_unverified_{clean_ds}{suffix}.jsonl")
+        canonical_unverified = Path(f"data/traces/train_cot_traces_unverified_{healthy_prefix}{clean_ds}{suffix}.jsonl")
         if canonical_unverified.exists():
             unverified_path = canonical_unverified
         else:
-            # Check legacy fallbacks in order of historical precedence
             legacy_candidates = [
                 Path(f"data/traces/train_cot_traces_unverified{suffix}.jsonl"),
                 Path(f"data/traces/train_cot_traces_{clean_ds}{suffix}_unverified.jsonl"),
@@ -142,7 +128,10 @@ def resolve_trace_paths(
     if explicit_verified_output:
         verified_path = Path(explicit_verified_output)
     else:
-        verified_path = Path(f"data/traces/train_cot_traces{suffix}.jsonl")
+        if healthy_only:
+            verified_path = Path(f"data/traces/train_cot_traces_healthy_{clean_ds}{suffix}.jsonl")
+        else:
+            verified_path = Path(f"data/traces/train_cot_traces{suffix}.jsonl")
 
     return unverified_path, verified_path
 
@@ -242,11 +231,14 @@ def run_generate(args: argparse.Namespace, cfg: Any) -> None:
     if not dataset_list:
         dataset_list = ["dentex"]
 
+    healthy = getattr(args, "healthy_only", False)
+
     for dataset_name in dataset_list:
         output_path, _ = resolve_trace_paths(
             dataset_name=dataset_name,
             no_tools=args.no_tools,
-            explicit_output=args.output,
+            healthy_only=healthy,
+            explicit_output=args.output or getattr(args, "output_path", None),
         )
 
         if len(dataset_list) > 1:
@@ -256,21 +248,23 @@ def run_generate(args: argparse.Namespace, cfg: Any) -> None:
 
 def _run_generate_for_dataset(args: argparse.Namespace, cfg: Any, dataset_name: str, output_path: Path) -> None:
     """Run the LangGraph generation loop for one dataset, writing unverified traces."""
+    healthy = getattr(args, "healthy_only", False)
 
-    # Load dataset -- dispatches on dataset_name (default: dentex, unchanged
-    # behavior). tufts currently raises NotImplementedError with a clear
-    # message until its tooth-position/diagnosis mapping is filled in
-    # (see dental_agent/data/tufts.py's module docstring) -- that's
-    # intentional, not a bug in this dispatch.
-    if dataset_name == "tufts":
-        imgs_df, annots_df, cats_df = load_tufts_dataset(data_dir=cfg.data_dir)
+    if healthy:
+        if dataset_name == "tufts":
+            imgs_df, annots_df, cats_df = load_tufts_normal_dataset(data_dir=cfg.data_dir)
+        else:
+            imgs_df, annots_df, cats_df = load_dentex_normal_dataset(data_dir=cfg.data_dir)
+        eligible_imgs = imgs_df[imgs_df["local_path"].notna()].copy()
     else:
-        imgs_df, annots_df, cats_df = load_dentex_dataset(
-            data_dir=cfg.data_dir, split_name=args.split
-        )
-
-    annotated_ids = set(annots_df["image_id"].unique())
-    eligible_imgs = imgs_df[imgs_df["id"].isin(annotated_ids)]
+        if dataset_name == "tufts":
+            imgs_df, annots_df, cats_df = load_tufts_dataset(data_dir=cfg.data_dir)
+        else:
+            imgs_df, annots_df, cats_df = load_dentex_dataset(
+                data_dir=cfg.data_dir, split_name=args.split
+            )
+        annotated_ids = set(annots_df["image_id"].unique())
+        eligible_imgs = imgs_df[imgs_df["id"].isin(annotated_ids)]
 
     if args.total_slices > 1:
         from dental_agent.data.slicing import get_slice_ids
@@ -641,15 +635,6 @@ def _run_verify_for_dataset(
     total_verified = len(load_completed_ids(verified_path))
 
     if args.git_sync_every > 0 and result["verified"] > 0:
-        # verify_pending runs to completion in one call with no natural
-        # per-record hook, unlike generate mode's per-image loop -- so
-        # --git-sync-every is a simple on/off flag here (any nonzero value),
-        # not a fine-grained interval. verified_path is the SAME shared file
-        # across all datasets/workers (see run_verify's docstring) -- still
-        # safe for the same reason as the per-worker unverified files:
-        # verify_pending only ever appends newly-promoted lines, never edits
-        # existing ones, so concurrent verify-mode workers' pushes are pure
-        # appends too (see .gitattributes' merge=union rule).
         try:
             sync_and_push(
                 [verified_path],
@@ -657,9 +642,6 @@ def _run_verify_for_dataset(
             )
         except Exception as e:
             print(f"  [git-sync] unexpected error during sync: {e}", flush=True)
-    
-    from dental_agent.training.api_pool import _TRACKER
-    verifier_provider = os.environ.get("VERIFIER_PROVIDER", "local")
 
     print("\n" + "=" * 70)
     print("VERIFICATION SESSION SUMMARY")
@@ -668,7 +650,6 @@ def _run_verify_for_dataset(
     print(f"* Verified this run  : {result['verified']}")
     print(f"* Rejected this run  : {result['rejected']}")
     print(f"* Total verified     : {total_verified}")
-    print(f"* API State          : {_TRACKER.get_stats(verifier_provider)}")
     print(f"* Session Duration   : {total_time / 60:.1f} minutes")
     print(f"* Verified File      : {verified_path}")
     print("=" * 70 + "\n")
@@ -676,10 +657,12 @@ def _run_verify_for_dataset(
 
 def run_clean(args: argparse.Namespace, cfg: Any) -> None:
     dataset_name = (args.dataset.split(",")[0] if "," in args.dataset else args.dataset).strip().lower()
+    healthy = getattr(args, "healthy_only", False)
     unverified_path, _ = resolve_trace_paths(
         dataset_name=dataset_name,
         no_tools=args.no_tools,
-        explicit_output=args.output,
+        healthy_only=healthy,
+        explicit_output=args.output or getattr(args, "output_path", None),
     )
     
     print(f"\nScanning and cleaning trace file: {unverified_path}...")
@@ -695,11 +678,13 @@ def run_clean(args: argparse.Namespace, cfg: Any) -> None:
 
 def run_repair(args: argparse.Namespace, cfg: Any) -> None:
     dataset_name = (args.dataset.split(",")[0] if "," in args.dataset else args.dataset).strip().lower()
+    healthy = getattr(args, "healthy_only", False)
     unverified_path, verified_path = resolve_trace_paths(
         dataset_name=dataset_name,
         no_tools=args.no_tools,
-        explicit_output=args.output,
-        explicit_verified_output=getattr(args, "verified_output", None),
+        healthy_only=healthy,
+        explicit_output=args.output or getattr(args, "output_path", None),
+        explicit_verified_output=getattr(args, "verified_output", None) or getattr(args, "verified_output_path", None),
     )
 
     session_start = time.time()
@@ -817,15 +802,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output",
         "-o",
+        "--output-path",
         type=str,
         default=None,
+        dest="output",
         help="Override unverified trace file path (for generate, verify input, clean, repair).",
     )
     parser.add_argument(
         "--verified-output",
+        "--verified-output-path",
         type=str,
         default=None,
+        dest="verified_output",
         help="Override verified output trace file path (for verify, repair). Defaults to data/traces/train_cot_traces.jsonl",
+    )
+    parser.add_argument(
+        "--healthy-only",
+        action="store_true",
+        help="Generate negative control traces from clinician-verified normal cases only (0 disease findings).",
     )
     parser.add_argument(
         "--split",

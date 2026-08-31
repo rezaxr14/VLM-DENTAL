@@ -632,3 +632,19 @@ def load_dentex_dataset(
     images_df = resolve_image_paths(images_df, dentex_path)
     return images_df, annots_df, categories_df
 
+
+def load_dentex_normal_dataset(
+    data_dir: str | Path | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Load the 27 clinician-verified NORMAL images from DENTEX training data
+    (images evaluated in quadrant-enumeration-disease that have 0 disease annotations).
+    """
+    imgs_df, annots_df, cats_df = load_dentex_dataset(
+        data_dir=data_dir, split_name="train", combine_enumeration_splits=False
+    )
+    annot_ids = set(annots_df["image_id"].unique())
+    normal_imgs_df = imgs_df[~imgs_df["id"].isin(annot_ids) & imgs_df["local_path"].notna()].copy()
+    empty_annots_df = pd.DataFrame(columns=["image_id", "category_id_1", "category_id_2", "category_id_3", "bbox", "source_dataset"])
+    print(f"load_dentex_normal_dataset: {len(normal_imgs_df)} clinician-verified normal images loaded.")
+    return normal_imgs_df, empty_annots_df, cats_df
+

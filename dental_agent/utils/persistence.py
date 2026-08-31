@@ -33,6 +33,7 @@ def sync_push_artifacts(
     local_dir: str | Path,
     repo_id: str,
     repo_type: str = "model",
+    path_in_repo: str | None = None,
     commit_message: str = "Sync experiment artifacts",
     token: str | None = None,
     private: bool = True,
@@ -44,9 +45,12 @@ def sync_push_artifacts(
 
     api = HfApi(token=token)
     api.create_repo(repo_id=repo_id, repo_type=repo_type, private=private, exist_ok=True)
-    return api.upload_folder(
+    kwargs = dict(
         folder_path=str(local_dir),
         repo_id=repo_id,
         repo_type=repo_type,
         commit_message=commit_message,
     )
+    if path_in_repo:
+        kwargs["path_in_repo"] = path_in_repo
+    return api.upload_folder(**kwargs)

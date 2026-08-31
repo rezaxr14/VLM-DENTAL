@@ -153,6 +153,8 @@ def cross_validate(args):
             name=f"{prefix}cv_fold_{fold}",
             exist_ok=True,
         )
+        if hasattr(args, "save_period") and args.save_period:
+            train_kwargs["save_period"] = args.save_period
         if hasattr(args, "patience") and args.patience:
             train_kwargs["patience"] = args.patience
         if resume and last_pt.exists():
@@ -169,6 +171,35 @@ def cross_validate(args):
         }
         results.append(metrics)
         print(f"\nFold {fold}: mAP50={metrics['map50']:.4f}  mAP50-95={metrics['map50_95']:.4f}")
+
+        # Clean up intermediate epoch checkpoints (keep best.pt and last.pt)
+        weights_dir = fold_dir / "weights"
+        if weights_dir.exists():
+            for ep_file in weights_dir.glob("epoch*.pt"):
+                try:
+                    ep_file.unlink()
+                except Exception:
+                    pass
+
+        # Sync completed fold to Hugging Face if configured
+        if not getattr(args, "no_hf_sync", False):
+            hf_token = os.environ.get("HF_TOKEN")
+            hf_repo = os.environ.get("HF_ARTIFACT_REPO", "Reza-Nadimi/vlm-dental-models")
+            if hf_token and not hf_token.startswith("YOUR_"):
+                try:
+                    from huggingface_hub import HfApi
+                    api = HfApi(token=hf_token)
+                    api.create_repo(repo_id=hf_repo, repo_type="model", exist_ok=True)
+                    api.upload_folder(
+                        folder_path=str(model_root),
+                        path_in_repo="yolo_cv",
+                        repo_id=hf_repo,
+                        repo_type="model",
+                        commit_message=f"Auto-sync YOLO CV fold {fold} complete",
+                    )
+                    print(f"  [HF Sync] Uploaded fold {fold} artifacts to {hf_repo}/yolo_cv")
+                except Exception as e:
+                    print(f"  [HF Sync] Notice: Could not sync fold {fold} to HF: {e}")
 
         # Free GPU memory before next fold
         del model
@@ -237,10 +268,31 @@ def cross_validate(args):
     results_path.write_text(json.dumps(results_data, indent=2))
     print(f"  Results saved to: {results_path}")
 
+    # Final sync to Hugging Face
+    if not getattr(args, "no_hf_sync", False):
+        hf_token = os.environ.get("HF_TOKEN")
+        hf_repo = os.environ.get("HF_ARTIFACT_REPO", "Reza-Nadimi/vlm-dental-models")
+        if hf_token and not hf_token.startswith("YOUR_"):
+            try:
+                from huggingface_hub import HfApi
+                api = HfApi(token=hf_token)
+                api.create_repo(repo_id=hf_repo, repo_type="model", exist_ok=True)
+                api.upload_folder(
+                    folder_path=str(model_root),
+                    path_in_repo="yolo_cv",
+                    repo_id=hf_repo,
+                    repo_type="model",
+                    commit_message="Final YOLO CV results & best model weights",
+                )
+                print(f"  [HF Sync] Successfully uploaded final CV results and best models to {hf_repo}/yolo_cv")
+            except Exception as e:
+                print(f"  [HF Sync] Notice: Could not push final models to HF: {e}")
+
 
 def main():
     parser = argparse.ArgumentParser(description="Train YOLOv8 Grounding Tool.")
     parser.add_argument("--epochs", type=int, default=50, help="Number of training epochs")
+    parser.add_argument("--save-period", type=int, default=10, help="Save checkpoint every X epochs")
     parser.add_argument("--patience", type=int, default=None, help="Early stopping patience (epochs without improvement)")
     parser.add_argument("--batch", type=int, default=16, help="Batch size")
     parser.add_argument("--imgsz", type=int, default=640, help="Image size")
@@ -249,14 +301,10 @@ def main():
     parser.add_argument("--cross-validate", action="store_true", help="Run 5-fold cross-validation instead of single training")
     parser.add_argument("--folds", type=int, default=5, help="Number of CV folds (only used with --cross-validate)")
     parser.add_argument("--resume", action="store_true", help="Resume training from last checkpoint if available")
+    parser.add_argument("--no-hf-sync", action="store_true", help="Disable automatic syncing to Hugging Face Hub")
     parser.add_argument(
         "--datasets", type=str, default="dentex",
-        help="Comma-separated dataset names -- must match whatever --datasets value was "
-             "passed to prepare_yolo_dataset.py when building the input directory this reads "
-             "(default: dentex, unchanged behavior/paths). e.g. --datasets dentex,tufts. "
-             "Also tags this run's own output directories (cv_fold_N, grounding_tool_cv_best, "
-             "etc.) so a combined run's results/checkpoints never overwrite or get mistaken "
-             "for a dentex-only run's -- see _model_subdir_prefix's docstring.",
+        help="Comma-separated dataset names (e.g. dentex,tufts).",
     )
     args = parser.parse_args()
 

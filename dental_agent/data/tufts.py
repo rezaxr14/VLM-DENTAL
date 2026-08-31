@@ -197,20 +197,14 @@ _TUFTS_TITLE_TO_DENTEX_CATEGORY_ID: dict[str, int | None] = {
 def find_local_tufts_dir(search_roots: list[str] | None = None) -> Path | None:
     """Look for an already-extracted local copy of the Tufts archive.
 
-    Unlike DENTEX, there's no automatic fetch here -- Tufts access is gated
-    behind a request form, so this only ever looks at local disk. Set
-    TUFTS_LOCAL_DIR in .env to skip the search entirely.
+    If not found locally, falls back to downloading the full repository snapshot
+    from TUFTS_IMAGES_REPO if configured in .env.
     """
     env_path = os.environ.get("TUFTS_LOCAL_DIR")
     if env_path and os.path.isdir(env_path):
         return Path(env_path)
 
     search_roots = search_roots or [".", "./data", "/content", "/kaggle/input"]
-    # Tolerant of naming variation across different real-world extracted
-    # copies. Confirmed real-world folder name is a plain "Tufts" (no
-    # "Dental" in it) sitting directly under data/ -- *[Tt]ufts* alone
-    # covers that; the more specific patterns are kept for other layouts
-    # (e.g. a zip that extracts to "Tufts_Dental_Database").
     patterns = ["*[Tt]ufts*", "*TDD*", "*tufts-dental-database*"]
     for root in search_roots:
         if not os.path.isdir(root):
@@ -220,33 +214,47 @@ def find_local_tufts_dir(search_roots: list[str] | None = None) -> Path | None:
             for m in matches:
                 if os.path.isdir(m):
                     return Path(m)
+
+    # HF snapshot fallback if dataset is uploaded to Hugging Face
+    repo_id = os.environ.get("TUFTS_IMAGES_REPO")
+    if repo_id:
+        try:
+            from huggingface_hub import snapshot_download
+            target_dir = Path("data/Tufts")
+            print(f"Local Tufts folder not found. Downloading full dataset snapshot from {repo_id} to {target_dir}...")
+            snapshot_download(
+                repo_id=repo_id,
+                repo_type="dataset",
+                local_dir=str(target_dir),
+                token=os.environ.get("HF_TOKEN"),
+            )
+            if target_dir.is_dir():
+                return target_dir
+        except Exception as e:
+            print(f"Warning: snapshot_download from {repo_id} failed: {e}")
+
     return None
 
 
 def _find_radiograph_dir(tufts_root: Path) -> Path | None:
-    """Locate the raw radiograph images under the Tufts folder tree.
-
-    Verified real layout: images sit directly in Radiographs/ (flat,
-    "1.JPG".."1000.JPG"-ish -- see module docstring re: the actual id set
-    not being a clean 1-1000 range), not nested under an Images1/
-    subfolder as an earlier, unverified draft of this function assumed.
-    Still tolerant of a nested layout in case a different extraction tool
-    produces one.
-    """
+    """Locate the raw radiograph images under the Tufts folder tree."""
     direct = tufts_root / "Radiographs"
-    if direct.is_dir() and (
-        any(direct.glob("*.jpg")) or any(direct.glob("*.JPG")) or any(direct.glob("*.png"))
-    ):
-        return direct
+    if direct.is_dir():
+        image_files = list(direct.glob("*.jpg")) + list(direct.glob("*.JPG")) + list(direct.glob("*.png"))
+        if len(image_files) > 0:
+            return direct
 
     candidates = list(tufts_root.glob("**/Radiograph*/**")) + list(tufts_root.glob("**/radiograph*/**"))
     scored = []
     for c in candidates:
         if not c.is_dir():
             continue
-        n_images = len(list(c.glob("*.jpg"))) + len(list(c.glob("*.JPG"))) + len(list(c.glob("*.png")))
-        if n_images:
-            scored.append((n_images, c))
+        seen = set()
+        for ext in ("*.jpg", "*.JPG", "*.png", "*.PNG"):
+            for f in c.glob(ext):
+                seen.add(f.resolve())
+        if seen:
+            scored.append((len(seen), c))
     if not scored:
         return None
     scored.sort(key=lambda t: -t[0])
@@ -493,9 +501,15 @@ def _build_images_df(radiograph_dir: Path, max_images: int | None) -> pd.DataFra
     local_path, width, height, source_dataset). Shared by load_tufts_dataset
     and load_tufts_tooth_boxes so both return images_df built the exact
     same way."""
-    image_files = sorted(
-        list(radiograph_dir.glob("*.jpg")) + list(radiograph_dir.glob("*.JPG")) + list(radiograph_dir.glob("*.png"))
-    )
+    seen = set()
+    unique_files = []
+    for ext in ("*.jpg", "*.JPG", "*.jpeg", "*.JPEG", "*.png", "*.PNG"):
+        for f in radiograph_dir.glob(ext):
+            canon = f.resolve()
+            if canon not in seen:
+                seen.add(canon)
+                unique_files.append(f)
+    image_files = sorted(unique_files, key=lambda p: _stem_id(p.name))
     if max_images:
         image_files = image_files[:max_images]
     rows = []
@@ -752,15 +766,55 @@ def download_tufts_slice(
     repo_id: str | None = None,
     cache_dir: str | None = None,
 ) -> dict[int, Path | None]:
-    """Download only the given image_ids from a lightweight per-image HF
-    repo (same mechanism as DENTEX, once Tufts images have actually been
-    uploaded there by scripts/upload_dataset_images_to_hf.py --dataset
-    tufts -- see hf_dataset_utils.py). image_ids here are Tufts' own
-    native numeric ids (e.g. 149, 702, 1051 -- NOT a resequenced 0..999
-    index; see module docstring re: the real id set having gaps and
-    going above 1000), matching images_df["id"] from load_tufts_dataset.
+    """Download only the given image_ids from Tufts' HF images repo (once
+    uploaded by scripts/upload_dataset_images_to_hf.py --dataset tufts --
+    see hf_dataset_utils.py). image_ids here are Tufts' own native numeric
+    ids (e.g. 149, 702, 1051 -- NOT a resequenced 0..999 index; see module
+    docstring re: the real id set having gaps and going above 1000),
+    matching images_df["id"] from load_tufts_dataset.
+
+    filename_template mirrors Radiographs/{id}.JPG -- the real local Tufts
+    folder layout, not a flattened images/{id}.jpg bundle.
     """
     if repo_id is None:
         repo_id = os.environ.get("TUFTS_IMAGES_REPO")
     from dental_agent.data.hf_dataset_utils import download_dataset_slice
-    return download_dataset_slice(image_ids, repo_id=repo_id, filename_template="images/{id}.jpg", cache_dir=cache_dir)
+    return download_dataset_slice(image_ids, repo_id=repo_id, filename_template="Radiographs/{id}.JPG", cache_dir=cache_dir)
+
+
+def load_tufts_normal_dataset(
+    data_dir: str | None = None,
+    max_images: int | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Load the 660 clinician-verified NORMAL images from Tufts (Expert records with title: 'None').
+
+    Returns (images_df, annots_df, categories_df) where annots_df is an empty DataFrame (0 findings).
+    """
+    tufts_root = find_local_tufts_dir()
+    if tufts_root is None:
+        raise FileNotFoundError("No Tufts dataset directory found.")
+    radiograph_dir = _find_radiograph_dir(tufts_root)
+    if radiograph_dir is None:
+        raise FileNotFoundError(f"Found {tufts_root} but couldn't locate Radiographs folder.")
+    expert_path = _find_annotation_file(tufts_root, "Expert", "expert.json")
+    if expert_path is None:
+        raise FileNotFoundError(f"Found {tufts_root} but no expert.json under it.")
+
+    images_df = _build_images_df(radiograph_dir, max_images)
+    available_ids = set(images_df["id"]) if len(images_df) else set()
+
+    findings_by_image = _load_findings(expert_path)
+    normal_ids = set()
+    for entry in findings_by_image:
+        image_id = entry["image_id"]
+        # If image has zero findings or all findings have title 'None' / unmapped
+        if not entry["findings"] or all(f.get("title") in ("None", None) or f.get("dentex_category_id") is None for f in entry["findings"]):
+            normal_ids.add(image_id)
+
+    if available_ids:
+        normal_ids = normal_ids.intersection(available_ids)
+
+    normal_images_df = images_df[images_df["id"].isin(normal_ids)].copy()
+    empty_annots_df = pd.DataFrame(columns=["image_id", "category_id_1", "category_id_2", "category_id_3", "bbox", "source_dataset"])
+    print(f"load_tufts_normal_dataset: {len(normal_images_df)} clinician-verified normal images loaded.")
+    return normal_images_df, empty_annots_df, pd.DataFrame(DENTEX_CATEGORIES)
