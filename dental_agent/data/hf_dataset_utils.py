@@ -55,7 +55,9 @@ def download_dataset_slice(
             )
             return img_id, Path(local_path)
         except Exception as e:
-            print(f"Warning: Failed to download targeted slice image {img_id} ({filename}): {e}")
+            err_line = str(e).split("\n")[0]
+            # Clean single-line notice if remote item is absent
+            # (e.g. out-of-bounds indices in composite metadata)
             return img_id, None
 
     max_workers = min(16, max(1, len(image_ids)))
