@@ -20,6 +20,9 @@ def parse_agent_json(text: str) -> Optional[dict[str, Any]]:
     result = _parse_agent_json_raw(text)
     if result is None:
         return None
+    if "findings" in result and "final_answer" not in result:
+        result = dict(result)
+        result["final_answer"] = result.pop("findings")
     if "tool" in result and "tool_calls" not in result:
         result = dict(result)
         result["tool_calls"] = [{"tool": result.pop("tool"), "args": result.pop("args", {}) or {}}]
@@ -102,18 +105,18 @@ def _parse_agent_json_raw(text: str) -> Optional[dict[str, Any]]:
         # If there are code blocks, try the last one first (usually the final answer)
         for block in reversed(code_blocks):
             result = _try_parse_json(block.strip())
-            if result is not None and ("final_answer" in result or "tool" in result or "tool_calls" in result):
+            if result is not None and ("final_answer" in result or "findings" in result or "tool" in result or "tool_calls" in result):
                 return result
 
     # 2. Extract ALL independent {} blocks and pick the best one.
     candidates = _extract_candidates(cleaned)
                         
     # --- Multi-blob merge (handles models like minimax that dump several JSON objects per turn) ---
-    # Collect every parseable candidate that carries tool_calls or final_answer.
+    # Collect every parseable candidate that carries tool_calls, final_answer, or findings.
     parsed_candidates = []
     for cand in candidates:
         res = _try_parse_json(cand)
-        if res and ("final_answer" in res or "tool" in res or "tool_calls" in res):
+        if res and ("final_answer" in res or "findings" in res or "tool" in res or "tool_calls" in res):
             parsed_candidates.append(res)
 
     if len(parsed_candidates) > 1:
@@ -133,6 +136,8 @@ def _parse_agent_json_raw(text: str) -> Optional[dict[str, Any]]:
                 merged_tool_calls.extend(pc["tool_calls"])
             if "final_answer" in pc and merged_final_answer is None:
                 merged_final_answer = pc["final_answer"]
+            elif "findings" in pc and merged_final_answer is None:
+                merged_final_answer = pc["findings"]
 
         merged: dict = {}
         if merged_thought_parts:
@@ -149,18 +154,18 @@ def _parse_agent_json_raw(text: str) -> Optional[dict[str, Any]]:
         return parsed_candidates[-1]
             
     # 3. If no balanced candidates worked (truncation), try repairing the outermost block that looks like an action
-    action_idx = max(cleaned.rfind('{"final_answer"'), cleaned.rfind('{"tool"'))
+    action_idx = max(cleaned.rfind('{"final_answer"'), cleaned.rfind('{"findings"'), cleaned.rfind('{"tool"'))
     if action_idx != -1:
         fragment = cleaned[action_idx:]
         result = _repair_truncated_json(fragment)
-        if result is not None and ("final_answer" in result or "tool" in result or "tool_calls" in result):
+        if result is not None and ("final_answer" in result or "findings" in result or "tool" in result or "tool_calls" in result):
             return result
 
     # 4. Fallback: Try repairing the absolute largest block we can find just in case
     first_brace = cleaned.find("{")
     if first_brace != -1:
         result = _repair_truncated_json(cleaned[first_brace:])
-        if result is not None and ("final_answer" in result or "tool" in result or "tool_calls" in result):
+        if result is not None and ("final_answer" in result or "findings" in result or "tool" in result or "tool_calls" in result):
             return result
 
     return None

@@ -231,15 +231,24 @@ def generate_no_tools_trajectory(
     the generator's self-restraint alone.
     """
     gen_provider, gen_model = (provider, model) if provider and model else _resolve_generator()
-    hint_text = "; ".join(
-        f"Q{f['quadrant']}T{f['tooth_position']}:{f['diagnosis']}" for f in ground_truth
-    )
-    directive = (
-        "TEACHER DIRECTIVE: You are generating an expert demonstration trace for SFT.\n"
-        f"This image has {len(ground_truth)} finding(s): {hint_text}\n\n"
-        "Write the clinical reasoning a radiologist would give for noticing these on "
-        "direct visual inspection, then give your final answer covering all of them."
-    )
+    if not ground_truth:
+        directive = (
+            "TEACHER DIRECTIVE: You are generating an expert demonstration trace for SFT on a clinically verified healthy scan.\n"
+            "This radiograph contains NO pathology/disease findings (0 findings).\n\n"
+            "Write the clinical reasoning a radiologist would give explaining that all examined quadrants show intact enamel, "
+            "normal periodontal ligament space, continuous lamina dura, and no evidence of caries or periapical lesions. "
+            "Conclude with an empty final answer: {\"thought\": \"...\", \"final_answer\": []}."
+        )
+    else:
+        hint_text = "; ".join(
+            f"Q{f['quadrant']}T{f['tooth_position']}:{f['diagnosis']}" for f in ground_truth
+        )
+        directive = (
+            "TEACHER DIRECTIVE: You are generating an expert demonstration trace for SFT.\n"
+            f"This image has {len(ground_truth)} finding(s): {hint_text}\n\n"
+            "Write the clinical reasoning a radiologist would give for noticing these on "
+            "direct visual inspection, then give your final answer covering all of them."
+        )
 
     try:
         raw = call_llm(
@@ -257,17 +266,18 @@ def generate_no_tools_trajectory(
         {"role": "user", "content": directive},
         {"role": "assistant", "content": raw},
     ]
-    # Single-item list, matching langgraph_loop.py's per-turn record schema
-    # exactly ({"turn": int, "raw_output": str, "parsed": dict|None}) -- NOT
-    # an int turn-count as this previously (bug) had it. Getting this wrong
-    # silently breaks anything that reads trajectory["turns"] expecting a
-    # list of turn dicts -- e.g. dental_agent/rewards/judge.py's
-    # reward_judge, which iterates turns for "raw_output" and would raise
-    # TypeError: 'int' object is not iterable the moment it's pointed at a
-    # no-tools trace generated before this fix.
     turns = [{"turn": 0, "raw_output": raw, "parsed": parsed}]
 
-    if not parsed or not parsed.get("final_answer"):
+    # Normalize findings -> final_answer if model used findings key
+    final_ans = None
+    if parsed:
+        if "final_answer" in parsed:
+            final_ans = parsed["final_answer"]
+        elif "findings" in parsed:
+            final_ans = parsed["findings"]
+            parsed["final_answer"] = final_ans
+
+    if parsed is None or final_ans is None or not isinstance(final_ans, list):
         return {
             "turns": turns,
             "tool_calls": [],
@@ -279,7 +289,7 @@ def generate_no_tools_trajectory(
     return {
         "turns": turns,
         "tool_calls": [],
-        "final_answer": parsed["final_answer"],
+        "final_answer": final_ans,
         "messages": messages,
         "format_ok": True,
     }, None
