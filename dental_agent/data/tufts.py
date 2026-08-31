@@ -247,7 +247,7 @@ def find_local_tufts_dir(search_roots: list[str] | None = None) -> Path | None:
                     return candidate
 
     # HF snapshot fallback if dataset is uploaded to Hugging Face
-    repo_id = os.environ.get("TUFTS_IMAGES_REPO")
+    repo_id = os.environ.get("TUFTS_IMAGES_REPO", "Reza-Nadimi/tufts-train-images")
     if repo_id:
         try:
             from huggingface_hub import snapshot_download
@@ -582,6 +582,23 @@ def load_tufts_tooth_boxes(
     consumers and there's no reason to couple them.
     """
     tufts_root = find_local_tufts_dir()
+    if tufts_root is None or _find_radiograph_dir(tufts_root) is None:
+        repo_id = os.environ.get("TUFTS_IMAGES_REPO", "Reza-Nadimi/tufts-train-images")
+        if repo_id:
+            try:
+                from huggingface_hub import snapshot_download
+                target_dir = Path("data/Tufts")
+                print(f"Tufts radiographs not found locally. Auto-downloading full dataset from {repo_id} to {target_dir}...")
+                snapshot_download(
+                    repo_id=repo_id,
+                    repo_type="dataset",
+                    local_dir=str(target_dir),
+                    token=os.environ.get("HF_TOKEN"),
+                )
+                tufts_root = target_dir
+            except Exception as e:
+                print(f"Warning: Failed to auto-download Tufts dataset from {repo_id}: {e}")
+
     if tufts_root is None:
         raise FileNotFoundError(
             "No local Tufts Dental Database directory found. Tufts is access-gated "
@@ -796,6 +813,7 @@ def download_tufts_slice(
     image_ids: list[int],
     repo_id: str | None = None,
     cache_dir: str | None = None,
+    token: str | None = None,
 ) -> dict[int, Path | None]:
     """Download only the given image_ids from Tufts' HF images repo (once
     uploaded by scripts/upload_dataset_images_to_hf.py --dataset tufts --
@@ -808,9 +826,9 @@ def download_tufts_slice(
     folder layout, not a flattened images/{id}.jpg bundle.
     """
     if repo_id is None:
-        repo_id = os.environ.get("TUFTS_IMAGES_REPO")
+        repo_id = os.environ.get("TUFTS_IMAGES_REPO", "Reza-Nadimi/tufts-train-images")
     from dental_agent.data.hf_dataset_utils import download_dataset_slice
-    return download_dataset_slice(image_ids, repo_id=repo_id, filename_template="Radiographs/{id}.JPG", cache_dir=cache_dir)
+    return download_dataset_slice(image_ids, repo_id=repo_id, filename_template="Radiographs/{id}.JPG", cache_dir=cache_dir, token=token)
 
 
 def load_tufts_normal_dataset(

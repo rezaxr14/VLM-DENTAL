@@ -25,6 +25,7 @@ def download_dataset_slice(
     repo_id: str | None,
     filename_template: str = "images/{id}.png",
     cache_dir: str | None = None,
+    token: str | None = None,
 ) -> dict[int, Path | None]:
     """Download only the given image_ids from a lightweight per-image HF dataset
     repo, skipping every image the current slice doesn't need -- this is what
@@ -42,6 +43,7 @@ def download_dataset_slice(
 
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
+    token = token or os.environ.get("HF_TOKEN")
     local_paths: dict[int, Path | None] = {}
 
     def _fetch_single(img_id: int) -> tuple[int, Path | None]:
@@ -52,6 +54,7 @@ def download_dataset_slice(
                 filename=filename,
                 repo_type="dataset",
                 cache_dir=cache_dir,
+                token=token,
             )
             return img_id, Path(local_path)
         except Exception as e:

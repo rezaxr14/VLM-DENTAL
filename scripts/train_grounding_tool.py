@@ -392,15 +392,46 @@ def evaluate_benchmark(args):
                 f"{metrics['precision']:<10.4f} {metrics['recall']:<10.4f}"
             )
 
-    # Save benchmark results
+    # Save benchmark results & copy top performer weights to grounding_tool_cv_best
     if benchmark_results:
         best_benchmark = max(benchmark_results, key=lambda x: x["map50_95"])
         print(f"  {'-' * 65}")
         print(f"  Top Benchmark Performer: {best_benchmark['name']} (mAP50: {best_benchmark['map50']:.4f}, mAP50-95: {best_benchmark['map50_95']:.4f})")
+        
+        # Copy winning fold weights to grounding_tool_cv_best
+        winning_fold = best_benchmark["fold"]
+        winning_type = best_benchmark["type"]
+        win_src = model_root / f"{prefix}cv_fold_{winning_fold}" / "weights" / f"{winning_type}.pt"
+        best_dst = model_root / f"{prefix}grounding_tool_cv_best" / "weights" / "best.pt"
+        best_dst.parent.mkdir(parents=True, exist_ok=True)
+        if win_src.exists():
+            shutil.copy2(win_src, best_dst)
+            print(f"  Assigned top benchmark model ({best_benchmark['name']}) -> {best_dst}")
+
         out_json = model_root / f"{prefix}grounding_tool_cv_best" / "benchmark_evaluation.json"
         out_json.parent.mkdir(parents=True, exist_ok=True)
         out_json.write_text(json.dumps(benchmark_results, indent=2))
         print(f"  Benchmark results saved to: {out_json}")
+
+        # Sync best models and benchmark results to Hugging Face
+        if not getattr(args, "no_hf_sync", False):
+            hf_token = os.environ.get("HF_TOKEN")
+            hf_repo = os.environ.get("HF_ARTIFACT_REPO", "Reza-Nadimi/vlm-dental-models")
+            if hf_token and not hf_token.startswith("YOUR_"):
+                try:
+                    from huggingface_hub import HfApi
+                    api = HfApi(token=hf_token)
+                    api.create_repo(repo_id=hf_repo, repo_type="model", exist_ok=True)
+                    api.upload_folder(
+                        folder_path=str(model_root / f"{prefix}grounding_tool_cv_best"),
+                        path_in_repo=f"yolo_cv/{prefix}grounding_tool_cv_best",
+                        repo_id=hf_repo,
+                        repo_type="model",
+                        commit_message="Upload top benchmark grounding tool model & evaluation metrics",
+                    )
+                    print(f"  [HF Sync] Uploaded benchmark winner & evaluation to {hf_repo}/yolo_cv/{prefix}grounding_tool_cv_best")
+                except Exception as e:
+                    print(f"  [HF Sync] Notice: Could not upload benchmark results to HF: {e}")
 
 
 def main():

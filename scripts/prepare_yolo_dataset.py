@@ -201,25 +201,37 @@ def _ensure_images_downloaded(
 
     elif dataset_name == "tufts":
         from dental_agent.data.tufts import download_tufts_slice, find_local_tufts_dir, _find_radiograph_dir
-        repo_id = os.environ.get("TUFTS_IMAGES_REPO")
-        if repo_id:
-            paths_map = download_tufts_slice(missing_ids, repo_id=repo_id, cache_dir=str(data_dir) if data_dir else None)
-            for img_id, p in paths_map.items():
-                if p and Path(p).exists():
-                    images_df.loc[images_df["id"] == img_id, "local_path"] = str(Path(p).resolve())
-        else:
-            tufts_root = find_local_tufts_dir()
-            rad_dir = _find_radiograph_dir(tufts_root) if tufts_root else None
-            for idx, row in images_df.iterrows():
-                if pd.isna(row.get("local_path")) or not Path(str(row.get("local_path"))).exists():
+        repo_id = os.environ.get("TUFTS_IMAGES_REPO", "Reza-Nadimi/tufts-train-images")
+        paths_map = download_tufts_slice(missing_ids, repo_id=repo_id, cache_dir=str(data_dir) if data_dir else None, token=os.environ.get("HF_TOKEN"))
+        for img_id, p in paths_map.items():
+            if p and Path(p).exists():
+                images_df.loc[images_df["id"] == img_id, "local_path"] = str(Path(p).resolve())
+        
+        # If any remain unresolved, attempt full snapshot download into data/Tufts
+        still_missing = images_df[images_df["local_path"].isna() | ~images_df["local_path"].apply(lambda p: Path(str(p)).exists() if pd.notna(p) else False)]
+        if len(still_missing) > 0 and repo_id:
+            try:
+                from huggingface_hub import snapshot_download
+                target_dir = Path(data_dir) / "Tufts" if data_dir else Path("data/Tufts")
+                print(f"[tufts] {len(still_missing)} images still missing. Downloading full snapshot to {target_dir}...")
+                snapshot_download(
+                    repo_id=repo_id,
+                    repo_type="dataset",
+                    local_dir=str(target_dir),
+                    token=os.environ.get("HF_TOKEN"),
+                )
+                rad_dir = _find_radiograph_dir(target_dir)
+                for idx, row in images_df.iterrows():
                     img_id = int(row["id"])
-                    for ext in (".jpg", ".JPG", ".png", ".PNG"):
-                        candidate = (rad_dir / f"{img_id}{ext}") if rad_dir else None
-                        if candidate and candidate.is_file():
-                            images_df.loc[idx, "local_path"] = str(candidate.resolve())
+                    for ext in (".jpg", ".JPG", ".png", ".PNG", ".jpeg", ".JPEG"):
+                        cand = (rad_dir / f"{img_id}{ext}") if rad_dir else None
+                        if cand and cand.is_file():
+                            images_df.loc[idx, "local_path"] = str(cand.resolve())
                             break
+            except Exception as e:
+                print(f"[tufts] Snapshot fallback notice: {e}")
 
-    valid_count = len(images_df[images_df["local_path"].notna()])
+    valid_count = len(images_df[images_df["local_path"].apply(lambda p: Path(str(p)).exists() if pd.notna(p) else False)])
     print(f"[{dataset_name}] Successfully resolved {valid_count} / {len(images_df)} image paths.")
     return images_df
 
