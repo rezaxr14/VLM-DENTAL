@@ -155,6 +155,72 @@ def convert_single_image(
     return dest_stem
 
 
+def _ensure_images_downloaded(
+    images_df: pd.DataFrame,
+    dataset_name: str,
+    data_dir: str | Path | None = None,
+) -> pd.DataFrame:
+    """Check if images_df has rows with missing local_path (e.g. fresh Colab session).
+    If so, auto-download the missing image slices via download_dentex_slice / download_tufts_slice
+    and re-resolve local paths so that all annotated images are available for YOLO dataset building."""
+    if images_df.empty:
+        return images_df
+
+    missing_mask = images_df["local_path"].isna().copy()
+    if "local_path" in images_df.columns:
+        for idx, row in images_df.iterrows():
+            lp = row.get("local_path")
+            if lp and not Path(str(lp)).exists():
+                missing_mask.loc[idx] = True
+
+    missing_ids = images_df.loc[missing_mask, "id"].dropna().unique().tolist()
+    missing_ids = [int(i) for i in missing_ids]
+
+    if not missing_ids:
+        return images_df
+
+    print(f"[{dataset_name}] Found {len(missing_ids)} missing local image files out of {len(images_df)} total. Auto-downloading...")
+
+    if dataset_name == "dentex":
+        from dental_agent.data.dentex import download_dentex_slice, resolve_image_paths
+        repo_id = os.environ.get("DENTEX_IMAGES_REPO")
+        if repo_id:
+            download_dentex_slice(missing_ids, repo_id=repo_id, cache_dir=str(data_dir) if data_dir else None)
+            from dental_agent.data.dentex import find_local_dentex_dir
+            local_dentex = find_local_dentex_dir(data_dir, "train")
+            images_df = resolve_image_paths(images_df, local_dentex or Path(data_dir or "data"))
+        else:
+            from dental_agent.data.dentex import download_dentex, extract_dentex_zips, resolve_image_paths
+            dentex_path = download_dentex(cache_dir=str(data_dir) if data_dir else None, full=True)
+            extract_dentex_zips(dentex_path)
+            images_df = resolve_image_paths(images_df, dentex_path)
+
+    elif dataset_name == "tufts":
+        from dental_agent.data.tufts import download_tufts_slice, _find_radiograph_dir, find_local_tufts_dir
+        repo_id = os.environ.get("TUFTS_IMAGES_REPO")
+        if repo_id:
+            download_tufts_slice(missing_ids, repo_id=repo_id, cache_dir=str(data_dir) if data_dir else None)
+            tufts_root = find_local_tufts_dir()
+            rad_dir = _find_radiograph_dir(tufts_root) if tufts_root else None
+            for idx, row in images_df.iterrows():
+                if pd.isna(row.get("local_path")) or not Path(str(row.get("local_path"))).exists():
+                    img_id = int(row["id"])
+                    for ext in (".jpg", ".JPG", ".png", ".PNG"):
+                        candidate = (rad_dir / f"{img_id}{ext}") if rad_dir else None
+                        if candidate and candidate.is_file():
+                            images_df.loc[idx, "local_path"] = str(candidate.resolve())
+                            break
+                        if data_dir:
+                            hf_matches = list(Path(data_dir).glob(f"**/{img_id}{ext}"))
+                            if hf_matches:
+                                images_df.loc[idx, "local_path"] = str(hf_matches[0].resolve())
+                                break
+
+    valid_count = len(images_df[images_df["local_path"].notna()])
+    print(f"[{dataset_name}] Successfully resolved {valid_count} / {len(images_df)} image paths.")
+    return images_df
+
+
 def convert_to_yolo_format(output_dir: str | Path, split: str = "train", data_dir: str = "data", datasets: list[str] | None = None):
     """Convert one or more datasets' annotations to YOLOv8 txt format (static split mode).
 
@@ -201,6 +267,7 @@ def convert_to_yolo_format(output_dir: str | Path, split: str = "train", data_di
             print(f"Failed to load '{dataset_name}' split '{split}': {e}")
             continue
 
+        images_df = _ensure_images_downloaded(images_df, dataset_name, data_dir=data_dir)
         valid_images = images_df[images_df["local_path"].notna()].copy()
         print(f"Found {len(valid_images)} valid images in {dataset_name} for split '{split}'. Processing...")
 
@@ -287,6 +354,7 @@ def prepare_cv_folds(
         except Exception as e:
             print(f"Failed to load '{dataset_name}' training pool: {e}")
             continue
+        images_df = _ensure_images_downloaded(images_df, dataset_name, data_dir=data_dir)
         images_df = images_df[images_df["local_path"].notna()].copy()
         print(f"  {dataset_name} training pool: {len(images_df)} images")
         train_pools.append((dataset_name, images_df, annots_df, loader_spec["quadrant_position_fn"]))
@@ -302,6 +370,7 @@ def prepare_cv_folds(
         split_name="validation",
         combine_enumeration_splits=False,
     )
+    val_images_df = _ensure_images_downloaded(val_images_df, "dentex", data_dir=data_dir)
     val_images_df = val_images_df[val_images_df["local_path"].notna()].copy()
     print(f"Held-out test set: {len(val_images_df)} images (DENTEX only)")
 

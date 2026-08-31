@@ -194,6 +194,36 @@ _TUFTS_TITLE_TO_DENTEX_CATEGORY_ID: dict[str, int | None] = {
 }
 
 
+def _is_valid_tufts_root(p: Path) -> bool:
+    """Validate that a directory is genuinely a Tufts dataset root and not an
+    output/intermediate YOLO folder (e.g. yolo_dentex_tufts_cv)."""
+    if not p.is_dir():
+        return False
+    name_lower = p.name.lower()
+    if any(ignore_word in name_lower for ignore_word in ("yolo", "runs", "output", "export", "checkpoint", "fold_")):
+        return False
+    # Check for presence of key Tufts annotation files or radiograph directories
+    has_annotations = (
+        (p / "Segmentation" / "teeth_bbox.json").exists()
+        or (p / "segmentation" / "teeth_bbox.json").exists()
+        or (p / "teeth_bbox.json").exists()
+        or (p / "Expert" / "expert.json").exists()
+        or (p / "expert" / "expert.json").exists()
+        or (p / "expert.json").exists()
+        or any(p.glob("**/teeth_bbox.json"))
+        or any(p.glob("**/expert.json"))
+    )
+    has_radiographs = (
+        (p / "Radiographs").is_dir()
+        or (p / "radiographs").is_dir()
+        or any(p.glob("**/Radiographs/*.jpg"))
+        or any(p.glob("**/radiographs/*.jpg"))
+        or any(p.glob("**/Radiographs/*.png"))
+        or any(p.glob("**/radiographs/*.png"))
+    )
+    return bool(has_annotations or has_radiographs)
+
+
 def find_local_tufts_dir(search_roots: list[str] | None = None) -> Path | None:
     """Look for an already-extracted local copy of the Tufts archive.
 
@@ -201,7 +231,7 @@ def find_local_tufts_dir(search_roots: list[str] | None = None) -> Path | None:
     from TUFTS_IMAGES_REPO if configured in .env.
     """
     env_path = os.environ.get("TUFTS_LOCAL_DIR")
-    if env_path and os.path.isdir(env_path):
+    if env_path and os.path.isdir(env_path) and _is_valid_tufts_root(Path(env_path)):
         return Path(env_path)
 
     search_roots = search_roots or [".", "./data", "/content", "/kaggle/input"]
@@ -212,8 +242,9 @@ def find_local_tufts_dir(search_roots: list[str] | None = None) -> Path | None:
         for pattern in patterns:
             matches = glob.glob(os.path.join(root, pattern))
             for m in matches:
-                if os.path.isdir(m):
-                    return Path(m)
+                candidate = Path(m)
+                if candidate.is_dir() and _is_valid_tufts_root(candidate):
+                    return candidate
 
     # HF snapshot fallback if dataset is uploaded to Hugging Face
     repo_id = os.environ.get("TUFTS_IMAGES_REPO")
@@ -228,7 +259,7 @@ def find_local_tufts_dir(search_roots: list[str] | None = None) -> Path | None:
                 local_dir=str(target_dir),
                 token=os.environ.get("HF_TOKEN"),
             )
-            if target_dir.is_dir():
+            if target_dir.is_dir() and _is_valid_tufts_root(target_dir):
                 return target_dir
         except Exception as e:
             print(f"Warning: snapshot_download from {repo_id} failed: {e}")
