@@ -186,6 +186,8 @@ def print_banner(
     total_images: int,
     unverified_path: Path | None = None,
     verified_path: Path | None = None,
+    active_provider: str | None = None,
+    active_model: str | None = None,
 ) -> None:
     print("\n" + "=" * 70, flush=True)
     print(f"DENTAL AGENT: AUTONOMOUS CoT TRACE {'GENERATOR' if mode == 'generate' else 'VERIFIER'}", flush=True)
@@ -194,24 +196,30 @@ def print_banner(
     out_file = str(unverified_path) if unverified_path else DEFAULT_UNVERIFIED
     ver_file = str(verified_path) if verified_path else DEFAULT_VERIFIED
 
+    import os
     if mode == "generate":
-        if tg.GENERATOR_PROVIDER == "local":
-            print(f"* Generator          : LOCAL vLLM ({tg.GENERATOR_MODEL}) — no rate limit", flush=True)
+        prov = active_provider or os.environ.get("GENERATOR_PROVIDER", "local")
+        mod = active_model or os.environ.get("GENERATOR_MODEL", "QuantTrio/Qwen3.5-9B-AWQ")
+        if prov == "local":
+            print(f"* Generator          : LOCAL vLLM ({mod}) — no rate limit", flush=True)
         else:
-            import os
-            prefix = tg.GENERATOR_PROVIDER.upper().replace('_NIM', '')
+            prefix = prov.upper().replace('_NIM', '')
             cd = os.environ.get(f"{prefix}_COOLDOWN_SECONDS", "None")
             rpd = os.environ.get(f"{prefix}_RPD_LIMIT", "None")
-            print(f"* Generator Provider : {tg.GENERATOR_PROVIDER.upper()} ({tg.GENERATOR_MODEL})", flush=True)
+            print(f"* Generator Provider : {prov.upper()} ({mod})", flush=True)
             print(f"* Generator Limits   : {cd}s cooldown, {rpd} RPD cap", flush=True)
         print(f"* Output             : {out_file}", flush=True)
     else:
-        import os
-        prefix = tg.VERIFIER_PROVIDER.upper().replace('_NIM', '')
-        cd = os.environ.get(f"{prefix}_COOLDOWN_SECONDS", "None")
-        rpd = os.environ.get(f"{prefix}_RPD_LIMIT", "None")
-        print(f"* Verifier Provider  : {tg.VERIFIER_PROVIDER.upper()} ({tg.VERIFIER_MODEL})", flush=True)
-        print(f"* Verifier Limits    : {cd}s cooldown, {rpd} RPD cap", flush=True)
+        prov = active_provider or os.environ.get("VERIFIER_PROVIDER", "local")
+        mod = active_model or os.environ.get("VERIFIER_MODEL", "QuantTrio/Qwen3.5-9B-AWQ")
+        if prov == "local":
+            print(f"* Verifier           : LOCAL vLLM ({mod}) — no rate limit", flush=True)
+        else:
+            prefix = prov.upper().replace('_NIM', '')
+            cd = os.environ.get(f"{prefix}_COOLDOWN_SECONDS", "None")
+            rpd = os.environ.get(f"{prefix}_RPD_LIMIT", "None")
+            print(f"* Verifier Provider  : {prov.upper()} ({mod})", flush=True)
+            print(f"* Verifier Limits    : {cd}s cooldown, {rpd} RPD cap", flush=True)
         print(f"* Input              : {out_file}", flush=True)
         print(f"* Output             : {ver_file}", flush=True)
 
@@ -302,7 +310,16 @@ def _run_generate_for_dataset(args: argparse.Namespace, cfg: Any, dataset_name: 
 
     slice_info = f" (Slice {args.slice_index}/{args.total_slices})" if args.total_slices > 1 else ""
     print(f"Targeting{slice_info}: {len(eligible_imgs)} eligible images.")
-    print_banner("generate", len(completed_ids), total_eligible, unverified_path=output_path)
+    gen_prov = args.generator_provider or os.environ.get("GENERATOR_PROVIDER")
+    gen_mod = args.generator_model or os.environ.get("GENERATOR_MODEL")
+    print_banner(
+        "generate",
+        len(completed_ids),
+        total_eligible,
+        unverified_path=output_path,
+        active_provider=gen_prov,
+        active_model=gen_mod,
+    )
 
     if args.status_only:
         print("Status check complete. Run without --status-only to begin generation.")
@@ -339,6 +356,8 @@ def _run_generate_for_dataset(args: argparse.Namespace, cfg: Any, dataset_name: 
                 categories_df=cats_df,
                 max_tokens=args.max_tokens or 2048,
                 healthy_only=healthy,
+                provider=gen_prov,
+                model=gen_mod,
             )
         else:
             res = generate_only(
@@ -358,6 +377,8 @@ def _run_generate_for_dataset(args: argparse.Namespace, cfg: Any, dataset_name: 
                 max_padding_turns=args.max_padding_turns,
                 max_identical_repeats=args.max_identical_repeats,
                 healthy_only=healthy,
+                provider=gen_prov,
+                model=gen_mod,
             )
         elapsed = time.time() - t0
         return res, elapsed
@@ -502,23 +523,19 @@ def _run_generate_for_dataset(args: argparse.Namespace, cfg: Any, dataset_name: 
     total_time = time.time() - session_start_time
     total_generated = len(load_completed_ids(output_path, only_successful=True))
 
-    if args.git_sync_every > 0:
-        # Final sync regardless of the since_last_sync counter, so a session
-        # ending mid-interval (RPD exhaustion, Ctrl-C, or just finishing with
-        # a remainder under the threshold) never leaves work stranded only
-        # on this Colab instance's local disk.
-        slice_tag = f"slice {args.slice_index}/{args.total_slices} " if args.total_slices > 1 else ""
+    total_generated = len(load_completed_ids(output_path))
+
+    if args.git_sync_every > 0 and since_last_sync > 0:
         try:
             sync_and_push(
                 [output_path],
-                f"trace-gen: {slice_tag}dataset={dataset_name} session end "
-                f"(+{generated_in_session + failed_in_session} this session)",
+                f"trace-gen: dataset={dataset_name} session end (+{since_last_sync} this session)",
             )
         except Exception as e:
             print(f"  [git-sync] unexpected error during final sync: {e}", flush=True)
 
     from dental_agent.training.api_pool import _TRACKER
-    generator_provider = os.environ.get("GENERATOR_PROVIDER", "local")
+    generator_provider = gen_prov or "local"
 
     print("\n" + "=" * 70)
     print("GENERATION SESSION SUMMARY")
@@ -531,8 +548,21 @@ def _run_generate_for_dataset(args: argparse.Namespace, cfg: Any, dataset_name: 
     print(f"* Output File             : {output_path}")
     print("=" * 70 + "\n")
 
+    verify_cmd_parts = [
+        "python scripts/run_trace_gen.py --mode verify",
+        f"--dataset {dataset_name}",
+        f"--split {args.split}",
+    ]
+    if args.no_tools:
+        verify_cmd_parts.append("--no-tools")
+    if healthy:
+        verify_cmd_parts.append("--healthy-only")
+    if args.verifier_provider:
+        verify_cmd_parts.append(f"--verifier-provider {args.verifier_provider}")
+    if args.verifier_model:
+        verify_cmd_parts.append(f"--verifier-model {args.verifier_model}")
     print("NEXT STEP: Run verification to promote traces:")
-    print(f"  python scripts/run_trace_gen.py --mode verify --dataset {dataset_name} --split {args.split}")
+    print(f"  {' '.join(verify_cmd_parts)}")
     print("=" * 70 + "\n")
 
 
@@ -583,12 +613,19 @@ def _run_verify_for_dataset(
         slice_ids = get_slice_ids(list(unverified_ids), args.total_slices, args.slice_index, args.slice_seed)
         unverified_ids = unverified_ids & set(slice_ids)
 
+    v_prov = args.verifier_provider or os.environ.get("VERIFIER_PROVIDER")
+    v_mod = args.verifier_model or os.environ.get("VERIFIER_MODEL")
+    gen_prov = args.generator_provider or os.environ.get("GENERATOR_PROVIDER")
+    gen_mod = args.generator_model or os.environ.get("GENERATOR_MODEL")
+
     print_banner(
         "verify",
         len(verified_ids),
         len(unverified_ids),
         unverified_path=unverified_path,
         verified_path=verified_path,
+        active_provider=v_prov,
+        active_model=v_mod,
     )
 
     if args.status_only:
@@ -629,8 +666,10 @@ def _run_verify_for_dataset(
         slice_seed=args.slice_seed,
         pacing_delay=args.pacing_delay,
         max_images=args.max_images,
-        provider=os.environ.get("VERIFIER_PROVIDER"),
-        model=os.environ.get("VERIFIER_MODEL"),
+        provider=v_prov,
+        model=v_mod,
+        generator_provider=gen_prov,
+        generator_model=gen_mod,
         git_sync_every=args.git_sync_every,
     )
 

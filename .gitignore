@@ -81,3 +81,4 @@ data/models/grounding_tool_heavy/
 data/api_usage_state.json
 data/traces/train_cot_traces_unverified.jsonl.bak
 data/traces/train_cot_traces_unverified_no_tools.jsonl.bak
+scratch/

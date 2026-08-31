@@ -68,16 +68,15 @@ def _is_valid_key(val: str | None) -> bool:
 # When GENERATOR_PROVIDER is an external API (not 'local'), the GeneratorPool
 # handles rate limiting via 'auto_generator' routing.
 # ---------------------------------------------------------------------------
-GENERATOR_PROVIDER = os.environ.get("GENERATOR_PROVIDER", "local")
-GENERATOR_MODEL = os.environ.get("GENERATOR_MODEL", "QuantTrio/Qwen3.5-9B-AWQ")
-
-
 def _resolve_generator() -> tuple[str, str]:
     """Pick (provider, model) for the generator.
     
-    Returns the explicit provider (e.g., 'local', 'groq') or 'auto_generator' if pooling is desired.
+    Dynamically checks os.environ so CLI overrides and updated .env variables
+    take immediate effect without being frozen at module-import time.
     """
-    return GENERATOR_PROVIDER, GENERATOR_MODEL
+    prov = os.environ.get("GENERATOR_PROVIDER", "local")
+    mod = os.environ.get("GENERATOR_MODEL", "QuantTrio/Qwen3.5-9B-AWQ")
+    return prov, mod
 
 
 # ---------------------------------------------------------------------------
@@ -85,12 +84,11 @@ def _resolve_generator() -> tuple[str, str]:
 # (NVIDIA, Groq, OpenRouter, Gemini) and enforces strict 5-minute cooldowns.
 # ---------------------------------------------------------------------------
 
-VERIFIER_PROVIDER = os.environ.get("VERIFIER_PROVIDER", "local")
-VERIFIER_MODEL = os.environ.get("VERIFIER_MODEL", "QuantTrio/Qwen3.5-9B-AWQ")
-
 def _resolve_verifier() -> tuple[str, str]:
-    """Pick (provider, model) for the verifier."""
-    return VERIFIER_PROVIDER, VERIFIER_MODEL
+    """Pick (provider, model) for the verifier dynamically from os.environ."""
+    prov = os.environ.get("VERIFIER_PROVIDER", "local")
+    mod = os.environ.get("VERIFIER_MODEL", "QuantTrio/Qwen3.5-9B-AWQ")
+    return prov, mod
 
 
 VERIFIER_SYSTEM_PROMPT = (
@@ -151,8 +149,8 @@ def generate_interactive_trajectory(
     max_blobs_per_turn: int = 2,
     max_padding_turns: int = 3,
     max_identical_repeats: int = 3,
-    provider: str = GENERATOR_PROVIDER,
-    model: str = GENERATOR_MODEL,
+    provider: str | None = None,
+    model: str | None = None,
     call_llm_fn: Callable[..., str] | None = None,
 ) -> tuple[dict[str, Any] | None, str | None]:
     """Ground-truth-directed trace generation with REAL tool execution via LangGraph.
@@ -163,7 +161,7 @@ def generate_interactive_trajectory(
     testing, patch dental_agent.training.api_pool.call_llm instead of passing call_llm_fn
     here (tests/ should do this via monkeypatch, not this parameter).
     """
-    gen_provider, gen_model = _resolve_generator()
+    gen_provider, gen_model = (provider, model) if provider and model else _resolve_generator()
     system_prompt = build_agent_system_prompt(registry.format_tool_descriptions())
     
     return run_trace_gen(
@@ -192,8 +190,8 @@ def generate_interactive_trajectory(
 def generate_no_tools_trajectory(
     image: Image.Image,
     ground_truth: list[dict[str, Any]],
-    provider: str = GENERATOR_PROVIDER,
-    model: str = GENERATOR_MODEL,
+    provider: str | None = None,
+    model: str | None = None,
     max_tokens: int = 2048,
 ) -> tuple[dict[str, Any] | None, str | None]:
     """Ground-truth-directed, SINGLE-TURN, TOOL-FREE trace generation -- for
@@ -304,10 +302,14 @@ def verify_trace(
     call_llm_fn: Callable[..., str] = call_llm,
     max_repairs: int = 1,
     current_repair_attempt: int = 0,
+    generator_provider: str | None = None,
+    generator_model: str | None = None,
 ) -> dict[str, Any]:
     """Verify trace using an independent verifier model. Includes LLM-based repair on rejection."""
     if provider is None or model is None:
-        provider, model = _resolve_verifier()
+        v_provider, v_model = _resolve_verifier()
+    else:
+        v_provider, v_model = provider, model
 
     # Extract the assistant's reasoning
     messages = trajectory.get("messages", [])
@@ -323,11 +325,21 @@ def verify_trace(
             if isinstance(t, dict) and t.get("raw_output")
         ]
     trace_text = "\n\n".join(assistant_msgs) if assistant_msgs else json.dumps(trajectory)
-
     user_content = f"Ground Truth: {json.dumps(ground_truth)}\n\nCandidate Trace:\n{trace_text}"
 
+    # Extract candidate final_answer
+    candidate_final_ans = trajectory.get("final_answer")
+    is_healthy_ground_truth = (ground_truth == [] or ground_truth is None)
+
+    # Deterministic Pre-Check: If scan is healthy (ground truth is empty), candidate MUST NOT predict findings
+    if is_healthy_ground_truth and candidate_final_ans is not None and candidate_final_ans != []:
+        return {
+            "grounded": False,
+            "reason": f"Ground truth is empty (healthy normal scan) but candidate reported {len(candidate_final_ans)} finding(s): {candidate_final_ans}",
+        }
+
     # Section 8: stream=True
-    raw = call_llm_fn(provider, model, VERIFIER_SYSTEM_PROMPT, user_content, image=image, temperature=0.0, max_tokens=2048, response_mime_type="application/json", stream=True, label="verify_trace", role="verifier")
+    raw = call_llm_fn(v_provider, v_model, VERIFIER_SYSTEM_PROMPT, user_content, image=image, temperature=0.0, max_tokens=2048, response_mime_type="application/json", stream=True, label="verify_trace", role="verifier")
     parsed = parse_agent_json(raw)
     
     extracted_reason = None
@@ -350,17 +362,36 @@ def verify_trace(
         extracted_reason = "verifier output unparseable"
         grounded = False
 
+    # Programmatic Post-Check: Prevent LLM verifier hallucinations on healthy scans
+    if grounded and is_healthy_ground_truth and candidate_final_ans != []:
+        grounded = False
+        extracted_reason = f"Deterministic rejection: Ground truth is empty but candidate final_answer is {candidate_final_ans}"
+
     result = {"grounded": grounded, "reason": extracted_reason}
 
     # Section 7: LLM-Based Repair
+    # Disallow single-shot text repair for tool-based traces to prevent fabricating fake tool executions
+    is_tool_based = bool(trajectory.get("tool_calls") or len(trajectory.get("turns", [])) > 1)
+
     if not grounded and current_repair_attempt < max_repairs:
+        if is_tool_based:
+            # Tool-based trajectories must be executed dynamically in LangGraph, never faked in a single text rewrite
+            return result
+
         print(f"  [verify_trace] Trace rejected: {extracted_reason}. Attempting repair {current_repair_attempt + 1}/{max_repairs}...")
-        gen_provider, gen_model = _resolve_generator()
+        gen_prov = generator_provider or os.environ.get("GENERATOR_PROVIDER")
+        gen_mod = generator_model or os.environ.get("GENERATOR_MODEL")
+        
+        # If generator is unset, or set to 'local' but no local server is alive,
+        # fallback to the active verifier provider/model that is already working!
+        if not gen_prov or (gen_prov == "local" and not verify_local_server_health()):
+            gen_prov, gen_mod = v_provider, v_model
+
         repair_sys_prompt = "You are a medical AI assistant. Fix the provided diagnostic trace based on the verifier's feedback. Ensure the final diagnosis remains unchanged, but correct any visual claims that were rejected."
         repair_user_content = f"The verifier rejected this trace because: {extracted_reason}\n\nOriginal Trace:\n{trace_text}\n\nRewrite the trace to fix the issue. Output the complete revised reasoning."
         
         try:
-            repaired_raw = call_llm_fn(gen_provider, gen_model, repair_sys_prompt, repair_user_content, image=image, temperature=0.3, max_tokens=4096, stream=True, label="repair_trace", role="verifier")
+            repaired_raw = call_llm_fn(gen_prov, gen_mod, repair_sys_prompt, repair_user_content, image=image, temperature=0.3, max_tokens=4096, stream=True, label="repair_trace", role="verifier")
             # Replace the last assistant message with the repaired raw
             repaired_trajectory = dict(trajectory)
             repaired_messages = list(trajectory.get("messages", []))
@@ -373,7 +404,16 @@ def verify_trace(
             
             # Re-verify the repaired trace
             return verify_trace(
-                image, ground_truth, repaired_trajectory, provider, model, call_llm_fn, max_repairs, current_repair_attempt + 1
+                image,
+                ground_truth,
+                repaired_trajectory,
+                provider=v_provider,
+                model=v_model,
+                call_llm_fn=call_llm_fn,
+                max_repairs=max_repairs,
+                current_repair_attempt=current_repair_attempt + 1,
+                generator_provider=generator_provider,
+                generator_model=generator_model,
             )
         except Exception as e:
             print(f"  [verify_trace] Repair attempt failed: {e}")
@@ -477,6 +517,8 @@ def generate_only(
     max_padding_turns: int = 3,
     max_identical_repeats: int = 3,
     healthy_only: bool = False,
+    provider: str | None = None,
+    model: str | None = None,
 ) -> dict[str, Any] | None:
     """Generate a raw (unverified) trace for a single image.
     
@@ -529,6 +571,8 @@ def generate_only(
         max_blobs_per_turn=max_blobs_per_turn,
         max_padding_turns=max_padding_turns,
         max_identical_repeats=max_identical_repeats,
+        provider=provider,
+        model=model,
     )
     if traj is None or traj.get("final_answer") is None:
         return {
@@ -559,20 +603,16 @@ def generate_only_no_tools(
     diag_col: str = "category_id_3",
     max_tokens: int = 2048,
     healthy_only: bool = False,
+    provider: str | None = None,
+    model: str | None = None,
 ) -> dict[str, Any] | None:
     """Tool-free sibling of generate_only -- for baseline #3's SFT training
     data (dentex-agentic-vlm-proposal.md §6). Mirrors generate_only's exact
     return shape (image_id/image_path/ground_truth/status/trajectory or
     failure_reason) so it slots into the same append_trace/file-writing and
     downstream verify_pending/SFT-loading code paths unchanged -- only the
-    generation step itself differs (one direct call via
-    generate_no_tools_trajectory, no LangGraph loop, no ToolRegistry).
-
-    Does NOT call the verifier -- same decoupled generate/verify split as
-    generate_only, and the same verify_pending function verifies these
-    traces too (see run_trace_gen.py's --no-tools flag, which points both
-    generate and verify at their own separate _no_tools-suffixed files
-    rather than mixing them into the main system's tool-based traces).
+    trace-generation step itself differs (single-turn via call_llm with
+    NO_TOOLS_COT_TEACHER_PROMPT instead of the multi-turn LangGraph tool loop).
     """
     matches = images_df[images_df["id"] == image_id]
     if matches.empty:
@@ -595,9 +635,12 @@ def generate_only_no_tools(
 
     ground_truth = _format_ground_truth(anns, cat_lookup, diag_col)
 
-    gen_provider, gen_model = _resolve_generator()
     traj, fail_reason = generate_no_tools_trajectory(
-        image, ground_truth, provider=gen_provider, model=gen_model, max_tokens=max_tokens
+        image=image,
+        ground_truth=ground_truth,
+        provider=provider,
+        model=model,
+        max_tokens=max_tokens,
     )
     if traj is None or traj.get("final_answer") is None:
         return {
@@ -805,6 +848,8 @@ def verify_pending(
     provider: str | None = None,
     model: str | None = None,
     git_sync_every: int = 0,
+    generator_provider: str | None = None,
+    generator_model: str | None = None,
 ) -> dict[str, int]:
     """Read unverified traces, verify each, and append passing traces to the verified file."""
     unverified_path = Path(unverified_path)
@@ -896,6 +941,8 @@ def verify_pending(
                 model=model,
                 call_llm_fn=call_llm_fn,
                 max_repairs=max_repairs,
+                generator_provider=generator_provider,
+                generator_model=generator_model,
             )
             
             if v_result.get("grounded"):
@@ -979,10 +1026,12 @@ def repair_and_clean_trace(
     record: dict[str, Any],
     verifier_provider: str | None = None,
     verifier_model: str | None = None,
-    call_llm_fn: Callable[..., str] = call_llm,
+    call_llm_fn: Callable[..., str] | None = None,
 ) -> tuple[bool, dict[str, Any] | None, str]:
     """Take an unverified/rejected trace, prompt the verifier model with VERIFIER_REPAIR_SYSTEM_PROMPT
     along with ground truth and the original trace, clean out artifacts, and verify the repaired trace."""
+    if call_llm_fn is None:
+        call_llm_fn = call_llm
     v_prov, v_mod = (verifier_provider, verifier_model) if verifier_provider and verifier_model else _resolve_verifier()
     
     trajectory = record.get("trajectory") or record.get("partial_trajectory") or {}
@@ -1014,12 +1063,13 @@ def repair_and_clean_trace(
         return False, None, f"Repair LLM call failed: {e}"
         
     parsed_repair = parse_agent_json(raw_repaired)
-    if not parsed_repair or not parsed_repair.get("final_answer"):
+    repair_final_ans = parsed_repair.get("final_answer") if parsed_repair else None
+    if parsed_repair is None or repair_final_ans is None or not isinstance(repair_final_ans, list):
         return False, None, "Repaired trace could not be parsed into valid final_answer schema"
         
     # Build updated trajectory
     repaired_trajectory = dict(trajectory)
-    repaired_trajectory["final_answer"] = parsed_repair["final_answer"]
+    repaired_trajectory["final_answer"] = repair_final_ans
     repaired_trajectory["repaired"] = True
     
     # Update messages
