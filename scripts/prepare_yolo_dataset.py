@@ -479,7 +479,8 @@ if __name__ == "__main__":
              "prepare_cv_folds' docstring.",
     )
     args = parser.parse_args()
-    dataset_list = [d.strip() for d in args.datasets.split(",") if d.strip()]
+    raw_datasets_str = args.datasets if isinstance(args.datasets, str) else " ".join(args.datasets)
+    dataset_list = [d.strip() for d in raw_datasets_str.replace(",", " ").split() if d.strip()]
     dir_suffix = "_".join(dataset_list) if dataset_list != ["dentex"] else "dentex"
 
     if args.mode == "train":
