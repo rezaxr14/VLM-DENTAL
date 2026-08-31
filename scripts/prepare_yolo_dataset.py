@@ -144,7 +144,11 @@ def convert_single_image(
         folder_prefix = local_path.parent.parent.name
         dest_stem = f"{folder_prefix}_{local_path.stem}" if folder_prefix else f"img_{img_id}_{local_path.stem}"
 
-    dest_img_path = images_out / f"{dest_stem}{local_path.suffix}"
+    ext = local_path.suffix
+    if not ext or ext.lower() not in (".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"):
+        ext = ".png"
+
+    dest_img_path = images_out / f"{dest_stem}{ext}"
     if not dest_img_path.exists():
         shutil.copy2(local_path, dest_img_path)
 
