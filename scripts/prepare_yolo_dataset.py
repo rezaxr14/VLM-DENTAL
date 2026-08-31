@@ -162,7 +162,7 @@ def _ensure_images_downloaded(
 ) -> pd.DataFrame:
     """Check if images_df has rows with missing local_path (e.g. fresh Colab session).
     If so, auto-download the missing image slices via download_dentex_slice / download_tufts_slice
-    and re-resolve local paths so that all annotated images are available for YOLO dataset building."""
+    and assign the resolved local paths so that all annotated images are available for YOLO dataset building."""
     if images_df.empty:
         return images_df
 
@@ -170,25 +170,29 @@ def _ensure_images_downloaded(
     if "local_path" in images_df.columns:
         for idx, row in images_df.iterrows():
             lp = row.get("local_path")
-            if lp and not Path(str(lp)).exists():
+            if lp:
+                p_lp = Path(str(lp).replace("\\", "/"))
+                if not p_lp.exists():
+                    missing_mask.loc[idx] = True
+            else:
                 missing_mask.loc[idx] = True
 
     missing_ids = images_df.loc[missing_mask, "id"].dropna().unique().tolist()
-    missing_ids = [int(i) for i in missing_ids]
+    missing_ids = sorted([int(i) for i in missing_ids])
 
     if not missing_ids:
         return images_df
 
-    print(f"[{dataset_name}] Found {len(missing_ids)} missing local image files out of {len(images_df)} total. Auto-downloading...")
+    print(f"[{dataset_name}] Found {len(missing_ids)} missing local image files out of {len(images_df)} total. Auto-downloading/resolving...")
 
     if dataset_name == "dentex":
-        from dental_agent.data.dentex import download_dentex_slice, resolve_image_paths
+        from dental_agent.data.dentex import download_dentex_slice
         repo_id = os.environ.get("DENTEX_IMAGES_REPO")
         if repo_id:
-            download_dentex_slice(missing_ids, repo_id=repo_id, cache_dir=str(data_dir) if data_dir else None)
-            from dental_agent.data.dentex import find_local_dentex_dir
-            local_dentex = find_local_dentex_dir(data_dir, "train")
-            images_df = resolve_image_paths(images_df, local_dentex or Path(data_dir or "data"))
+            paths_map = download_dentex_slice(missing_ids, repo_id=repo_id, cache_dir=str(data_dir) if data_dir else None)
+            for img_id, p in paths_map.items():
+                if p and Path(p).exists():
+                    images_df.loc[images_df["id"] == img_id, "local_path"] = str(Path(p).resolve())
         else:
             from dental_agent.data.dentex import download_dentex, extract_dentex_zips, resolve_image_paths
             dentex_path = download_dentex(cache_dir=str(data_dir) if data_dir else None, full=True)
@@ -196,10 +200,14 @@ def _ensure_images_downloaded(
             images_df = resolve_image_paths(images_df, dentex_path)
 
     elif dataset_name == "tufts":
-        from dental_agent.data.tufts import download_tufts_slice, _find_radiograph_dir, find_local_tufts_dir
+        from dental_agent.data.tufts import download_tufts_slice, find_local_tufts_dir, _find_radiograph_dir
         repo_id = os.environ.get("TUFTS_IMAGES_REPO")
         if repo_id:
-            download_tufts_slice(missing_ids, repo_id=repo_id, cache_dir=str(data_dir) if data_dir else None)
+            paths_map = download_tufts_slice(missing_ids, repo_id=repo_id, cache_dir=str(data_dir) if data_dir else None)
+            for img_id, p in paths_map.items():
+                if p and Path(p).exists():
+                    images_df.loc[images_df["id"] == img_id, "local_path"] = str(Path(p).resolve())
+        else:
             tufts_root = find_local_tufts_dir()
             rad_dir = _find_radiograph_dir(tufts_root) if tufts_root else None
             for idx, row in images_df.iterrows():
@@ -210,11 +218,6 @@ def _ensure_images_downloaded(
                         if candidate and candidate.is_file():
                             images_df.loc[idx, "local_path"] = str(candidate.resolve())
                             break
-                        if data_dir:
-                            hf_matches = list(Path(data_dir).glob(f"**/{img_id}{ext}"))
-                            if hf_matches:
-                                images_df.loc[idx, "local_path"] = str(hf_matches[0].resolve())
-                                break
 
     valid_count = len(images_df[images_df["local_path"].notna()])
     print(f"[{dataset_name}] Successfully resolved {valid_count} / {len(images_df)} image paths.")
@@ -240,7 +243,7 @@ def convert_to_yolo_format(output_dir: str | Path, split: str = "train", data_di
                 val/
             dataset.yaml
     """
-    datasets = datasets or ["dentex"]
+    datasets = datasets or ["dentex", "tufts"]
     output_dir = Path(output_dir)
     images_out = output_dir / "images" / split
     labels_out = output_dir / "labels" / split
@@ -328,7 +331,7 @@ def prepare_cv_folds(
     - Each fold k gets: fold_k/{images,labels}/{train,val}/ + dataset.yaml
     - The held-out set goes to: test/{images,labels}/ + dataset.yaml
     """
-    datasets = datasets or ["dentex"]
+    datasets = datasets or ["dentex", "tufts"]
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -378,7 +381,7 @@ def prepare_cv_folds(
     combined_keys = [
         (dataset_name, img_id)
         for dataset_name, images_df, _, _ in train_pools
-        for img_id in images_df["id"].unique()
+        for img_id in sorted(images_df["id"].unique())
     ]
     kf = KFold(n_splits=n_folds, shuffle=True, random_state=seed)
     fold_ids = list(kf.split(combined_keys))
@@ -470,13 +473,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--datasets",
         type=str,
-        default="dentex",
-        help="Comma-separated dataset names from DATASET_LOADERS to combine (default: dentex only, "
-             "unchanged behavior). e.g. --datasets dentex,tufts or --datasets dentex,tunisia once "
-             "the respective loader's annotation mapping is implemented (both currently raise "
-             "NotImplementedError by design). The held-out CV test set (--mode cv) is always "
-             "DENTEX's own 50 official validation images regardless of this flag -- see "
-             "prepare_cv_folds' docstring.",
+        default="dentex,tufts",
+        help="Comma-separated dataset names from DATASET_LOADERS to combine (default: dentex,tufts). "
+             "e.g. --datasets dentex,tufts. The held-out CV test set (--mode cv) is always "
+             "DENTEX's own 50 official validation images regardless of this flag.",
     )
     args = parser.parse_args()
     raw_datasets_str = args.datasets if isinstance(args.datasets, str) else " ".join(args.datasets)

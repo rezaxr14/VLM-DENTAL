@@ -60,6 +60,19 @@ class TestPrepareYOLODataset(unittest.TestCase):
             self.assertAlmostEqual(float(parts[1]), (100 + 100) / 1000.0) # x_center = 200/1000 = 0.2
             self.assertAlmostEqual(float(parts[2]), (50 + 50) / 500.0)    # y_center = 100/500 = 0.2
 
+    def test_ensure_images_downloaded_from_hf_slice(self):
+        """_ensure_images_downloaded must populate local_path from paths_map returned by download_slice."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            fake_img = Path(tmpdir) / "10.png"
+            fake_img.write_bytes(b"dummy")
+
+            images_df = pd.DataFrame([{"id": 10, "local_path": None}])
+            with patch.dict(os.environ, {"DENTEX_IMAGES_REPO": "dummy/repo"}):
+                with patch("dental_agent.data.dentex.download_dentex_slice", return_value={10: fake_img}):
+                    res_df = _ensure_images_downloaded(images_df, "dentex", data_dir=tmpdir)
+                    self.assertIsNotNone(res_df.iloc[0]["local_path"])
+                    self.assertEqual(res_df.iloc[0]["local_path"], str(fake_img.resolve()))
+
     def test_create_dataset_yaml(self):
         """create_dataset_yaml must create valid YAML with 32 tooth classes."""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -70,6 +83,16 @@ class TestPrepareYOLODataset(unittest.TestCase):
             text = yaml_path.read_text()
             self.assertIn("Tooth 11", text)
             self.assertIn("Tooth 48", text)
+
+    def test_dataset_dir_suffix_and_model_prefix(self):
+        """_dataset_dir_suffix and _model_subdir_prefix must handle comma and space-separated multi-datasets."""
+        from scripts.train_grounding_tool import _dataset_dir_suffix, _model_subdir_prefix
+        self.assertEqual(_dataset_dir_suffix("dentex"), "dentex")
+        self.assertEqual(_dataset_dir_suffix("dentex,tufts"), "dentex_tufts")
+        self.assertEqual(_dataset_dir_suffix("dentex tufts"), "dentex_tufts")
+
+        self.assertEqual(_model_subdir_prefix("dentex"), "")
+        self.assertEqual(_model_subdir_prefix("dentex_tufts"), "dentex_tufts_")
 
 if __name__ == "__main__":
     unittest.main()

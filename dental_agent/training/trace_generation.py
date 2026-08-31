@@ -1026,10 +1026,12 @@ def repair_and_clean_trace(
     record: dict[str, Any],
     verifier_provider: str | None = None,
     verifier_model: str | None = None,
-    call_llm_fn: Callable[..., str] = call_llm,
+    call_llm_fn: Callable[..., str] | None = None,
 ) -> tuple[bool, dict[str, Any] | None, str]:
     """Take an unverified/rejected trace, prompt the verifier model with VERIFIER_REPAIR_SYSTEM_PROMPT
     along with ground truth and the original trace, clean out artifacts, and verify the repaired trace."""
+    if call_llm_fn is None:
+        call_llm_fn = call_llm
     v_prov, v_mod = (verifier_provider, verifier_model) if verifier_provider and verifier_model else _resolve_verifier()
     
     trajectory = record.get("trajectory") or record.get("partial_trajectory") or {}
