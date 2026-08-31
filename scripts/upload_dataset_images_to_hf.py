@@ -116,6 +116,7 @@ def _prepare_tufts_bundle(temp_dir_path: Path, cfg):
     print("Copying Tufts annotations...")
     for sub, fn in [
         ("Segmentation", "teeth_bbox.json"),
+        ("Segmentation", "teeth_polygon.json"),
         ("Expert", "expert.json"),
         ("Student", "student.json"),
     ]:
