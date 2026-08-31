@@ -107,7 +107,7 @@ def resolve_trace_paths(
         unverified_path = Path(explicit_output)
     else:
         canonical_unverified = Path(f"data/traces/train_cot_traces_unverified_{healthy_prefix}{clean_ds}{suffix}.jsonl")
-        if canonical_unverified.exists():
+        if canonical_unverified.exists() or healthy_only:
             unverified_path = canonical_unverified
         else:
             legacy_candidates = [
