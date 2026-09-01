@@ -859,8 +859,10 @@ def evaluate_benchmark(args):
     test_img_dir = None
     test_lbl_dir = None
     for cand_root in [
+        Path(f"data/yolo_{dir_suffix}_cv"),
         Path("data/yolo_dentex_tufts_cv"),
         Path("data/yolo_dentex_cv"),
+        Path(f"data/yolo_{dir_suffix}"),
         Path("data/yolo_dentex"),
         Path("data/yolo_cv"),
     ]:
@@ -878,16 +880,19 @@ def evaluate_benchmark(args):
     val_images_df = None
     val_annots_df = None
     if test_img_dir is None or test_lbl_dir is None:
-        from dental_agent.data.dentex import load_dentex_dataset
-        from scripts.prepare_yolo_dataset import _ensure_images_downloaded
-        data_dir = getattr(args, "data_dir", None)
-        val_images_df, val_annots_df, _ = load_dentex_dataset(
-            data_dir=data_dir,
-            split_name="validation",
-            combine_enumeration_splits=False,
-        )
-        val_images_df = _ensure_images_downloaded(val_images_df, "dentex", data_dir=data_dir)
-        val_images_df = val_images_df[val_images_df["local_path"].notna()].copy()
+        try:
+            from dental_agent.data.dentex import load_dentex_dataset
+            from scripts.prepare_yolo_dataset import _ensure_images_downloaded
+            data_dir = getattr(args, "data_dir", None)
+            val_images_df, val_annots_df, _ = load_dentex_dataset(
+                data_dir=data_dir,
+                split_name="validation",
+                combine_enumeration_splits=False,
+            )
+            val_images_df = _ensure_images_downloaded(val_images_df, "dentex", data_dir=data_dir)
+            val_images_df = val_images_df[val_images_df["local_path"].notna()].copy()
+        except Exception as e:
+            print(f"  [Benchmark] Notice: Could not load raw validation DataFrame: {e}")
 
     # Hydrate both model families from local disk or Hugging Face Hub (checks disk first!)
     n_folds = 5
@@ -912,41 +917,62 @@ def evaluate_benchmark(args):
     train_pools_cache = {}
     for family_name, prefix_options, dataset_names in cv_configs:
         family_cv_metrics = []
-        
+        d_suffix = _dataset_dir_suffix(",".join(dataset_names))
+
+        # Check if local YOLO in-fold validation folders exist on disk first across all candidates
+        local_yolo_splits = {}
+        for fold in range(n_folds):
+            for cv_root in [
+                Path(f"data/yolo_{d_suffix}_cv"),
+                Path("data/yolo_dentex_tufts_cv"),
+                Path("data/yolo_dentex_cv"),
+                Path(f"data/yolo_{d_suffix}"),
+                Path("data/yolo_cv"),
+            ]:
+                cand_img = cv_root / f"fold_{fold}" / "images" / "val"
+                cand_lbl = cv_root / f"fold_{fold}" / "labels" / "val"
+                if cand_img.exists() and cand_lbl.exists() and any(cand_img.iterdir()):
+                    local_yolo_splits[fold] = (cand_img, cand_lbl)
+                    break
+
         train_pools = []
-        for dname in dataset_names:
-            if dname in train_pools_cache:
-                train_pools.append(train_pools_cache[dname])
-                continue
-            if dname == "dentex":
-                from dental_agent.data.dentex import load_dentex_dataset
-                from scripts.prepare_yolo_dataset import _ensure_images_downloaded
-                data_dir = getattr(args, "data_dir", None)
-                imgs_df, ann_df, _ = load_dentex_dataset(data_dir=data_dir, split_name="train", combine_enumeration_splits=True)
-                imgs_df = _ensure_images_downloaded(imgs_df, "dentex", data_dir=data_dir)
-                imgs_df = imgs_df[imgs_df["local_path"].notna()].copy()
-                train_pools_cache[dname] = (dname, imgs_df, ann_df)
-                train_pools.append((dname, imgs_df, ann_df))
-            elif dname == "tufts":
-                from dental_agent.data.tufts import load_tufts_dataset
-                from scripts.prepare_yolo_dataset import _ensure_images_downloaded
-                data_dir = getattr(args, "data_dir", None)
-                try:
-                    imgs_df, ann_df, _ = load_tufts_dataset(data_dir=data_dir)
-                    imgs_df = _ensure_images_downloaded(imgs_df, "tufts", data_dir=data_dir)
+        combined_keys = []
+        fold_splits = []
+        if len(local_yolo_splits) < n_folds:
+            # Lazy fallback: load raw dataset pools only if local YOLO directories are missing
+            for dname in dataset_names:
+                if dname in train_pools_cache:
+                    train_pools.append(train_pools_cache[dname])
+                    continue
+                if dname == "dentex":
+                    from dental_agent.data.dentex import load_dentex_dataset
+                    from scripts.prepare_yolo_dataset import _ensure_images_downloaded
+                    data_dir = getattr(args, "data_dir", None)
+                    imgs_df, ann_df, _ = load_dentex_dataset(data_dir=data_dir, split_name="train", combine_enumeration_splits=True)
+                    imgs_df = _ensure_images_downloaded(imgs_df, "dentex", data_dir=data_dir)
                     imgs_df = imgs_df[imgs_df["local_path"].notna()].copy()
                     train_pools_cache[dname] = (dname, imgs_df, ann_df)
                     train_pools.append((dname, imgs_df, ann_df))
-                except Exception as e:
-                    print(f"  Notice: Could not load Tufts dataset pool: {e}")
+                elif dname == "tufts":
+                    from dental_agent.data.tufts import load_tufts_tooth_boxes
+                    from scripts.prepare_yolo_dataset import _ensure_images_downloaded
+                    data_dir = getattr(args, "data_dir", None)
+                    try:
+                        imgs_df, ann_df, _ = load_tufts_tooth_boxes(data_dir=data_dir)
+                        imgs_df = _ensure_images_downloaded(imgs_df, "tufts", data_dir=data_dir)
+                        imgs_df = imgs_df[imgs_df["local_path"].notna()].copy()
+                        train_pools_cache[dname] = (dname, imgs_df, ann_df)
+                        train_pools.append((dname, imgs_df, ann_df))
+                    except Exception:
+                        pass
 
-        combined_keys = [
-            (dname, img_id)
-            for dname, images_df, _ in train_pools
-            for img_id in sorted(images_df["id"].unique())
-        ]
-        kf = KFold(n_splits=n_folds, shuffle=True, random_state=42)
-        fold_splits = list(kf.split(combined_keys)) if combined_keys else []
+            combined_keys = [
+                (dname, img_id)
+                for dname, images_df, _ in train_pools
+                for img_id in sorted(images_df["id"].unique())
+            ]
+            kf = KFold(n_splits=n_folds, shuffle=True, random_state=42)
+            fold_splits = list(kf.split(combined_keys)) if combined_keys else []
 
         for fold in range(n_folds):
             weight_path = None
@@ -955,25 +981,22 @@ def evaluate_benchmark(args):
                 if cand.exists():
                     weight_path = cand
                     break
-                alt = model_root / "fold_best_models" / f"fold_{fold}_best.pt"
-                if alt.exists():
-                    weight_path = alt
+                alt_prefixed = model_root / f"{pref.rstrip('_')}_fold_best_models" / f"fold_{fold}_best.pt"
+                if alt_prefixed.exists():
+                    weight_path = alt_prefixed
                     break
+                if family_name == "DENTEX+Tufts" or pref.startswith("dentex_tufts"):
+                    alt_default = model_root / "fold_best_models" / f"fold_{fold}_best.pt"
+                    if alt_default.exists():
+                        weight_path = alt_default
+                        break
 
             if not weight_path or not weight_path.exists():
                 continue
 
-            fold_img_dir = None
-            fold_lbl_dir = None
-            dir_suffix = _dataset_dir_suffix(",".join(dataset_names))
-            for cv_root in [Path(f"data/yolo_{dir_suffix}_cv"), Path(f"data/yolo_{dir_suffix}"), Path("data/yolo_cv")]:
-                cand_img = cv_root / f"fold_{fold}" / "images" / "val"
-                cand_lbl = cv_root / f"fold_{fold}" / "labels" / "val"
-                if cand_img.exists() and cand_lbl.exists() and any(cand_img.iterdir()):
-                    fold_img_dir = cand_img
-                    fold_lbl_dir = cand_lbl
-                    break
+            fold_img_dir, fold_lbl_dir = local_yolo_splits.get(fold, (None, None))
 
+            print(f"  Evaluating {family_name} Fold {fold + 1}/{n_folds} ({weight_path.name})...")
             model = YOLO(str(weight_path))
             res = None
             if fold_img_dir and fold_lbl_dir:
@@ -1012,6 +1035,10 @@ def evaluate_benchmark(args):
             }
             family_cv_metrics.append(entry)
             cv_val_records.append(entry)
+            print(
+                f"  -> {entry['name']:<30} mAP50={entry['map50']:.4f} mAP50-95={entry['map50_95']:.4f} "
+                f"Precision={entry['precision']:.4f} Rec@0.50={entry['recall_50']:.4f} Mean IoU={entry['mean_iou']:.4f}"
+            )
 
         if family_cv_metrics:
             all_cv_results[family_name] = family_cv_metrics
@@ -1087,14 +1114,20 @@ def evaluate_benchmark(args):
                 if cand.exists():
                     weight_path = cand
                     break
-                alt = model_root / "fold_best_models" / f"fold_{fold}_best.pt"
-                if alt.exists():
-                    weight_path = alt
+                alt_prefixed = model_root / f"{pref.rstrip('_')}_fold_best_models" / f"fold_{fold}_best.pt"
+                if alt_prefixed.exists():
+                    weight_path = alt_prefixed
                     break
+                if family_name == "DENTEX+Tufts" or pref.startswith("dentex_tufts"):
+                    alt_default = model_root / "fold_best_models" / f"fold_{fold}_best.pt"
+                    if alt_default.exists():
+                        weight_path = alt_default
+                        break
 
             if not weight_path or not weight_path.exists():
                 continue
 
+            print(f"  Evaluating {family_name} Fold {fold + 1}/{n_folds} on held-out test set ({weight_path.name})...")
             model = YOLO(str(weight_path))
             if test_img_dir and test_lbl_dir:
                 res = evaluate_yolo_labels_target_grounding(
@@ -1116,6 +1149,10 @@ def evaluate_benchmark(args):
             }
             family_metrics.append(entry)
             comparison_records.append(entry)
+            print(
+                f"  -> {entry['name']:<30} mAP50={entry['map50']:.4f} mAP50-95={entry['map50_95']:.4f} "
+                f"Precision={entry['precision']:.4f} Rec@0.50={entry['recall_50']:.4f} Mean IoU={entry['mean_iou']:.4f}"
+            )
 
         if family_metrics:
             mean_rec50 = sum(m["recall_50"] for m in family_metrics) / len(family_metrics)
