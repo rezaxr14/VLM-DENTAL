@@ -149,6 +149,13 @@ def cross_validate(args):
             print(f"Resuming fold {fold} from {last_pt}")
             model = YOLO(str(last_pt))
         else:
+            # Clear stale label caches so YOLO re-indexes all dataset images
+            dataset_dir = yaml_path.parent
+            for cache_file in list(dataset_dir.glob("labels/**/*.cache")) + list(dataset_dir.glob("labels/*.cache")):
+                try:
+                    cache_file.unlink(missing_ok=True)
+                except Exception:
+                    pass
             model = YOLO(args.model)
 
         train_kwargs = dict(
