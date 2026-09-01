@@ -370,3 +370,46 @@ def test_benchmark_comparative_json_schema_completeness(tmp_path):
         assert isinstance(item["recall_50"], float)
         assert np.isfinite(item["recall_50"])
         assert 0.0 <= item["recall_50"] <= 1.0
+
+
+def test_evaluate_yolo_labels_target_grounding(tmp_path):
+    """Test evaluate_yolo_labels_target_grounding with synthetic image and normalized YOLO .txt label."""
+    from scripts.train_grounding_tool import evaluate_yolo_labels_target_grounding
+    from PIL import Image
+
+    img_dir = tmp_path / "images" / "val"
+    lbl_dir = tmp_path / "labels" / "val"
+    img_dir.mkdir(parents=True)
+    lbl_dir.mkdir(parents=True)
+
+    # Create dummy 1000x500 image
+    img_path = img_dir / "val_001.png"
+    im = Image.new("RGB", (1000, 500), color=(128, 128, 128))
+    im.save(img_path)
+
+    # Label: Class 0 (quadrant 1, pos 1) centered at (0.2, 0.4), w=0.1, h=0.2
+    # Absolute xyxy: [150, 150, 250, 250]
+    lbl_path = lbl_dir / "val_001.txt"
+    lbl_path.write_text("0 0.2 0.4 0.1 0.2\n")
+
+    # Mock YOLO model with exact prediction
+    mock_model = MagicMock()
+    mock_box = MagicMock()
+    mock_box.xyxy = MagicMock(cpu=MagicMock(return_value=MagicMock(numpy=MagicMock(return_value=np.array([[150.0, 150.0, 250.0, 250.0]])))))
+    mock_box.cls = MagicMock(cpu=MagicMock(return_value=MagicMock(numpy=MagicMock(return_value=np.array([0])))))
+    mock_box.conf = MagicMock(cpu=MagicMock(return_value=MagicMock(numpy=MagicMock(return_value=np.array([0.95])))))
+    mock_box.__len__ = MagicMock(return_value=1)
+
+    mock_preds = MagicMock()
+    mock_preds.boxes = mock_box
+    mock_model.predict.return_value = [mock_preds]
+
+    res = evaluate_yolo_labels_target_grounding(mock_model, img_dir, lbl_dir, conf_thresh=0.001, nominal_conf_thresh=0.25)
+    assert res["total_targets"] == 1
+    assert res["recall_50"] == 1.0
+    assert res["recall_75"] == 1.0
+    assert res["precision"] == 1.0
+    assert res["mean_iou"] == pytest.approx(1.0)
+    assert res["map50"] == pytest.approx(1.0)
+
+
