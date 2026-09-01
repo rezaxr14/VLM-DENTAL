@@ -27,29 +27,29 @@
   },
   "dentex_test_gemini_gemini-3.5-flash": {
     "format_adherence": 1.0,
-    "fdi_localization_accuracy": 0.6666666666666666,
-    "pathology_macro_f1": 0.4,
-    "exact_match_accuracy": 0.4,
+    "fdi_localization_accuracy": 0.5869565217391305,
+    "pathology_macro_f1": 0.2826086956521739,
+    "exact_match_accuracy": 0.2826086956521739,
     "exact_match_ci_95": [
-      0.13333333333333333,
-      0.6666666666666666
+      0.15217391304347827,
+      0.41304347826086957
     ],
-    "ece": 0.4935714517320905,
+    "ece": 0.6391111373901368,
     "mean_tool_calls": 0.0,
-    "total_samples": 15.0
+    "total_samples": 46.0
   },
   "dentex_test_groq_qwen--qwen3.6-27b": {
-    "format_adherence": 1.0,
-    "fdi_localization_accuracy": 0.6756756756756757,
-    "pathology_macro_f1": 0.43243243243243246,
-    "exact_match_accuracy": 0.24324324324324326,
+    "format_adherence": 0.9772727272727273,
+    "fdi_localization_accuracy": 0.6363636363636364,
+    "pathology_macro_f1": 0.4090909090909091,
+    "exact_match_accuracy": 0.4090909090909091,
     "exact_match_ci_95": [
-      0.10810810810810811,
-      0.3783783783783784
+      0.2727272727272727,
+      0.5681818181818182
     ],
     "ece": 0.0,
     "mean_tool_calls": 0.0,
-    "total_samples": 37.0
+    "total_samples": 44.0
   },
   "dentex_test_nvidia_nim_meta--llama-3.2-11b-vision-instruct": {
     "format_adherence": 1.0,
@@ -79,16 +79,16 @@
   },
   "dentex_test_nvidia_nim_moonshotai--kimi-k3": {
     "format_adherence": 1.0,
-    "fdi_localization_accuracy": 0.5384615384615384,
-    "pathology_macro_f1": 0.3076923076923077,
-    "exact_match_accuracy": 0.3076923076923077,
+    "fdi_localization_accuracy": 0.6521739130434783,
+    "pathology_macro_f1": 0.30434782608695654,
+    "exact_match_accuracy": 0.30434782608695654,
     "exact_match_ci_95": [
-      0.07692307692307693,
-      0.5384615384615384
+      0.17391304347826086,
+      0.45652173913043476
     ],
-    "ece": 0.40846153176747835,
+    "ece": 0.38847822080487787,
     "mean_tool_calls": 0.0,
-    "total_samples": 13.0
+    "total_samples": 46.0
   },
   "dentex_test_openrouter_google--gemma-4-31b-it-free": {
     "format_adherence": 1.0,
@@ -117,13 +117,13 @@
     "total_samples": 46.0
   },
   "dentex_test_openrouter_nvidia--nemotron-3-nano-omni-30b-a3b-reasoning-free": {
-    "format_adherence": 1.0,
-    "fdi_localization_accuracy": 0.26666666666666666,
-    "pathology_macro_f1": 0.2,
-    "exact_match_accuracy": 0.13333333333333333,
+    "format_adherence": 0.8666666666666667,
+    "fdi_localization_accuracy": 0.4666666666666667,
+    "pathology_macro_f1": 0.3333333333333333,
+    "exact_match_accuracy": 0.26666666666666666,
     "exact_match_ci_95": [
-      0.0,
-      0.3333333333333333
+      0.06666666666666667,
+      0.5333333333333333
     ],
     "ece": 0.0,
     "mean_tool_calls": 0.0,
