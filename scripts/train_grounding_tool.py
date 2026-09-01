@@ -856,175 +856,171 @@ def evaluate_benchmark(args):
     if device in ("0", "cuda") and not torch.cuda.is_available():
         device = "cpu"
 
-    # --- Part 1: 5-Fold Cross-Validation Metrics Table (Both Families) ---
-    families = [
-        ("DENTEX-Only", ["dentex_cv_fold_", "cv_fold_"]),
-        ("DENTEX+Tufts", ["dentex_tufts_cv_fold_"]),
+    # --- Part 1: In-Fold Cross-Validation Target Grounding Benchmark (Live Target-Filtered) ---
+    print(f"\n{'=' * 95}")
+    print(f"  IN-FOLD TARGET TOOTH GROUNDING BENCHMARK (CV Validation Splits - Target-Filtered)")
+    print(f"{'=' * 95}")
+    print(f"  {'Model Architecture / Fold':<30} {'Rec@0.50':<11} {'Rec@0.75':<11} {'Precision':<11} {'Mean IoU':<11} {'Target mAP50':<12}")
+    print(f"  {'-' * 95}")
+
+    cv_val_records = []
+    cv_configs = [
+        ("DENTEX-Only", ["dentex_cv_fold_", "cv_fold_"], ["dentex"]),
+        ("DENTEX+Tufts", ["dentex_tufts_cv_fold_"], ["dentex", "tufts"]),
     ]
 
     all_cv_results = {}
-    for family_name, prefix_options in families:
-        cv_results = []
+    from sklearn.model_selection import KFold
+
+    for family_name, prefix_options, dataset_names in cv_configs:
+        family_cv_metrics = []
+        
+        # Load dataset training pool for this family if local yolo folder doesn't exist
+        train_pools = []
+        for dname in dataset_names:
+            if dname == "dentex":
+                from dental_agent.data.dentex import load_dentex_dataset
+                from scripts.prepare_yolo_dataset import _ensure_images_downloaded
+                data_dir = getattr(args, "data_dir", None)
+                imgs_df, ann_df, _ = load_dentex_dataset(data_dir=data_dir, split_name="train", combine_enumeration_splits=True)
+                imgs_df = _ensure_images_downloaded(imgs_df, "dentex", data_dir=data_dir)
+                imgs_df = imgs_df[imgs_df["local_path"].notna()].copy()
+                train_pools.append((dname, imgs_df, ann_df))
+            elif dname == "tufts":
+                from dental_agent.data.tufts import load_tufts_dataset
+                from scripts.prepare_yolo_dataset import _ensure_images_downloaded
+                data_dir = getattr(args, "data_dir", None)
+                try:
+                    imgs_df, ann_df, _ = load_tufts_dataset(data_dir=data_dir)
+                    imgs_df = _ensure_images_downloaded(imgs_df, "tufts", data_dir=data_dir)
+                    imgs_df = imgs_df[imgs_df["local_path"].notna()].copy()
+                    train_pools.append((dname, imgs_df, ann_df))
+                except Exception as e:
+                    print(f"  Notice: Could not load Tufts dataset pool: {e}")
+
+        combined_keys = [
+            (dname, img_id)
+            for dname, images_df, _ in train_pools
+            for img_id in sorted(images_df["id"].unique())
+        ]
+        kf = KFold(n_splits=n_folds, shuffle=True, random_state=42)
+        fold_splits = list(kf.split(combined_keys)) if combined_keys else []
+
         for fold in range(n_folds):
-            fold_dir = None
+            weight_path = None
             for pref in prefix_options:
-                cand = model_root / f"{pref}{fold}"
+                cand = model_root / f"{pref}{fold}" / "weights" / "best.pt"
                 if cand.exists():
-                    fold_dir = cand
+                    weight_path = cand
                     break
-            if not fold_dir:
+                alt = model_root / "fold_best_models" / f"fold_{fold}_best.pt"
+                if alt.exists():
+                    weight_path = alt
+                    break
+
+            if not weight_path or not weight_path.exists():
                 continue
 
-            metrics = {"fold": fold, "map50": 0.0, "map50_95": 0.0, "precision": 0.0, "recall": 0.0}
-            csv_path = fold_dir / "results.csv"
-            if csv_path.exists():
-                try:
-                    import pandas as pd
-                    df = pd.read_csv(csv_path)
-                    df.columns = df.columns.str.strip()
-                    last_row = df.iloc[-1]
-                    metrics["map50"] = float(last_row.get("metrics/mAP50(B)", 0.0))
-                    metrics["map50_95"] = float(last_row.get("metrics/mAP50-95(B)", 0.0))
-                    metrics["precision"] = float(last_row.get("metrics/precision(B)", 0.0))
-                    metrics["recall"] = float(last_row.get("metrics/recall(B)", 0.0))
-                except Exception:
-                    pass
+            # Look for existing in-fold validation directory on disk
+            fold_img_dir = None
+            fold_lbl_dir = None
+            dir_suffix = _dataset_dir_suffix(",".join(dataset_names))
+            for cv_root in [Path(f"data/yolo_{dir_suffix}_cv"), Path(f"data/yolo_{dir_suffix}"), Path("data/yolo_cv")]:
+                cand_img = cv_root / f"fold_{fold}" / "images" / "val"
+                cand_lbl = cv_root / f"fold_{fold}" / "labels" / "val"
+                if cand_img.exists() and cand_lbl.exists() and any(cand_img.iterdir()):
+                    fold_img_dir = cand_img
+                    fold_lbl_dir = cand_lbl
+                    break
 
-            best_pt = fold_dir / "weights" / "best.pt"
-            if best_pt.exists() or metrics["map50"] > 0:
-                cv_results.append(metrics)
-
-        if cv_results:
-            all_cv_results[family_name] = cv_results
-            print(f"\n{'=' * 65}")
-            print(f"  5-FOLD CV RESULTS (Internal Validation) — {family_name}")
-            print(f"{'=' * 65}")
-            print(f"  {'Fold':<6} {'mAP50':<12} {'mAP50-95':<12} {'Precision':<12} {'Recall':<12}")
-            print(f"  {'-' * 54}")
-            for r in cv_results:
-                print(
-                    f"  {r['fold']:<6} {r['map50']:<12.4f} {r['map50_95']:<12.4f} "
-                    f"{r['precision']:<12.4f} {r['recall']:<12.4f}"
-                )
-            print(f"  {'-' * 54}")
-            mean_map50 = sum(r["map50"] for r in cv_results) / len(cv_results)
-            std_map50 = (sum((r["map50"] - mean_map50) ** 2 for r in cv_results) / len(cv_results)) ** 0.5
-            mean_map50_95 = sum(r["map50_95"] for r in cv_results) / len(cv_results)
-            std_map50_95 = (sum((r["map50_95"] - mean_map50_95) ** 2 for r in cv_results) / len(cv_results)) ** 0.5
-            mean_prec = sum(r["precision"] for r in cv_results) / len(cv_results)
-            mean_rec = sum(r["recall"] for r in cv_results) / len(cv_results)
-            print(f"  Mean mAP50:      {mean_map50:.4f} +/- {std_map50:.4f}")
-            print(f"  Mean mAP50-95:   {mean_map50_95:.4f} +/- {std_map50_95:.4f}")
-            print(f"  Mean Precision:  {mean_prec:.4f}")
-            print(f"  Mean Recall:     {mean_rec:.4f}")
-
-            cv_best = max(cv_results, key=lambda x: x["map50_95"])
-            cv_data = {
-                "family": family_name,
-                "folds": cv_results,
-                "best_fold": cv_best["fold"],
-                "mean_map50": mean_map50,
-                "std_map50": std_map50,
-                "mean_map50_95": mean_map50_95,
-                "std_map50_95": std_map50_95,
-                "mean_precision": mean_prec,
-                "mean_recall": mean_rec,
-            }
-            pref = "dentex_tufts_" if family_name == "DENTEX+Tufts" else ("dentex_" if family_name == "DENTEX-Only" else "")
-            cv_out = model_root / f"{pref}grounding_tool_cv_best" / "cv_results.json"
-            cv_out.parent.mkdir(parents=True, exist_ok=True)
-            cv_out.write_text(json.dumps(cv_data, indent=2))
-            print(f"  Saved CV results to: {cv_out}")
-
-    # --- Part 2: In-Fold Cross-Validation Target Grounding Evaluation ---
-    cv_val_records = []
-    cv_dirs = [
-        ("DENTEX-Only", [Path("data/yolo_dentex_cv"), Path("data/yolo_dentex"), Path("data/yolo_cv"), Path("data/yolo_dentex_tufts_cv")], ["dentex_cv_fold_", "cv_fold_"]),
-        ("DENTEX+Tufts", [Path("data/yolo_dentex_tufts_cv")], ["dentex_tufts_cv_fold_"]),
-    ]
-
-    has_cv_val_dirs = any(any(cand.exists() for cand in p[1]) for p in cv_dirs)
-    if has_cv_val_dirs:
-        print(f"\n{'=' * 95}")
-        print(f"  IN-FOLD TARGET TOOTH GROUNDING BENCHMARK (CV Validation Splits - Target-Filtered)")
-        print(f"{'=' * 95}")
-        print(f"  {'Model Architecture / Fold':<30} {'Rec@0.50':<11} {'Rec@0.75':<11} {'Precision':<11} {'Mean IoU':<11} {'Target mAP50':<12}")
-        print(f"  {'-' * 95}")
-
-        for family_name, cv_data_roots, prefix_options in cv_dirs:
-            family_cv_metrics = []
-            for fold in range(n_folds):
-                weight_path = None
-                for pref in prefix_options:
-                    cand = model_root / f"{pref}{fold}" / "weights" / "best.pt"
-                    if cand.exists():
-                        weight_path = cand
-                        break
-                    alt = model_root / "fold_best_models" / f"fold_{fold}_best.pt"
-                    if alt.exists():
-                        weight_path = alt
-                        break
-
-                fold_img_dir = None
-                fold_lbl_dir = None
-                for cv_data_root in cv_data_roots:
-                    cand_img = cv_data_root / f"fold_{fold}" / "images" / "val"
-                    cand_lbl = cv_data_root / f"fold_{fold}" / "labels" / "val"
-                    if cand_img.exists() and cand_lbl.exists():
-                        fold_img_dir = cand_img
-                        fold_lbl_dir = cand_lbl
-                        break
-
-                if not weight_path or not weight_path.exists() or not fold_img_dir or not fold_lbl_dir:
-                    continue
-
-                model = YOLO(str(weight_path))
+            model = YOLO(str(weight_path))
+            res = None
+            if fold_img_dir and fold_lbl_dir:
                 res = evaluate_yolo_labels_target_grounding(
                     model, fold_img_dir, fold_lbl_dir, conf_thresh=0.001, nominal_conf_thresh=0.25, imgsz=args.imgsz, device=device
                 )
-                if not res:
-                    continue
-                entry = {
-                    "family": family_name,
-                    "name": f"{family_name} (CV Fold {fold})",
-                    "fold": fold,
-                    "weight_path": str(weight_path),
-                    **res,
-                }
-                family_cv_metrics.append(entry)
-                cv_val_records.append(entry)
-                print(
-                    f"  {entry['name']:<30} {entry['recall_50']:<11.4f} {entry['recall_75']:<11.4f} "
-                    f"{entry['precision']:<11.4f} {entry['mean_iou']:<11.4f} {entry['map50']:<12.4f}"
-                )
+            elif fold_splits and fold < len(fold_splits):
+                # Dynamically evaluate on in-memory validation split for this fold
+                _, val_idx = fold_splits[fold]
+                val_keys = {combined_keys[i] for i in val_idx}
+                
+                fold_val_images = []
+                fold_val_annots = []
+                for dname, images_df, ann_df in train_pools:
+                    fold_val_ids = {img_id for (dn, img_id) in val_keys if dn == dname}
+                    v_imgs = images_df[images_df["id"].isin(fold_val_ids)].copy()
+                    v_anns = ann_df[ann_df["image_id"].isin(fold_val_ids)].copy()
+                    fold_val_images.append(v_imgs)
+                    fold_val_annots.append(v_anns)
+                
+                if fold_val_images:
+                    merged_imgs = pd.concat(fold_val_images, ignore_index=True)
+                    merged_anns = pd.concat(fold_val_annots, ignore_index=True)
+                    res = evaluate_target_grounding(
+                        model, merged_imgs, merged_anns, conf_thresh=0.001, nominal_conf_thresh=0.25, imgsz=args.imgsz, device=device
+                    )
 
-            if family_cv_metrics:
-                mean_rec50 = sum(m["recall_50"] for m in family_cv_metrics) / len(family_cv_metrics)
-                mean_rec75 = sum(m["recall_75"] for m in family_cv_metrics) / len(family_cv_metrics)
-                mean_prec = sum(m["precision"] for m in family_cv_metrics) / len(family_cv_metrics)
-                mean_iou_val = sum(m["mean_iou"] for m in family_cv_metrics) / len(family_cv_metrics)
-                mean_map = sum(m["map50"] for m in family_cv_metrics) / len(family_cv_metrics)
-                summary_entry = {
-                    "family": family_name,
-                    "name": f"{family_name} (5-Fold Mean)",
-                    "fold": "mean",
-                    "recall_50": mean_rec50,
-                    "recall_75": mean_rec75,
-                    "precision": mean_prec,
-                    "mean_iou": mean_iou_val,
-                    "map50": mean_map,
-                }
-                cv_val_records.append(summary_entry)
-                print(f"  {'-' * 95}")
-                print(
-                    f"  {summary_entry['name']:<30} {mean_rec50:<11.4f} {mean_rec75:<11.4f} "
-                    f"{mean_prec:<11.4f} {mean_iou_val:<11.4f} {mean_map:<12.4f}"
-                )
-                print(f"  {'-' * 95}")
+            if not res:
+                continue
 
-        if cv_val_records:
-            cv_val_json = model_root / "cv_val_target_evaluation.json"
-            cv_val_json.write_text(json.dumps(cv_val_records, indent=2))
+            entry = {
+                "family": family_name,
+                "name": f"{family_name} (CV Fold {fold})",
+                "fold": fold,
+                "weight_path": str(weight_path),
+                **res,
+            }
+            family_cv_metrics.append(entry)
+            cv_val_records.append(entry)
+            print(
+                f"  {entry['name']:<30} {entry['recall_50']:<11.4f} {entry['recall_75']:<11.4f} "
+                f"{entry['precision']:<11.4f} {entry['mean_iou']:<11.4f} {entry['map50']:<12.4f}"
+            )
+
+        if family_cv_metrics:
+            all_cv_results[family_name] = family_cv_metrics
+            mean_rec50 = sum(m["recall_50"] for m in family_cv_metrics) / len(family_cv_metrics)
+            mean_rec75 = sum(m["recall_75"] for m in family_cv_metrics) / len(family_cv_metrics)
+            mean_prec = sum(m["precision"] for m in family_cv_metrics) / len(family_cv_metrics)
+            mean_iou_val = sum(m["mean_iou"] for m in family_cv_metrics) / len(family_cv_metrics)
+            mean_map = sum(m["map50"] for m in family_cv_metrics) / len(family_cv_metrics)
+            summary_entry = {
+                "family": family_name,
+                "name": f"{family_name} (5-Fold Mean)",
+                "fold": "mean",
+                "recall_50": mean_rec50,
+                "recall_75": mean_rec75,
+                "precision": mean_prec,
+                "mean_iou": mean_iou_val,
+                "map50": mean_map,
+            }
+            cv_val_records.append(summary_entry)
+            print(f"  {'-' * 95}")
+            print(
+                f"  {summary_entry['name']:<30} {mean_rec50:<11.4f} {mean_rec75:<11.4f} "
+                f"{mean_prec:<11.4f} {mean_iou_val:<11.4f} {mean_map:<12.4f}"
+            )
+            print(f"  {'-' * 95}")
+
+            # Save clean target-filtered CV results
+            pref = "dentex_tufts_" if family_name == "DENTEX+Tufts" else ("dentex_" if family_name == "DENTEX-Only" else "")
+            cv_out = model_root / f"{pref}grounding_tool_cv_best" / "cv_results.json"
+            cv_out.parent.mkdir(parents=True, exist_ok=True)
+            cv_data = {
+                "family": family_name,
+                "folds": family_cv_metrics,
+                "mean_recall_50": mean_rec50,
+                "mean_recall_75": mean_rec75,
+                "mean_precision": mean_prec,
+                "mean_iou": mean_iou_val,
+                "mean_map50": mean_map,
+            }
+            cv_out.write_text(json.dumps(cv_data, indent=2))
+            print(f"  Saved clean target-filtered CV results to: {cv_out}")
+
+    if cv_val_records:
+        cv_val_json = model_root / "cv_val_target_evaluation.json"
+        cv_val_json.write_text(json.dumps(cv_val_records, indent=2))
 
     # --- Part 3: Head-to-Head Target Grounding Benchmark Table ---
     n_test_imgs = len(list(test_img_dir.iterdir())) if test_img_dir else (len(val_images_df) if val_images_df is not None else 0)
