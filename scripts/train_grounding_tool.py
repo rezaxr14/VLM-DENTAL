@@ -856,64 +856,85 @@ def evaluate_benchmark(args):
     if device in ("0", "cuda") and not torch.cuda.is_available():
         device = "cpu"
 
-    # --- Part 1: 5-Fold Cross-Validation Metrics Table ---
-    cv_results = []
-    for fold in range(n_folds):
-        fold_dir = model_root / f"{prefix}cv_fold_{fold}"
-        if not fold_dir.exists():
-            fold_dir = model_root / f"dentex_tufts_cv_fold_{fold}"
-        metrics = {"fold": fold, "map50": 0.0, "map50_95": 0.0, "precision": 0.0, "recall": 0.0}
+    # --- Part 1: 5-Fold Cross-Validation Metrics Table (Both Families) ---
+    families = [
+        ("DENTEX-Only", ["dentex_cv_fold_", "cv_fold_"]),
+        ("DENTEX+Tufts", ["dentex_tufts_cv_fold_"]),
+    ]
 
-        csv_path = fold_dir / "results.csv"
-        if csv_path.exists():
-            try:
-                import pandas as pd
-                df = pd.read_csv(csv_path)
-                df.columns = df.columns.str.strip()
-                last_row = df.iloc[-1]
-                metrics["map50"] = float(last_row.get("metrics/mAP50(B)", 0.0))
-                metrics["map50_95"] = float(last_row.get("metrics/mAP50-95(B)", 0.0))
-                metrics["precision"] = float(last_row.get("metrics/precision(B)", 0.0))
-                metrics["recall"] = float(last_row.get("metrics/recall(B)", 0.0))
-            except Exception:
-                pass
+    all_cv_results = {}
+    for family_name, prefix_options in families:
+        cv_results = []
+        for fold in range(n_folds):
+            fold_dir = None
+            for pref in prefix_options:
+                cand = model_root / f"{pref}{fold}"
+                if cand.exists():
+                    fold_dir = cand
+                    break
+            if not fold_dir:
+                continue
 
-        best_pt = fold_dir / "weights" / "best.pt"
-        if best_pt.exists() or metrics["map50"] > 0:
-            cv_results.append(metrics)
+            metrics = {"fold": fold, "map50": 0.0, "map50_95": 0.0, "precision": 0.0, "recall": 0.0}
+            csv_path = fold_dir / "results.csv"
+            if csv_path.exists():
+                try:
+                    import pandas as pd
+                    df = pd.read_csv(csv_path)
+                    df.columns = df.columns.str.strip()
+                    last_row = df.iloc[-1]
+                    metrics["map50"] = float(last_row.get("metrics/mAP50(B)", 0.0))
+                    metrics["map50_95"] = float(last_row.get("metrics/mAP50-95(B)", 0.0))
+                    metrics["precision"] = float(last_row.get("metrics/precision(B)", 0.0))
+                    metrics["recall"] = float(last_row.get("metrics/recall(B)", 0.0))
+                except Exception:
+                    pass
 
-    if cv_results:
-        print(f"\n{'=' * 60}")
-        print(f"  {len(cv_results)}-FOLD CROSS-VALIDATION RESULTS (Internal Validation)")
-        print(f"{'=' * 60}")
-        print(f"  {'Fold':<6} {'mAP50':<10} {'mAP50-95':<10} {'Precision':<10} {'Recall':<10}")
-        print(f"  {'-' * 46}")
-        for r in cv_results:
-            print(
-                f"  {r['fold']:<6} {r['map50']:<10.4f} {r['map50_95']:<10.4f} "
-                f"{r['precision']:<10.4f} {r['recall']:<10.4f}"
-            )
-        print(f"  {'-' * 46}")
-        mean_map50 = sum(r["map50"] for r in cv_results) / len(cv_results)
-        std_map50 = (sum((r["map50"] - mean_map50) ** 2 for r in cv_results) / len(cv_results)) ** 0.5
-        mean_map50_95 = sum(r["map50_95"] for r in cv_results) / len(cv_results)
-        std_map50_95 = (sum((r["map50_95"] - mean_map50_95) ** 2 for r in cv_results) / len(cv_results)) ** 0.5
-        print(f"  Mean mAP50:      {mean_map50:.4f} +/- {std_map50:.4f}")
-        print(f"  Mean mAP50-95:   {mean_map50_95:.4f} +/- {std_map50_95:.4f}")
+            best_pt = fold_dir / "weights" / "best.pt"
+            if best_pt.exists() or metrics["map50"] > 0:
+                cv_results.append(metrics)
 
-        cv_best = max(cv_results, key=lambda x: x["map50_95"])
-        cv_data = {
-            "folds": cv_results,
-            "best_fold": cv_best["fold"],
-            "mean_map50": mean_map50,
-            "std_map50": std_map50,
-            "mean_map50_95": mean_map50_95,
-            "std_map50_95": std_map50_95,
-        }
-        cv_out = model_root / f"{prefix}grounding_tool_cv_best" / "cv_results.json"
-        cv_out.parent.mkdir(parents=True, exist_ok=True)
-        cv_out.write_text(json.dumps(cv_data, indent=2))
-        print(f"  Saved CV results to: {cv_out}")
+        if cv_results:
+            all_cv_results[family_name] = cv_results
+            print(f"\n{'=' * 65}")
+            print(f"  5-FOLD CV RESULTS (Internal Validation) — {family_name}")
+            print(f"{'=' * 65}")
+            print(f"  {'Fold':<6} {'mAP50':<12} {'mAP50-95':<12} {'Precision':<12} {'Recall':<12}")
+            print(f"  {'-' * 54}")
+            for r in cv_results:
+                print(
+                    f"  {r['fold']:<6} {r['map50']:<12.4f} {r['map50_95']:<12.4f} "
+                    f"{r['precision']:<12.4f} {r['recall']:<12.4f}"
+                )
+            print(f"  {'-' * 54}")
+            mean_map50 = sum(r["map50"] for r in cv_results) / len(cv_results)
+            std_map50 = (sum((r["map50"] - mean_map50) ** 2 for r in cv_results) / len(cv_results)) ** 0.5
+            mean_map50_95 = sum(r["map50_95"] for r in cv_results) / len(cv_results)
+            std_map50_95 = (sum((r["map50_95"] - mean_map50_95) ** 2 for r in cv_results) / len(cv_results)) ** 0.5
+            mean_prec = sum(r["precision"] for r in cv_results) / len(cv_results)
+            mean_rec = sum(r["recall"] for r in cv_results) / len(cv_results)
+            print(f"  Mean mAP50:      {mean_map50:.4f} +/- {std_map50:.4f}")
+            print(f"  Mean mAP50-95:   {mean_map50_95:.4f} +/- {std_map50_95:.4f}")
+            print(f"  Mean Precision:  {mean_prec:.4f}")
+            print(f"  Mean Recall:     {mean_rec:.4f}")
+
+            cv_best = max(cv_results, key=lambda x: x["map50_95"])
+            cv_data = {
+                "family": family_name,
+                "folds": cv_results,
+                "best_fold": cv_best["fold"],
+                "mean_map50": mean_map50,
+                "std_map50": std_map50,
+                "mean_map50_95": mean_map50_95,
+                "std_map50_95": std_map50_95,
+                "mean_precision": mean_prec,
+                "mean_recall": mean_rec,
+            }
+            pref = "dentex_tufts_" if family_name == "DENTEX+Tufts" else ("dentex_" if family_name == "DENTEX-Only" else "")
+            cv_out = model_root / f"{pref}grounding_tool_cv_best" / "cv_results.json"
+            cv_out.parent.mkdir(parents=True, exist_ok=True)
+            cv_out.write_text(json.dumps(cv_data, indent=2))
+            print(f"  Saved CV results to: {cv_out}")
 
     # --- Part 2: In-Fold Cross-Validation Target Grounding Evaluation ---
     cv_val_records = []
@@ -1181,15 +1202,17 @@ def main():
     parser.add_argument("--device", type=str, default="0", help="Device to run on (e.g., '0' for GPU 0, 'cpu' for CPU)")
     parser.add_argument("--cross-validate", action="store_true", help="Run cross-validation training")
     parser.add_argument("--target-fold", type=str, default="all", help="Specific fold index to train (e.g. 0, 1, 2, 3, 4) or 'all' for all folds")
+    parser.add_argument("--folds", type=int, default=5, help="Number of CV folds (only used with --cross-validate)")
     parser.add_argument("--eval-benchmark", action="store_true", help="Evaluate trained folds on the official held-out test set")
     parser.add_argument("--eval-cv-val", action="store_true", help="Evaluate in-fold validation splits with target-filtered metric")
+    parser.add_argument("--resume", action="store_true", help="Resume training or hydration from previous checkpoints")
     parser.add_argument("--no-hf-sync", action="store_true", help="Skip syncing models to Hugging Face")
     parser.add_argument("--data-dir", type=str, default=None, help="Root directory containing datasets")
     parser.add_argument("--datasets", type=str, default="dentex,tufts", help="Comma-separated dataset names to combine (e.g. 'dentex', 'dentex,tufts')")
     parser.add_argument("--hf-repo", type=str, default=None, help="Hugging Face repo for artifact sync")
     args = parser.parse_args()
 
-    if args.eval_benchmark:
+    if args.eval_benchmark or args.eval_cv_val:
         evaluate_benchmark(args)
     elif args.cross_validate:
         cross_validate(args)
