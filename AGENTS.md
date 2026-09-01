@@ -35,6 +35,7 @@ The generation of synthetic training data is now orchestrated by a real LangGrap
 - **Preservation of Working Functionality (Rule 14)**: Modifying, enhancing, and combining functions is encouraged; deleting working functionality or dropping existing notebook/CLI capabilities is strictly forbidden.
 - **Mandatory Adversarial Code Self-Critique (Rule 15)**: Proactively audit all code changes across 5 defensive vectors (cross-platform path normalization, null safety, caching, deep copies, determinism) and provide unit test verification before completion.
 - **Local Asset Re-Use & Surgical Download (Rule 16)**: Never re-download assets that exist locally on disk. When remote fetching is necessary, always pre-filter completed records and download only the exact missing delta.
+- **Zero Unprompted Local Execution & Bandwidth Discipline (Rule 17)**: The agent is strictly prohibited from running long-running data downloads, model evaluations, or heavy training runs on the local machine without explicit prior consultation. Heavy training and evaluations belong in Google Colab.
 
 If you are asked to build a new feature, always check `registry.py` to ensure your new tools are correctly mapped, and `tool_dispatch.py` if the tool needs the source image.
 

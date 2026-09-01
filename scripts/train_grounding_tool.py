@@ -419,7 +419,8 @@ def evaluate_target_grounding(
     model: YOLO,
     val_images_df: pd.DataFrame,
     val_annots_df: pd.DataFrame,
-    conf_thresh: float = 0.25,
+    conf_thresh: float = 0.001,
+    nominal_conf_thresh: float = 0.25,
     imgsz: int = 640,
     device: str = "cpu",
 ) -> dict[str, float]:
@@ -427,6 +428,9 @@ def evaluate_target_grounding(
     
     Uses greedy 1-to-1 bipartite matching to avoid double-counting true positives and avoids
     penalizing unannotated healthy teeth on partial/disease benchmark splits.
+    
+    Collects detections down to conf_thresh=0.001 for complete 101-point COCO PR curve integration (mAP50),
+    while computing nominal operating point metrics (Recall, Precision, Mean IoU) at nominal_conf_thresh=0.25.
     """
     from dental_agent.data.dentex import dentex_row_to_fdi
 
@@ -436,11 +440,11 @@ def evaluate_target_grounding(
         device = "cpu"
 
     total_targets = 0
-    tp_50 = 0
-    tp_75 = 0
-    target_pred_count = 0
-    target_tp_count = 0
-    target_ious = []
+    tp_50_nominal = 0
+    tp_75_nominal = 0
+    target_pred_nominal_count = 0
+    target_tp_nominal_count = 0
+    target_nominal_ious = []
     
     # Store predictions and ground truths for precision-recall curve computation
     # per target class: {class_idx: {"preds": [(conf, is_tp_50)], "n_gt": int}}
@@ -491,7 +495,7 @@ def evaluate_target_grounding(
 
         total_targets += len(gt_targets)
 
-        # Run model inference on this test image
+        # Run model inference on this test image at low confidence to capture full PR curve
         try:
             preds = model.predict(source=str(local_path), conf=conf_thresh, imgsz=imgsz, device=device, verbose=False)[0]
         except Exception as e:
@@ -502,54 +506,65 @@ def evaluate_target_grounding(
         pred_classes = preds.boxes.cls.cpu().numpy().astype(int) if len(preds.boxes) else np.zeros((0,), dtype=int)
         pred_confs = preds.boxes.conf.cpu().numpy() if len(preds.boxes) else np.zeros((0,))
 
-        # Greedy 1-to-1 matching per ground truth box
-        matched_pred_indices = set()
+        # 1. Greedy 1-to-1 matching for nominal operating point (conf >= nominal_conf_thresh)
+        nominal_mask = pred_confs >= nominal_conf_thresh
+        nom_boxes = pred_boxes[nominal_mask]
+        nom_classes = pred_classes[nominal_mask]
+        nom_confs = pred_confs[nominal_mask]
+
+        matched_nom_indices = set()
         for gt_cls, gt_box in gt_targets:
-            cand_indices = [i for i, c in enumerate(pred_classes) if c == gt_cls and i not in matched_pred_indices]
-            if cand_indices:
-                ious = [_compute_box_iou(pred_boxes[i].tolist(), gt_box) for i in cand_indices]
+            cand_nom_idx = [i for i, c in enumerate(nom_classes) if c == gt_cls and i not in matched_nom_indices]
+            if cand_nom_idx:
+                ious = [_compute_box_iou(nom_boxes[i].tolist(), gt_box) for i in cand_nom_idx]
                 best_sub_idx = int(np.argmax(ious))
                 best_iou = ious[best_sub_idx]
-                best_global_pred_idx = cand_indices[best_sub_idx]
-                target_ious.append(best_iou)
+                target_nominal_ious.append(best_iou)
                 if best_iou >= 0.50:
-                    tp_50 += 1
-                    matched_pred_indices.add(best_global_pred_idx)
+                    tp_50_nominal += 1
+                    matched_nom_indices.add(cand_nom_idx[best_sub_idx])
                 if best_iou >= 0.75:
-                    tp_75 += 1
+                    tp_75_nominal += 1
             else:
-                target_ious.append(0.0)
+                target_nominal_ious.append(0.0)
 
-        # Evaluate precision restricted to target classes present in this image
+        for i in range(len(nom_classes)):
+            p_cls = nom_classes[i]
+            if p_cls in gt_classes_in_img:
+                target_pred_nominal_count += 1
+                p_box = nom_boxes[i].tolist()
+                matching_gts = [gt_box for (c, gt_box) in gt_targets if c == p_cls]
+                if matching_gts and max(_compute_box_iou(p_box, gb) for gb in matching_gts) >= 0.50:
+                    target_tp_nominal_count += 1
+
+        # 2. Record all target predictions for PR curve calculation (down to conf_thresh)
         for i in range(len(pred_classes)):
             p_cls = pred_classes[i]
             if p_cls in gt_classes_in_img:
-                target_pred_count += 1
                 p_box = pred_boxes[i].tolist()
                 p_conf = float(pred_confs[i])
                 matching_gts = [gt_box for (c, gt_box) in gt_targets if c == p_cls]
-                if matching_gts:
-                    ious = [_compute_box_iou(p_box, gb) for gb in matching_gts]
-                    best_match_iou = max(ious)
-                    if best_match_iou >= 0.50:
-                        target_tp_count += 1
-                        class_eval_records[p_cls]["preds"].append((p_conf, 1.0))
-                    else:
-                        class_eval_records[p_cls]["preds"].append((p_conf, 0.0))
+                if matching_gts and max(_compute_box_iou(p_box, gb) for gb in matching_gts) >= 0.50:
+                    class_eval_records[p_cls]["preds"].append((p_conf, 1.0))
                 else:
                     class_eval_records[p_cls]["preds"].append((p_conf, 0.0))
 
-    # Calculate aggregate metrics
-    recall_50 = (tp_50 / max(1, total_targets))
-    recall_75 = (tp_75 / max(1, total_targets))
-    precision = (target_tp_count / max(1, target_pred_count)) if target_pred_count > 0 else 0.0
-    mean_iou = (sum(target_ious) / max(1, len(target_ious))) if target_ious else 0.0
+    # Calculate nominal operating metrics
+    recall_50 = (tp_50_nominal / max(1, total_targets))
+    recall_75 = (tp_75_nominal / max(1, total_targets))
+    precision = (target_tp_nominal_count / max(1, target_pred_nominal_count)) if target_pred_nominal_count > 0 else 0.0
+    mean_iou = (sum(target_nominal_ious) / max(1, len(target_nominal_ious))) if target_nominal_ious else 0.0
 
-    # Compute target class mAP50 using standard 11-point interpolated AP
+    # Compute target class mAP50 using continuous 101-point COCO interpolated AP
     aps_50 = []
     for c, rec in class_eval_records.items():
-        if rec["n_gt"] == 0 or not rec["preds"]:
+        if rec["n_gt"] == 0:
             continue
+        if not rec["preds"]:
+            # If target exists in ground truth but has zero predictions, AP is 0.0
+            aps_50.append(0.0)
+            continue
+            
         preds_list = rec["preds"]
         preds_list.sort(key=lambda x: x[0], reverse=True)
         tps = [x[1] for x in preds_list]
@@ -558,12 +573,12 @@ def evaluate_target_grounding(
         precisions = cumsum_tp / (cumsum_tp + cumsum_fp)
         recalls = cumsum_tp / rec["n_gt"]
         
-        # 11-point interpolated AP
+        # 101-point interpolated AP (standard COCO)
         ap = 0.0
-        for t in np.linspace(0, 1, 11):
+        for t in np.linspace(0, 1, 101):
             p_over = precisions[recalls >= t]
             p = np.max(p_over) if len(p_over) > 0 else 0.0
-            ap += p / 11.0
+            ap += p / 101.0
         aps_50.append(float(ap))
 
     map50 = float(np.mean(aps_50)) if aps_50 else recall_50
@@ -578,6 +593,7 @@ def evaluate_target_grounding(
         "map50_95": map50_95,
         "total_targets": total_targets,
     }
+
 
 
 def evaluate_benchmark(args):
