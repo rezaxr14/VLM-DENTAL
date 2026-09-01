@@ -17,10 +17,12 @@ import numpy as np
 import pandas as pd
 import pytest
 from unittest.mock import MagicMock, patch
+from PIL import Image
 
 from scripts.train_grounding_tool import (
     _compute_box_iou,
     evaluate_target_grounding,
+    evaluate_yolo_labels_target_grounding,
     _ensure_folds_hydrated,
     _model_subdir_prefix,
 )
@@ -411,5 +413,69 @@ def test_evaluate_yolo_labels_target_grounding(tmp_path):
     assert res["precision"] == 1.0
     assert res["mean_iou"] == pytest.approx(1.0)
     assert res["map50"] == pytest.approx(1.0)
+
+
+def test_yolo_labels_target_eval_sparse_gt_ignores_healthy_teeth(tmp_path):
+    """Test that predicting whole-mouth healthy teeth on a sparse YOLO GT label file
+    does NOT penalize precision, evaluating strictly against target classes."""
+    img_dir = tmp_path / "images" / "val"
+    lbl_dir = tmp_path / "labels" / "val"
+    img_dir.mkdir(parents=True)
+    lbl_dir.mkdir(parents=True)
+
+    img_path = img_dir / "val_sparse.png"
+    im = Image.new("RGB", (1000, 500), color=(100, 100, 100))
+    im.save(img_path)
+
+    # Sparse GT: Only Tooth 11 (cls 0) and Tooth 21 (cls 8)
+    lbl_path = lbl_dir / "val_sparse.txt"
+    lbl_path.write_text("0 0.15 0.3 0.1 0.2\n8 0.25 0.3 0.1 0.2\n")
+
+    # Model predicts 30 teeth across the mouth (2 matching GT targets + 28 unannotated healthy teeth)
+    pred_boxes = [[100.0, 100.0, 200.0, 200.0], [200.0, 100.0, 300.0, 200.0]]  # Matches cls 0 and cls 8
+    pred_classes = [0, 8]
+    pred_confs = [0.95, 0.90]
+
+    for c in range(1, 8):
+        pred_boxes.append([100.0 + c * 20, 300.0, 150.0 + c * 20, 400.0])
+        pred_classes.append(c)
+        pred_confs.append(0.85)
+    for c in range(9, 30):
+        pred_boxes.append([100.0 + c * 20, 300.0, 150.0 + c * 20, 400.0])
+        pred_classes.append(c)
+        pred_confs.append(0.80)
+
+    mock_model = MagicMock()
+    mock_box = MagicMock()
+    mock_box.xyxy = MagicMock(cpu=MagicMock(return_value=MagicMock(numpy=MagicMock(return_value=np.array(pred_boxes)))))
+    mock_box.cls = MagicMock(cpu=MagicMock(return_value=MagicMock(numpy=MagicMock(return_value=np.array(pred_classes)))))
+    mock_box.conf = MagicMock(cpu=MagicMock(return_value=MagicMock(numpy=MagicMock(return_value=np.array(pred_confs)))))
+    mock_box.__len__ = MagicMock(return_value=len(pred_boxes))
+
+    mock_preds = MagicMock()
+    mock_preds.boxes = mock_box
+    mock_model.predict.return_value = [mock_preds]
+
+    res = evaluate_yolo_labels_target_grounding(mock_model, img_dir, lbl_dir, conf_thresh=0.001, nominal_conf_thresh=0.25)
+    assert res["total_targets"] == 2
+    assert res["recall_50"] == pytest.approx(1.0)
+    assert res["precision"] == pytest.approx(1.0)
+    assert res["mean_iou"] == pytest.approx(1.0)
+
+
+def test_ensure_folds_hydrated_local_disk_precedence(tmp_path):
+    """Test that _ensure_folds_hydrated finds local fold weights without downloading from HF Hub."""
+    from scripts.train_grounding_tool import _ensure_folds_hydrated
+    model_root = tmp_path / "models"
+    for fold in range(5):
+        w_dir = model_root / f"dentex_tufts_cv_fold_{fold}" / "weights"
+        w_dir.mkdir(parents=True)
+        (w_dir / "best.pt").write_text("fake weight")
+
+    with patch("huggingface_hub.snapshot_download") as mock_download:
+        found = _ensure_folds_hydrated(model_root, "dentex_tufts_", 5)
+        assert found == [0, 1, 2, 3, 4]
+        mock_download.assert_not_called()
+
 
 

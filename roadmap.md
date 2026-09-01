@@ -273,9 +273,10 @@ direction.
   prevent OOM during heavy multi-turn trajectory sampling.
 
 ### 7. YOLO Grounding Tool (`locate_tooth`)
-Trained on Multi-Dataset (DENTEX + Tufts Dental Database - 1,634 Images): `yolov8m.pt`, 5-fold cross-validation,
+Trained on Multi-Dataset (DENTEX + Tufts Dental Database - 2,339 Images, 46,808 Boxes): `yolov8m.pt`, 5-fold cross-validation,
 **validation mAP50 = 0.8695 ± 0.0298** (mAP50-95 = 0.5895 ± 0.0346, best fold 4 mAP50 = 0.9226),
-representing a **+28.75% absolute gain** over the baseline DENTEX-only model (`0.5820 ± 0.0076`).
+representing a **+28.75% absolute gain** in raw full-universe mAP over the baseline DENTEX-only model (`0.5820 ± 0.0076`).
+On the **Held-Out Target Grounding Benchmark** (`validation_triple.json` - 46 Images, 182 Targets), both models achieve **>93% Target mAP50** (DENTEX-Only: 0.9319 mAP50 / 93.97% Precision; DENTEX+Tufts: 0.9296 mAP50 / 96.47% Precision) via greedy 1-to-1 bipartite target matching.
 **Live in the agent loop**, loaded automatically from `data/models/dentex_tufts_grounding_tool_cv_best/weights/best.pt` (or `GROUNDING_MODEL_PATH`).
 It's a **32-class detector** — one class per FDI (quadrant, position) pair, `class_idx = (quadrant-1)*8 + (position-1)`
 in `convert_single_image` (`prepare_yolo_dataset.py`) — not a single-class "is this a tooth" detector. This specific design detail means any dataset feeding this tool's training data must carry a real per-tooth position/identity label, not just an anonymous "here's a tooth" box. Full cross-validation and benchmark details are documented in `docs/YOLO_CV_RESULTS.md` and `docs/TRACE_GEN_CONFIG.md`.
