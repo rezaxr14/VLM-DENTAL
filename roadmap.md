@@ -120,7 +120,7 @@ hand-rolled copy of the same logic.
 - **Bulletproof Parsing Engine** (`parsing.py`): Intelligently parses mixed
   XML/JSON outputs, repairs truncated API responses, and recovers from
   broken outputs without killing the trajectory loop.
-- **Self-Correcting Grounding**: We can't let traces succeed by blindly trusting `locate_tooth`. `locate_tooth` uses **Ground-Truth Grounding** during trace generation when ground truth exists for the requested tooth (guaranteeing it is found) — but what the model is actually *shown* is intentionally perturbed independently of this (45% clean, 25% small offset, 30% large offset). This forces the LLM to use `nudge_crop` based on genuine visual judgment rather than as a scripted step, preventing trace demonstrations from going stale as the grounding tool improves. Full numbers in `TRACE_GEN_CONFIG.md`; full reasoning in `_tool_node_factory`'s docstring (`langgraph_loop.py`).
+- **Self-Correcting Grounding**: We can't let traces succeed by blindly trusting `locate_tooth`. `locate_tooth` uses **Ground-Truth Grounding** during trace generation when ground truth exists for the requested tooth (guaranteeing it is found) — but what the model is actually *shown* is intentionally perturbed independently of this (45% clean, 25% small offset, 30% large offset). This forces the LLM to use `nudge_crop` based on genuine visual judgment rather than as a scripted step, preventing trace demonstrations from going stale as the grounding tool improves. Full numbers in `docs/TRACE_GEN_CONFIG.md`; full reasoning in `_tool_node_factory`'s docstring (`langgraph_loop.py`).
 - **Shared Tool Dispatch** (`dental_agent/agent/tool_dispatch.py`):
   Trace-gen's LangGraph loop and GRPO's rollout loop (`loop.py`) each used
   to carry their own copy of "which tools need the image, and which image"
@@ -273,15 +273,12 @@ direction.
   prevent OOM during heavy multi-turn trajectory sampling.
 
 ### 7. YOLO Grounding Tool (`locate_tooth`)
-Trained on DENTEX only so far: `yolov8m.pt`, 5-fold cross-validation,
-validation mAP50 ≈ 0.5901 (R ≈ 0.888, P ≈ 0.5457) — past the quality bar,
-**live in the agent loop**. It's a **32-class detector** — one class per
-FDI (quadrant, position) pair, `class_idx = (quadrant-1)*8 + (position-1)`
-in `convert_single_image` (`prepare_yolo_dataset.py`) — not a single-class
-"is this a tooth" detector. This specific design detail matters a lot for
-the Datasets section below: it means any dataset feeding this tool's
-training data must carry a real per-tooth position/identity label, not
-just an anonymous "here's a tooth" box.
+Trained on Multi-Dataset (DENTEX + Tufts Dental Database - 1,634 Images): `yolov8m.pt`, 5-fold cross-validation,
+**validation mAP50 = 0.8695 ± 0.0298** (mAP50-95 = 0.5895 ± 0.0346, best fold 4 mAP50 = 0.9226),
+representing a **+28.75% absolute gain** over the baseline DENTEX-only model (`0.5820 ± 0.0076`).
+**Live in the agent loop**, loaded automatically from `data/models/dentex_tufts_grounding_tool_cv_best/weights/best.pt` (or `GROUNDING_MODEL_PATH`).
+It's a **32-class detector** — one class per FDI (quadrant, position) pair, `class_idx = (quadrant-1)*8 + (position-1)`
+in `convert_single_image` (`prepare_yolo_dataset.py`) — not a single-class "is this a tooth" detector. This specific design detail means any dataset feeding this tool's training data must carry a real per-tooth position/identity label, not just an anonymous "here's a tooth" box. Full cross-validation and benchmark details are documented in `docs/YOLO_CV_RESULTS.md` and `docs/TRACE_GEN_CONFIG.md`.
 
 ### 8. `locate_abnormal_teeth` Removed Entirely
 This tool never actually ran in practice — it was a conditionally-registered
@@ -400,24 +397,12 @@ The only dataset with a fully working loader end-to-end, feeding both
 diagnosis trace-gen and `locate_tooth`'s current (DENTEX-only) training
 data. `dental_agent/data/dentex.py`.
 
-### Tufts Panoramic Dataset (blocked — registration + annotation format)
-`dental_agent/data/tufts.py`. Access-gated (request form at
-https://tdd.ece.tufts.edu/, no automatic fetch — there's no HF/Kaggle
-mirror wired in without first checking its redistribution terms actually
-allow that). **Image discovery is implemented; annotation construction is
-a deliberate, documented hard stop.** Two things are unverified and the
-module raises `NotImplementedError` rather than guess at either:
-1. How a segmentation mask instance's pixel value maps to a specific FDI
-   quadrant+position (`_infer_tooth_position`).
-2. How Tufts' abnormality masks/free-text map onto DENTEX's 4-class
-   diagnosis vocabulary (`_map_abnormality_to_dentex_category`).
-
-Guessing either for a medical training pipeline risks silently-wrong
-diagnostic labels no later step would catch — see `tufts.py`'s module
-docstring for the full reasoning, including a real discrepancy between two
-secondary sources describing this dataset's annotation format differently
-that neither resolves. **Lower priority than Tunisia** because of the
-access wait; revisit once real extracted files are in hand.
+### Tufts Panoramic Dataset (Integrated for Grounding)
+`dental_agent/data/tufts.py`. Full dataset integrated and live:
+- **1,000 Radiograph Images** and **25,184 tooth bounding box annotations** parsed via `load_tufts_tooth_boxes`.
+- All images, bounding boxes, annotations, and polygon segmentations (`Segmentation/teeth_polygon.json`, 271 MB) uploaded to Hugging Face Hub dataset repository `Reza-Nadimi/tufts-train-images`.
+- Active in `scripts/prepare_yolo_dataset.py` via `DATASET_LOADERS["tufts"]`.
+- Co-trained with DENTEX in Multi-Dataset YOLO 5-fold cross-validation, achieving **86.95% mAP50**.
 
 ### Tunisia — Panoramic Dental Xray Dataset (in progress — Phase 1 done)
 `dental_agent/data/tunisia_panoramic.py`. CC BY 4.0, **no registration

@@ -12,7 +12,7 @@ real. Separately, locate_tooth's OWN tool-call-time behavior does use ground
 truth internally when it exists for the requested tooth (guaranteeing the box
 is found), but what the model is actually *shown* is independently
 tier-perturbed rather than handed over exact -- see AGENT_HANDOVER.md's tool
-section and TRACE_GEN_CONFIG.md for that separate mechanism's full numbers.
+section and docs/TRACE_GEN_CONFIG.md for that separate mechanism's full numbers.
 
 This runs through a real LangGraph agent loop
 (dental_agent/agent/langgraph_loop.py) against a frontier LLM -- in practice
