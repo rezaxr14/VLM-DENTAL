@@ -497,7 +497,15 @@ def evaluate_target_grounding(
 
         # Run model inference on this test image at low confidence to capture full PR curve
         try:
-            preds = model.predict(source=str(local_path), conf=conf_thresh, imgsz=imgsz, device=device, verbose=False)[0]
+            from PIL import Image
+            img_input = str(local_path)
+            try:
+                with Image.open(str(local_path)) as im:
+                    img_input = im.convert("RGB")
+            except Exception:
+                img_input = str(local_path)
+
+            preds = model.predict(source=img_input, conf=conf_thresh, imgsz=imgsz, device=device, verbose=False)[0]
         except Exception as e:
             print(f"Inference notice on {local_path}: {e}")
             continue
@@ -640,6 +648,7 @@ def evaluate_yolo_labels_target_grounding(
         try:
             with Image.open(img_p) as im:
                 img_w, img_h = float(im.width), float(im.height)
+                img_rgb = im.convert("RGB")
         except Exception:
             continue
 
@@ -671,7 +680,7 @@ def evaluate_yolo_labels_target_grounding(
         total_targets += len(gt_targets)
 
         try:
-            preds = model.predict(source=str(img_p), conf=conf_thresh, imgsz=imgsz, device=device, verbose=False)[0]
+            preds = model.predict(source=img_rgb, conf=conf_thresh, imgsz=imgsz, device=device, verbose=False)[0]
         except Exception as e:
             continue
 
@@ -969,7 +978,7 @@ def evaluate_benchmark(args):
 
             model = YOLO(str(weight_path))
             res = evaluate_target_grounding(
-                model, val_images_df, val_annots_df, conf_thresh=0.25, imgsz=args.imgsz, device=device
+                model, val_images_df, val_annots_df, conf_thresh=0.001, nominal_conf_thresh=0.25, imgsz=args.imgsz, device=device
             )
             entry = {
                 "family": family_name,
