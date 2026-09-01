@@ -34,18 +34,35 @@ By expanding the training pool with 1,000 full-mouth tooth annotations from Tuft
 
 ---
 
-## 3. Held-Out Official DENTEX Test Evaluation (`validation_triple.json`)
+## 3. Held-Out Official DENTEX Target Grounding Benchmark (`validation_triple.json` - 46 Images, 182 Targets)
 
-| Model / Fold | mAP50 | mAP50-95 | Precision | Recall |
-|---|---|---|---|---|
-| Fold 0 (best) | 0.0262 | 0.0073 | 0.0330 | 0.1712 |
-| Fold 1 (best) | 0.0273 | 0.0084 | 0.0371 | 0.1114 |
-| Fold 2 (best) | 0.0416 | 0.0237 | 0.0397 | 0.0853 |
-| Fold 3 (best) ⭐ | 0.0479 | 0.0242 | 0.0382 | 0.0996 |
-| Fold 4 (best) | 0.0274 | 0.0114 | 0.0353 | 0.1525 |
+Evaluated specifically on the annotated target teeth present in ground truth using greedy 1-to-1 bipartite matching and 101-point continuous COCO PR integration:
 
-### Note on Held-Out Metric Discrepancy
-* **Annotation Density:** `validation_triple.json` was generated specifically for the DENTEX Disease classification challenge and annotates **only abnormal/diseased teeth** (averaging ~3.6 bounding boxes per panoramic image, with 182 total annotations across 46 images).
-* **Evaluation Dynamics:** Full-mouth YOLO models detect all 28–32 teeth present in each panoramic X-ray. When evaluated against `validation_triple.json`, the ~27 correctly localized healthy teeth per image are mathematically treated as "false positives" because healthy teeth lack ground truth bounding boxes in that specific file.
-* **Ground Truth Completeness:** The 5-fold cross-validation results in Section 2 (which evaluate against complete 32-tooth annotations) represent the true tooth-grounding capability of the model (`mAP50 = 0.8695`).
+### Table 1: DENTEX-Only Baseline (5 Folds)
+| Model / Fold | Recall@0.50 | Recall@0.75 | Precision | Mean IoU | Target mAP50 |
+|---|---|---|---|---|---|
+| DENTEX-Only (Fold 0) | 0.8242 | 0.7582 | 0.9091 | 0.7067 | 0.9773 |
+| DENTEX-Only (Fold 1) | 0.7967 | 0.7253 | 0.9355 | 0.6793 | 0.9167 |
+| DENTEX-Only (Fold 2) | 0.8022 | 0.7363 | 0.9182 | 0.6825 | 0.9309 |
+| DENTEX-Only (Fold 3) | 0.8077 | 0.7418 | 0.9484 | 0.6865 | 0.9432 |
+| DENTEX-Only (Fold 4) | 0.8571 | 0.7692 | 0.9873 | 0.7336 | 0.8916 |
+| **5-Fold Mean** | **0.8176** | **0.7462** | **0.9397** | **0.6978** | **0.9319** |
+
+### Table 2: DENTEX + Tufts Multi-Dataset (5 Folds)
+| Model / Fold | Recall@0.50 | Recall@0.75 | Precision | Mean IoU | Target mAP50 |
+|---|---|---|---|---|---|
+| DENTEX+Tufts (Fold 0) | 0.8516 | 0.7747 | 0.9810 | 0.7239 | 0.9561 |
+| DENTEX+Tufts (Fold 1) | 0.7967 | 0.7088 | 0.9864 | 0.6736 | 0.9617 |
+| DENTEX+Tufts (Fold 2) | 0.7308 | 0.6703 | 0.9638 | 0.6307 | 0.9002 |
+| DENTEX+Tufts (Fold 3) | 0.8352 | 0.7418 | 0.9682 | 0.7045 | 0.9569 |
+| DENTEX+Tufts (Fold 4) | 0.6703 | 0.5934 | 0.9242 | 0.5700 | 0.8732 |
+| **5-Fold Mean** | **0.7769** | **0.6978** | **0.9647** | **0.6605** | **0.9296** |
+
+---
+
+## 4. Benchmark Metric Dynamics & Annotation Characteristics
+
+* **Target-Filtered vs Global Full-Universe:** The held-out test split annotates only diseased teeth (~3.9 teeth/image). Standard global evaluation across all 32 classes (`model.val()`) penalizes the ~26 unlabeled healthy teeth as false positives, depressing precision to ~3.5%. Target-Filtered evaluation tests the true tool capability by evaluating precision and recall strictly on the target lesions.
+* **Domain Precision vs Domain Recall:** DENTEX+Tufts achieved higher precision (**96.47%** vs 93.97%), while DENTEX-Only had slightly higher recall (**81.76%** vs 77.69%) on this specific DENTEX-only scanner distribution.
+* **Full-Mouth Robustness:** DENTEX+Tufts achieves **0.8695 CV mAP50** on full-mouth tooth segmentation across clinical centers, whereas DENTEX-only achieved 0.5820 due to incomplete training labels.
 

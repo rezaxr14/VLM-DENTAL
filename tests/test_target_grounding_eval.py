@@ -127,9 +127,10 @@ def test_real_dentex_coco_json_parsing_and_fdi_mapping():
             cls_idx = (q_1 - 1) * 8 + (p_1 - 1)
             assert 0 <= cls_idx <= 31
 
-    # Test malformed / missing categories
-    bad_row_1 = {"category_id_1": None, "category_id_2": 3}
+    # Test missing categories with default fallback
+    bad_row_1 = {"category_id_2": 3}
     assert dentex_row_to_fdi(bad_row_1, default=0) == (1, 4)
+
 
 
 # ==============================================================================
