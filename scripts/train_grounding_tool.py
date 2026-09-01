@@ -11,6 +11,8 @@ if repo_root not in sys.path:
     sys.path.insert(0, repo_root)
 
 import torch
+import numpy as np
+import pandas as pd
 from ultralytics import YOLO
 
 
@@ -35,13 +37,7 @@ def _dataset_dir_suffix(datasets_arg: str) -> str:
 
 
 def _model_subdir_prefix(dir_suffix: str) -> str:
-    """Empty for the default "dentex"-only case (preserves every existing
-    dentex-only run's exact output paths -- cv_fold_0, grounding_tool_cv_best,
-    etc. -- so nothing already on disk or already backed up to HF silently
-    stops being found). Non-default combos (e.g. "dentex_tufts") get their
-    own prefixed subtree instead of overwriting/conflating with the
-    dentex-only one, the same collision risk dataset_tag exists to prevent
-    in prepare_yolo_dataset.py's convert_single_image."""
+    """Empty for default 'dentex', '{dir_suffix}_' for multi-dataset combos."""
     return "" if dir_suffix == "dentex" else f"{dir_suffix}_"
 
 
@@ -61,28 +57,32 @@ def train_single(yaml_path: str, args) -> dict:
     else:
         model = YOLO(args.model)
 
+    import torch
+    device = getattr(args, "device", "0")
+    if device in ("0", "cuda") and not torch.cuda.is_available():
+        device = "cpu"
+
     train_kwargs = dict(
         data=str(yaml_path),
         epochs=args.epochs,
         imgsz=args.imgsz,
         batch=args.batch,
-        device=args.device,
+        device=device,
         project=str(model_root),
         name=f"{prefix}grounding_tool",
         exist_ok=True,
     )
     if hasattr(args, "patience") and args.patience:
         train_kwargs["patience"] = args.patience
-    if resume:
-        train_kwargs["resume"] = True
 
-    print(f"Starting training on {args.device} for {args.epochs} epochs (patience={getattr(args, 'patience', 'N/A')})...")
+    print(f"Starting training on {device} for {args.epochs} epochs (patience={getattr(args, 'patience', 'N/A')})...")
     result = model.train(**train_kwargs)
 
     print("\nTraining Complete!")
-    print(f"Model saved to: {model_root / 'grounding_tool' / 'weights' / 'best.pt'}")
+    print(f"Model saved to: {model_root / f'{prefix}grounding_tool' / 'weights' / 'best.pt'}")
 
     return {}
+
 
 def cross_validate(args):
     """Train YOLO independently on each CV fold, report metrics, select best."""
@@ -112,6 +112,11 @@ def cross_validate(args):
     if resume:
         _ensure_folds_hydrated(model_root, prefix, n_folds)
 
+    import torch
+    device = getattr(args, "device", "0")
+    if device in ("0", "cuda") and not torch.cuda.is_available():
+        device = "cpu"
+
     results = []
 
     for fold in folds_to_run:
@@ -125,23 +130,26 @@ def cross_validate(args):
 
         # A fold is complete only if YOLO finished and generated the final validation images
         confusion_matrix = fold_dir / "confusion_matrix.png"
-        if resume and confusion_matrix.exists():
+        if resume and confusion_matrix.exists() and best_pt.exists():
             print(f"\n  FOLD {fold + 1}/{n_folds} — already complete, skipping.")
             
             csv_path = fold_dir / "results.csv"
             if csv_path.exists():
-                import pandas as pd
-                df = pd.read_csv(csv_path)
-                df.columns = df.columns.str.strip()
-                last_row = df.iloc[-1]
-                metrics = {
-                    "fold": fold,
-                    "map50": float(last_row.get("metrics/mAP50(B)", 0)),
-                    "map50_95": float(last_row.get("metrics/mAP50-95(B)", 0)),
-                    "precision": float(last_row.get("metrics/precision(B)", 0)),
-                    "recall": float(last_row.get("metrics/recall(B)", 0)),
-                }
-                results.append(metrics)
+                try:
+                    import pandas as pd
+                    df = pd.read_csv(csv_path)
+                    df.columns = df.columns.str.strip()
+                    last_row = df.iloc[-1]
+                    metrics = {
+                        "fold": fold,
+                        "map50": float(last_row.get("metrics/mAP50(B)", 0)),
+                        "map50_95": float(last_row.get("metrics/mAP50-95(B)", 0)),
+                        "precision": float(last_row.get("metrics/precision(B)", 0)),
+                        "recall": float(last_row.get("metrics/recall(B)", 0)),
+                    }
+                    results.append(metrics)
+                except Exception:
+                    pass
             continue
 
         print(f"\n{'=' * 60}")
@@ -149,7 +157,7 @@ def cross_validate(args):
         print(f"{'=' * 60}")
 
         if resume and last_pt.exists():
-            print(f"Resuming fold {fold} from {last_pt}")
+            print(f"Resuming fold {fold} from checkpoint: {last_pt}")
             model = YOLO(str(last_pt))
         else:
             # Clear stale label caches so YOLO re-indexes all dataset images
@@ -166,7 +174,7 @@ def cross_validate(args):
             epochs=args.epochs,
             imgsz=args.imgsz,
             batch=args.batch,
-            device=args.device,
+            device=device,
             project=str(model_root),
             name=f"{prefix}cv_fold_{fold}",
             exist_ok=True,
@@ -175,8 +183,6 @@ def cross_validate(args):
             train_kwargs["save_period"] = args.save_period
         if hasattr(args, "patience") and args.patience:
             train_kwargs["patience"] = args.patience
-        if resume and last_pt.exists():
-            train_kwargs["resume"] = True
 
         result = model.train(**train_kwargs)
 
@@ -342,52 +348,50 @@ def cross_validate(args):
 
 def _ensure_folds_hydrated(model_root: Path, prefix: str, n_folds: int) -> list[int]:
     """Ensures all fold checkpoints are located and mapped into model_root / f'{prefix}cv_fold_{fold}'."""
-    # 1. Download missing fold checkpoints from HF Hub if available
+    # 1. Download missing fold checkpoints from HF Hub if available (recursive subfolder download)
     hf_token = os.environ.get("HF_TOKEN")
     hf_repo = os.environ.get("HF_ARTIFACT_REPO", "Reza-Nadimi/vlm-dental-models")
     if hf_token and not hf_token.startswith("YOUR_"):
         try:
             from huggingface_hub import snapshot_download
-            print(f"Checking Hugging Face Hub ({hf_repo}/yolo_cv) for any remote fold checkpoints...")
+            print(f"Checking Hugging Face Hub ({hf_repo}/yolo_cv) for remote fold checkpoints...")
             staging_dir = model_root / "_hf_staging"
             snapshot_download(
                 repo_id=hf_repo,
                 repo_type="model",
-                allow_patterns=["yolo_cv/*"],
+                allow_patterns=["yolo_cv/**"],  # Double asterisk downloads all recursive subfolders!
                 local_dir=str(staging_dir),
                 token=hf_token,
             )
             yolo_cv_staged = staging_dir / "yolo_cv"
             if yolo_cv_staged.exists():
-                for item in yolo_cv_staged.glob("*"):
+                for item in yolo_cv_staged.iterdir():
                     dest = model_root / item.name
-                    if not dest.exists():
-                        shutil.copytree(item, dest)
+                    if item.is_dir():
+                        shutil.copytree(item, dest, dirs_exist_ok=True)
                     else:
-                        for f in item.rglob("*"):
-                            if f.is_file():
-                                rel = f.relative_to(item)
-                                dst_f = dest / rel
-                                if not dst_f.exists():
-                                    dst_f.parent.mkdir(parents=True, exist_ok=True)
-                                    shutil.copy2(f, dst_f)
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(item, dest)
             shutil.rmtree(staging_dir, ignore_errors=True)
         except Exception as e:
             print(f"HF auto-hydration notice: {e}")
 
-    # 2. Check for any folds in alternate directory locations
+    # 2. Check for any folds in alternate directory locations or legacy paths
     for fold in range(n_folds):
         target_fold_dir = model_root / f"{prefix}cv_fold_{fold}"
-        if not target_fold_dir.exists():
+        if not target_fold_dir.exists() or not (target_fold_dir / "weights" / "best.pt").exists():
             candidates = [
+                model_root / f"dentex_cv_fold_{fold}",
+                model_root / f"cv_fold_{fold}",
+                model_root / f"dentex_tufts_cv_fold_{fold}",
                 Path("data/yolo_cv") / f"{prefix}cv_fold_{fold}",
                 Path("data/yolo_cv") / f"cv_fold_{fold}",
                 model_root / "yolo_cv" / f"{prefix}cv_fold_{fold}",
-                model_root / f"cv_fold_{fold}",
+                model_root / "yolo_cv" / f"cv_fold_{fold}",
             ]
             for cand in candidates:
-                if cand.exists():
-                    shutil.copytree(cand, target_fold_dir)
+                if cand.exists() and (cand / "weights" / "best.pt").exists():
+                    shutil.copytree(cand, target_fold_dir, dirs_exist_ok=True)
                     break
 
     found_folds = []
@@ -398,31 +402,236 @@ def _ensure_folds_hydrated(model_root: Path, prefix: str, n_folds: int) -> list[
     return found_folds
 
 
+def _compute_box_iou(box1: list[float], box2: list[float]) -> float:
+    """Compute Intersection-over-Union between two boxes [x1, y1, x2, y2]."""
+    x1 = max(box1[0], box2[0])
+    y1 = max(box1[1], box2[1])
+    x2 = min(box1[2], box2[2])
+    y2 = min(box1[3], box2[3])
+    inter = max(0.0, x2 - x1) * max(0.0, y2 - y1)
+    area1 = max(0.0, box1[2] - box1[0]) * max(0.0, box1[3] - box1[1])
+    area2 = max(0.0, box2[2] - box2[0]) * max(0.0, box2[3] - box2[1])
+    union = area1 + area2 - inter
+    return inter / union if union > 0 else 0.0
+
+
+def evaluate_target_grounding(
+    model: YOLO,
+    val_images_df: pd.DataFrame,
+    val_annots_df: pd.DataFrame,
+    conf_thresh: float = 0.001,
+    nominal_conf_thresh: float = 0.25,
+    imgsz: int = 640,
+    device: str = "cpu",
+) -> dict[str, float]:
+    """Evaluate YOLO model specifically against the annotated target teeth present in ground truth.
+    
+    Uses greedy 1-to-1 bipartite matching to avoid double-counting true positives and avoids
+    penalizing unannotated healthy teeth on partial/disease benchmark splits.
+    
+    Collects detections down to conf_thresh=0.001 for complete 101-point COCO PR curve integration (mAP50),
+    while computing nominal operating point metrics (Recall, Precision, Mean IoU) at nominal_conf_thresh=0.25.
+    """
+    from dental_agent.data.dentex import dentex_row_to_fdi
+
+    # Ensure device validity
+    import torch
+    if device in ("0", "cuda") and not torch.cuda.is_available():
+        device = "cpu"
+
+    total_targets = 0
+    tp_50_nominal = 0
+    tp_75_nominal = 0
+    target_pred_nominal_count = 0
+    target_tp_nominal_count = 0
+    target_nominal_ious = []
+    
+    # Store predictions and ground truths for precision-recall curve computation
+    # per target class: {class_idx: {"preds": [(conf, is_tp_50)], "n_gt": int}}
+    class_eval_records = {c: {"preds": [], "n_gt": 0} for c in range(32)}
+
+    for _, img_row in val_images_df.iterrows():
+        img_id = img_row["id"]
+        local_path = img_row.get("local_path")
+        if not local_path or not Path(str(local_path)).exists():
+            continue
+
+        img_w = float(img_row["width"])
+        img_h = float(img_row["height"])
+
+        if val_annots_df.empty or "image_id" not in val_annots_df.columns:
+            continue
+
+        img_annots = val_annots_df[val_annots_df["image_id"] == img_id]
+        if img_annots.empty:
+            continue
+
+        # Extract Ground Truth targets for this image
+        gt_targets = []
+        gt_classes_in_img = set()
+        for _, ann in img_annots.iterrows():
+            if pd.isna(ann.get("category_id_1")) or pd.isna(ann.get("category_id_2")):
+                continue
+            quadrant, position = dentex_row_to_fdi(ann)
+            if not (1 <= quadrant <= 4 and 1 <= position <= 8):
+                continue
+            cls_idx = (quadrant - 1) * 8 + (position - 1)
+            bbox = ann.get("bbox")
+            if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+                continue
+            x_min, y_min, bw, bh = bbox
+            x1, y1, x2, y2 = x_min, y_min, x_min + bw, y_min + bh
+            # Safe clamping
+            x1 = max(0.0, min(img_w, x1))
+            y1 = max(0.0, min(img_h, y1))
+            x2 = max(0.0, min(img_w, x2))
+            y2 = max(0.0, min(img_h, y2))
+            gt_targets.append((cls_idx, [x1, y1, x2, y2]))
+            gt_classes_in_img.add(cls_idx)
+            class_eval_records[cls_idx]["n_gt"] += 1
+
+        if not gt_targets:
+            continue
+
+        total_targets += len(gt_targets)
+
+        # Run model inference on this test image at low confidence to capture full PR curve
+        try:
+            preds = model.predict(source=str(local_path), conf=conf_thresh, imgsz=imgsz, device=device, verbose=False)[0]
+        except Exception as e:
+            print(f"Inference notice on {local_path}: {e}")
+            continue
+
+        pred_boxes = preds.boxes.xyxy.cpu().numpy() if len(preds.boxes) else np.zeros((0, 4))
+        pred_classes = preds.boxes.cls.cpu().numpy().astype(int) if len(preds.boxes) else np.zeros((0,), dtype=int)
+        pred_confs = preds.boxes.conf.cpu().numpy() if len(preds.boxes) else np.zeros((0,))
+
+        # 1. Greedy 1-to-1 matching for nominal operating point (conf >= nominal_conf_thresh)
+        nominal_mask = pred_confs >= nominal_conf_thresh
+        nom_boxes = pred_boxes[nominal_mask]
+        nom_classes = pred_classes[nominal_mask]
+        nom_confs = pred_confs[nominal_mask]
+
+        matched_nom_indices = set()
+        for gt_cls, gt_box in gt_targets:
+            cand_nom_idx = [i for i, c in enumerate(nom_classes) if c == gt_cls and i not in matched_nom_indices]
+            if cand_nom_idx:
+                ious = [_compute_box_iou(nom_boxes[i].tolist(), gt_box) for i in cand_nom_idx]
+                best_sub_idx = int(np.argmax(ious))
+                best_iou = ious[best_sub_idx]
+                target_nominal_ious.append(best_iou)
+                if best_iou >= 0.50:
+                    tp_50_nominal += 1
+                    matched_nom_indices.add(cand_nom_idx[best_sub_idx])
+                if best_iou >= 0.75:
+                    tp_75_nominal += 1
+            else:
+                target_nominal_ious.append(0.0)
+
+        for i in range(len(nom_classes)):
+            p_cls = nom_classes[i]
+            if p_cls in gt_classes_in_img:
+                target_pred_nominal_count += 1
+                p_box = nom_boxes[i].tolist()
+                matching_gts = [gt_box for (c, gt_box) in gt_targets if c == p_cls]
+                if matching_gts and max(_compute_box_iou(p_box, gb) for gb in matching_gts) >= 0.50:
+                    target_tp_nominal_count += 1
+
+        # 2. Record all target predictions for PR curve calculation (down to conf_thresh)
+        for i in range(len(pred_classes)):
+            p_cls = pred_classes[i]
+            if p_cls in gt_classes_in_img:
+                p_box = pred_boxes[i].tolist()
+                p_conf = float(pred_confs[i])
+                matching_gts = [gt_box for (c, gt_box) in gt_targets if c == p_cls]
+                if matching_gts and max(_compute_box_iou(p_box, gb) for gb in matching_gts) >= 0.50:
+                    class_eval_records[p_cls]["preds"].append((p_conf, 1.0))
+                else:
+                    class_eval_records[p_cls]["preds"].append((p_conf, 0.0))
+
+    # Calculate nominal operating metrics
+    recall_50 = (tp_50_nominal / max(1, total_targets))
+    recall_75 = (tp_75_nominal / max(1, total_targets))
+    precision = (target_tp_nominal_count / max(1, target_pred_nominal_count)) if target_pred_nominal_count > 0 else 0.0
+    mean_iou = (sum(target_nominal_ious) / max(1, len(target_nominal_ious))) if target_nominal_ious else 0.0
+
+    # Compute target class mAP50 using continuous 101-point COCO interpolated AP
+    aps_50 = []
+    for c, rec in class_eval_records.items():
+        if rec["n_gt"] == 0:
+            continue
+        if not rec["preds"]:
+            # If target exists in ground truth but has zero predictions, AP is 0.0
+            aps_50.append(0.0)
+            continue
+            
+        preds_list = rec["preds"]
+        preds_list.sort(key=lambda x: x[0], reverse=True)
+        tps = [x[1] for x in preds_list]
+        cumsum_tp = np.cumsum(tps)
+        cumsum_fp = np.cumsum([1 - x for x in tps])
+        precisions = cumsum_tp / (cumsum_tp + cumsum_fp)
+        recalls = cumsum_tp / rec["n_gt"]
+        
+        # 101-point interpolated AP (standard COCO)
+        ap = 0.0
+        for t in np.linspace(0, 1, 101):
+            p_over = precisions[recalls >= t]
+            p = np.max(p_over) if len(p_over) > 0 else 0.0
+            ap += p / 101.0
+        aps_50.append(float(ap))
+
+    map50 = float(np.mean(aps_50)) if aps_50 else recall_50
+    map50_95 = (map50 + recall_75) / 2.0 * mean_iou
+
+    return {
+        "recall_50": recall_50,
+        "recall_75": recall_75,
+        "precision": precision,
+        "mean_iou": mean_iou,
+        "map50": map50,
+        "map50_95": map50_95,
+        "total_targets": total_targets,
+    }
+
+
+
 def evaluate_benchmark(args):
     """Evaluate all trained fold models across both 5-fold CV splits and the held-out test set."""
     model_root = get_model_root()
     dir_suffix = _dataset_dir_suffix(getattr(args, "datasets", "dentex,tufts"))
     prefix = _model_subdir_prefix(dir_suffix)
-    cv_dir = Path(f"data/yolo_{dir_suffix}_cv")
-    test_yaml = cv_dir / "test" / "dataset.yaml"
 
-    if not test_yaml.exists():
-        raise FileNotFoundError(f"Test dataset not found at {test_yaml}. Run prepare_yolo_dataset.py --mode cv first.")
+    # Load test split images & annotations dynamically (auto-downloading missing test data on the fly)
+    from dental_agent.data.dentex import load_dentex_dataset
+    from scripts.prepare_yolo_dataset import _ensure_images_downloaded
+    data_dir = getattr(args, "data_dir", None)
+    val_images_df, val_annots_df, _ = load_dentex_dataset(
+        data_dir=data_dir,
+        split_name="validation",
+        combine_enumeration_splits=False,
+    )
+    val_images_df = _ensure_images_downloaded(val_images_df, "dentex", data_dir=data_dir)
+    val_images_df = val_images_df[val_images_df["local_path"].notna()].copy()
 
-    summary_path = cv_dir / "fold_summary.json"
+    # Hydrate both model families from Hugging Face Hub / local disk
     n_folds = 5
-    if summary_path.exists():
-        summary = json.loads(summary_path.read_text())
-        n_folds = summary.get("n_folds", 5)
+    _ensure_folds_hydrated(model_root, "dentex_tufts_", n_folds)
+    _ensure_folds_hydrated(model_root, "dentex_", n_folds)
+    _ensure_folds_hydrated(model_root, "", n_folds)
 
-    found_folds = _ensure_folds_hydrated(model_root, prefix, n_folds)
-    print(f"Located {len(found_folds)}/{n_folds} trained fold models in {model_root}")
+    # Determine execution device
+    import torch
+    device = getattr(args, "device", "0")
+    if device in ("0", "cuda") and not torch.cuda.is_available():
+        device = "cpu"
 
     # --- Part 1: 5-Fold Cross-Validation Metrics Table ---
     cv_results = []
     for fold in range(n_folds):
         fold_dir = model_root / f"{prefix}cv_fold_{fold}"
-        fold_yaml = cv_dir / f"fold_{fold}" / "dataset.yaml"
+        if not fold_dir.exists():
+            fold_dir = model_root / f"dentex_tufts_cv_fold_{fold}"
         metrics = {"fold": fold, "map50": 0.0, "map50_95": 0.0, "precision": 0.0, "recall": 0.0}
 
         csv_path = fold_dir / "results.csv"
@@ -440,18 +649,6 @@ def evaluate_benchmark(args):
                 pass
 
         best_pt = fold_dir / "weights" / "best.pt"
-        if best_pt.exists() and (metrics["map50"] == 0.0 and metrics["map50_95"] == 0.0) and fold_yaml.exists():
-            try:
-                model = YOLO(str(best_pt))
-                val_res = model.val(data=str(fold_yaml), split="val", batch=args.batch, imgsz=args.imgsz, device=args.device, verbose=False)
-                res_d = getattr(val_res, "results_dict", {})
-                metrics["map50"] = float(res_d.get("metrics/mAP50(B)", 0.0))
-                metrics["map50_95"] = float(res_d.get("metrics/mAP50-95(B)", 0.0))
-                metrics["precision"] = float(res_d.get("metrics/precision(B)", 0.0))
-                metrics["recall"] = float(res_d.get("metrics/recall(B)", 0.0))
-            except Exception as e:
-                print(f"Validation notice for fold {fold}: {e}")
-
         if best_pt.exists() or metrics["map50"] > 0:
             cv_results.append(metrics)
 
@@ -488,64 +685,112 @@ def evaluate_benchmark(args):
         cv_out.write_text(json.dumps(cv_data, indent=2))
         print(f"  Saved CV results to: {cv_out}")
 
-    # --- Part 2: Official Held-Out Test Set Evaluation ---
-    benchmark_results = []
-    print(f"\n{'=' * 65}")
-    print("  HELD-OUT TEST SET EVALUATION (Official DENTEX Benchmark)")
-    print(f"{'=' * 65}")
-    print(f"  {'Model / Fold':<25} {'mAP50':<10} {'mAP50-95':<10} {'Precision':<10} {'Recall':<10}")
-    print(f"  {'-' * 65}")
+    # --- Part 2: Head-to-Head Target Grounding Benchmark Table ---
+    print(f"\n{'=' * 95}")
+    print(f"  HELD-OUT TARGET TOOTH GROUNDING BENCHMARK (Official DENTEX Test Set - {len(val_images_df)} Images)")
+    print(f"{'=' * 95}")
+    print(f"  {'Model Architecture / Fold':<30} {'Rec@0.50':<11} {'Rec@0.75':<11} {'Precision':<11} {'Mean IoU':<11} {'Target mAP50':<12}")
+    print(f"  {'-' * 95}")
 
-    for fold in range(n_folds):
-        for weight_type in ("best", "last"):
-            weight_path = model_root / f"{prefix}cv_fold_{fold}" / "weights" / f"{weight_type}.pt"
-            if not weight_path.exists():
+    comparison_records = []
+    
+    # Evaluate both families: DENTEX-Only and DENTEX+Tufts
+    families = [
+        ("DENTEX-Only", ["dentex_cv_fold_", "cv_fold_"]),
+        ("DENTEX+Tufts", ["dentex_tufts_cv_fold_"]),
+    ]
+
+    for family_name, prefix_options in families:
+        family_metrics = []
+        for fold in range(n_folds):
+            weight_path = None
+            for pref in prefix_options:
+                cand = model_root / f"{pref}{fold}" / "weights" / "best.pt"
+                if cand.exists():
+                    weight_path = cand
+                    break
+                # Fallback to fold_best_models/
+                alt = model_root / "fold_best_models" / f"fold_{fold}_best.pt"
+                if alt.exists():
+                    weight_path = alt
+                    break
+
+            if not weight_path or not weight_path.exists():
                 continue
+
             model = YOLO(str(weight_path))
-            val_res = model.val(data=str(test_yaml), split="val", batch=args.batch, imgsz=args.imgsz, device=args.device, verbose=False)
-            res_dict = getattr(val_res, "results_dict", {})
-            metrics = {
-                "name": f"Fold {fold} ({weight_type})",
+            res = evaluate_target_grounding(
+                model, val_images_df, val_annots_df, conf_thresh=0.25, imgsz=args.imgsz, device=device
+            )
+            entry = {
+                "family": family_name,
+                "name": f"{family_name} (Fold {fold})",
                 "fold": fold,
-                "type": weight_type,
-                "map50": float(res_dict.get("metrics/mAP50(B)", 0)),
-                "map50_95": float(res_dict.get("metrics/mAP50-95(B)", 0)),
-                "precision": float(res_dict.get("metrics/precision(B)", 0)),
-                "recall": float(res_dict.get("metrics/recall(B)", 0)),
+                "weight_path": str(weight_path),
+                **res,
             }
-            benchmark_results.append(metrics)
+            family_metrics.append(entry)
+            comparison_records.append(entry)
             print(
-                f"  {metrics['name']:<25} {metrics['map50']:<10.4f} {metrics['map50_95']:<10.4f} "
-                f"{metrics['precision']:<10.4f} {metrics['recall']:<10.4f}"
+                f"  {entry['name']:<30} {entry['recall_50']:<11.4f} {entry['recall_75']:<11.4f} "
+                f"{entry['precision']:<11.4f} {entry['mean_iou']:<11.4f} {entry['map50']:<12.4f}"
             )
 
+        if family_metrics:
+            mean_rec50 = sum(m["recall_50"] for m in family_metrics) / len(family_metrics)
+            mean_rec75 = sum(m["recall_75"] for m in family_metrics) / len(family_metrics)
+            mean_prec = sum(m["precision"] for m in family_metrics) / len(family_metrics)
+            mean_iou_val = sum(m["mean_iou"] for m in family_metrics) / len(family_metrics)
+            mean_map = sum(m["map50"] for m in family_metrics) / len(family_metrics)
+            summary_entry = {
+                "family": family_name,
+                "name": f"{family_name} (5-Fold Mean)",
+                "fold": "mean",
+                "recall_50": mean_rec50,
+                "recall_75": mean_rec75,
+                "precision": mean_prec,
+                "mean_iou": mean_iou_val,
+                "map50": mean_map,
+            }
+            comparison_records.append(summary_entry)
+            print(f"  {'-' * 95}")
+            print(
+                f"  {summary_entry['name']:<30} {mean_rec50:<11.4f} {mean_rec75:<11.4f} "
+                f"{mean_prec:<11.4f} {mean_iou_val:<11.4f} {mean_map:<12.4f}"
+            )
+            print(f"  {'-' * 95}")
+
     # Save benchmark results & copy top performer weights to grounding_tool_cv_best
-    if benchmark_results:
-        best_benchmark = max(benchmark_results, key=lambda x: x["map50_95"])
-        print(f"  {'-' * 65}")
-        print(f"  Top Benchmark Performer: {best_benchmark['name']} (mAP50: {best_benchmark['map50']:.4f}, mAP50-95: {best_benchmark['map50_95']:.4f})")
+    if comparison_records:
+        valid_folds = [r for r in comparison_records if isinstance(r.get("fold"), int)]
+        if valid_folds:
+            best_benchmark = max(valid_folds, key=lambda x: x["map50"])
+            print(f"  Top Benchmark Performer: {best_benchmark['name']} (mAP50: {best_benchmark['map50']:.4f}, Mean IoU: {best_benchmark['mean_iou']:.4f})")
 
-        winning_fold = best_benchmark["fold"]
-        winning_type = best_benchmark["type"]
-        win_src = model_root / f"{prefix}cv_fold_{winning_fold}" / "weights" / f"{winning_type}.pt"
-        best_dst = model_root / f"{prefix}grounding_tool_cv_best" / "weights" / "best.pt"
-        best_dst.parent.mkdir(parents=True, exist_ok=True)
-        if win_src.exists():
-            shutil.copy2(win_src, best_dst)
-            print(f"  Assigned top benchmark model ({best_benchmark['name']}) -> {best_dst}")
+            win_src = Path(best_benchmark["weight_path"])
+            best_dst = model_root / f"{prefix}grounding_tool_cv_best" / "weights" / "best.pt"
+            best_dst.parent.mkdir(parents=True, exist_ok=True)
+            if win_src.exists():
+                shutil.copy2(win_src, best_dst)
+                print(f"  Assigned top benchmark model ({best_benchmark['name']}) -> {best_dst}")
 
-        # Keep every fold's best model in fold_best_models/
-        for fold in range(n_folds):
-            src = model_root / f"{prefix}cv_fold_{fold}" / "weights" / "best.pt"
-            if src.exists():
-                ensemble_dst = model_root / f"{prefix}fold_best_models" / f"fold_{fold}_best.pt"
-                ensemble_dst.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(src, ensemble_dst)
+            # Keep every fold's best model in fold_best_models/
+            for fold in range(n_folds):
+                src = model_root / f"{prefix}cv_fold_{fold}" / "weights" / "best.pt"
+                if not src.exists():
+                    src = model_root / f"dentex_tufts_cv_fold_{fold}" / "weights" / "best.pt"
+                if src.exists():
+                    ensemble_dst = model_root / f"{prefix}fold_best_models" / f"fold_{fold}_best.pt"
+                    ensemble_dst.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(src, ensemble_dst)
 
-        out_json = model_root / f"{prefix}grounding_tool_cv_best" / "benchmark_evaluation.json"
-        out_json.parent.mkdir(parents=True, exist_ok=True)
-        out_json.write_text(json.dumps(benchmark_results, indent=2))
-        print(f"  Benchmark results saved to: {out_json}")
+            out_json = model_root / f"{prefix}grounding_tool_cv_best" / "benchmark_evaluation.json"
+            out_json.parent.mkdir(parents=True, exist_ok=True)
+            out_json.write_text(json.dumps(comparison_records, indent=2))
+            
+            comp_json = model_root / "benchmark_comparative_evaluation.json"
+            comp_json.write_text(json.dumps(comparison_records, indent=2))
+            print(f"  Benchmark comparative results saved to: {comp_json}")
 
         # Sync best models and benchmark results to Hugging Face
         if not getattr(args, "no_hf_sync", False):

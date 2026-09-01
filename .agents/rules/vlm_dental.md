@@ -34,3 +34,8 @@ All agents must adhere to the modular rules in `.agents/rules/`:
    - Zero unauthorized/automatic git commits.
    - Single-commit squashing when commits are explicitly requested.
    - Zero `git push` by agents.
+
+6. **[Local Command & Bandwidth Discipline](local_command_and_bandwidth_discipline.md)**:
+   - Zero unprompted local command execution; mandatory consultation before launching commands.
+   - Cloud-first delegation: heavy training, cross-validation, and evaluations belong in Google Colab.
+   - Zero bandwidth waste: no downloading multi-gigabyte models or datasets to the local development machine.

@@ -9,11 +9,15 @@ and adjust, rather than re-deriving the reasoning from scratch.
 
 ## Grounding tool (locate_tooth / YOLOv8m)
 
-- 5-fold cross-validation, mean mAP50 = 0.5820 ± 0.0076, mean mAP50-95 = 0.3379 ± 0.0067
-- Best fold (fold 1): mAP50 = 0.5901, mAP50-95 = 0.3464, Precision = 0.5457, Recall = 0.8880
-- This is the fold currently pointed to by GROUNDING_MODEL_PATH.
-- (Superseded number, do not use: mAP50 ≈ 0.647 from an earlier training run — still
-  incorrectly referenced in figures/visualization_prompts.md as of this file's writing.)
+- **Multi-Dataset Co-Training (DENTEX + Tufts Dental Database - 1,634 Images)**:
+  - 5-fold cross-validation: **mean mAP50 = 0.8695 ± 0.0298**, **mean mAP50-95 = 0.5895 ± 0.0346**
+  - Best fold (fold 4): **mAP50 = 0.9226**, **mAP50-95 = 0.6540**, **Precision = 0.8780**, **Recall = 0.8190**
+  - Checkpoint location: `data/models/dentex_tufts_grounding_tool_cv_best/weights/best.pt` (and synced to Hugging Face Hub `Reza-Nadimi/vlm-dental-models/yolo_cv`).
+- **Historical DENTEX-Only Baseline (634 Images)**:
+  - 5-fold cross-validation: mean mAP50 = 0.5820 ± 0.0076, mean mAP50-95 = 0.3379 ± 0.0067
+  - Best fold (fold 1): mAP50 = 0.5901, mAP50-95 = 0.3464, Precision = 0.5457, Recall = 0.8880
+- **Held-Out Note**:
+  - DENTEX `validation_triple.json` annotates only diseased teeth (~3.6 teeth/image). Full-mouth YOLO detects all ~30 teeth in the mouth, so unannotated healthy teeth are counted as false positives on that specific sparse file. The true full-mouth tooth localization performance is measured by the 5-fold cross-validation on complete tooth annotations (`mAP50 = 0.8695`).
 
 ## Trace-gen Ground-Truth Grounding
 
