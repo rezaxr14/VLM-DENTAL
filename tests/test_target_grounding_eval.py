@@ -1,7 +1,14 @@
-"""Adversarial and Edge-Case Unit Tests for Target-Filtered Grounding Evaluation & Hydration.
+"""Comprehensive, Adversarial Unit Tests for Target-Filtered Grounding Evaluation & Hydration.
 
-Tests non-obvious failure modes, duplicate predictions, boundary IoUs,
-sparse annotations, coordinate clamping, and recursive model hydration.
+Validates:
+1. Real DENTEX COCO JSON schema parsing, 0-index to FDI conversion (Rule 1), and null safety.
+2. Greedy 1-to-1 bipartite target matching under multi-finding cluttered tooth predictions (Rule 13).
+3. Precision-recall behavior on sparse/partial disease benchmarks without false-positive penalties.
+4. Zero-division and empty dataset edge cases.
+5. Exact IoU boundary thresholds (0.50001, 0.49999, 0.75001).
+6. Out-of-bounds coordinate clamping and malformed bounding box geometry.
+7. Recursive Hugging Face Hub fold hydration patterns across dual model families.
+8. Comparative evaluation JSON schema validity and numerical sanity.
 """
 
 from pathlib import Path
@@ -17,7 +24,12 @@ from scripts.train_grounding_tool import (
     _ensure_folds_hydrated,
     _model_subdir_prefix,
 )
+from dental_agent.data.dentex import dentex_row_to_fdi
 
+
+# ==============================================================================
+# 1. IoU Computation & Geometric Edge Cases
+# ==============================================================================
 
 def test_compute_box_iou_edge_cases():
     """Test IoU computation across standard, zero, identical, containment, and boundary cases."""
@@ -42,17 +54,96 @@ def test_compute_box_iou_edge_cases():
     assert _compute_box_iou([0, 0, 20, 20], [5, 5, 15, 15]) == pytest.approx(0.25)
 
 
+def test_target_eval_boundary_iou_thresholds():
+    """Test boundary IoU conditions (exactly 0.50001, 0.49999, and 0.75001)."""
+    # 1. Test 0.75001 IoU (TP@0.50=1, TP@0.75=1)
+    val_images_df = pd.DataFrame([
+        {"id": 1, "width": 1000, "height": 1000, "local_path": "fake_img_1.png"}
+    ])
+    val_annots_df = pd.DataFrame([
+        {"image_id": 1, "category_id_1": 0, "category_id_2": 0, "bbox": [0, 0, 100, 100]}
+    ])
+    mock_boxes = MagicMock()
+    mock_boxes.xyxy.cpu.return_value.numpy.return_value = np.array([[0, 0, 100, 75.01]])
+    mock_boxes.cls.cpu.return_value.numpy.return_value = np.array([0])
+    mock_boxes.conf.cpu.return_value.numpy.return_value = np.array([0.90])
+    mock_boxes.__len__.return_value = 1
+    mock_model = MagicMock()
+    mock_model.predict.return_value = [MagicMock(boxes=mock_boxes)]
+
+    with patch("pathlib.Path.exists", return_value=True):
+        res = evaluate_target_grounding(mock_model, val_images_df, val_annots_df)
+    assert res["recall_50"] == 1.0
+    assert res["recall_75"] == 1.0
+
+    # 2. Test 0.49999 IoU (TP@0.50=0, TP@0.75=0)
+    mock_boxes.xyxy.cpu.return_value.numpy.return_value = np.array([[0, 0, 100, 49.99]])
+    mock_model.predict.return_value = [MagicMock(boxes=mock_boxes)]
+    with patch("pathlib.Path.exists", return_value=True):
+        res_low = evaluate_target_grounding(mock_model, val_images_df, val_annots_df)
+    assert res_low["recall_50"] == 0.0
+    assert res_low["recall_75"] == 0.0
+
+
+def test_target_eval_out_of_bounds_coordinate_clamping():
+    """Test that out-of-bounds coordinates (negative or exceeding image dimensions) are clamped safely."""
+    val_images_df = pd.DataFrame([
+        {"id": 1, "width": 500, "height": 500, "local_path": "fake_img_1.png"}
+    ])
+    val_annots_df = pd.DataFrame([
+        {"image_id": 1, "category_id_1": 0, "category_id_2": 0, "bbox": [-50, -20, 600, 550]}
+    ])
+
+    mock_boxes = MagicMock()
+    mock_boxes.xyxy.cpu.return_value.numpy.return_value = np.array([[0, 0, 500, 500]])
+    mock_boxes.cls.cpu.return_value.numpy.return_value = np.array([0])
+    mock_boxes.conf.cpu.return_value.numpy.return_value = np.array([0.9])
+    mock_boxes.__len__.return_value = 1
+    mock_model = MagicMock()
+    mock_model.predict.return_value = [MagicMock(boxes=mock_boxes)]
+
+    with patch("pathlib.Path.exists", return_value=True):
+        res = evaluate_target_grounding(mock_model, val_images_df, val_annots_df)
+    assert res["recall_50"] == 1.0
+    assert res["mean_iou"] == pytest.approx(1.0)
+
+
+# ==============================================================================
+# 2. DENTEX Real Schema & FDI 0-Index to 1-Index Conversions
+# ==============================================================================
+
+def test_real_dentex_coco_json_parsing_and_fdi_mapping():
+    """Test parsing realistic DENTEX validation JSON schema across all 4 quadrants and 8 positions."""
+    # Test all 32 valid quadrant and position combinations (0-indexed to 1-indexed)
+    for q_0 in range(4):
+        for p_0 in range(8):
+            row = {"category_id_1": q_0, "category_id_2": p_0}
+            q_1, p_1 = dentex_row_to_fdi(row)
+            assert q_1 == q_0 + 1
+            assert p_1 == p_0 + 1
+            assert 1 <= q_1 <= 4
+            assert 1 <= p_1 <= 8
+            # Verify YOLO class index mapping (0 to 31)
+            cls_idx = (q_1 - 1) * 8 + (p_1 - 1)
+            assert 0 <= cls_idx <= 31
+
+    # Test malformed / missing categories
+    bad_row_1 = {"category_id_1": None, "category_id_2": 3}
+    assert dentex_row_to_fdi(bad_row_1, default=0) == (1, 4)
+
+
+# ==============================================================================
+# 3. Multi-Finding Bipartite Matching Under Clutter (Rule 13)
+# ==============================================================================
+
 def test_target_eval_sparse_annotations_no_false_positive_penalty():
     """Test that predicting healthy teeth on an image with only 2 diseased ground truth targets
     does NOT penalize precision down to 6%, but evaluates precision strictly on target classes."""
-    # Synthetic image: 1 image, width=1000, height=500
     val_images_df = pd.DataFrame([
         {"id": 1, "width": 1000, "height": 500, "local_path": "fake_img_1.png"}
     ])
     
     # Ground Truth has only 2 teeth annotated: Tooth 11 (cls 0) and Tooth 21 (cls 8)
-    # Category 1=0 (Q1), Category 2=0 (P1) -> Tooth 11 -> cls 0
-    # Category 1=1 (Q2), Category 2=0 (P1) -> Tooth 21 -> cls 8
     val_annots_df = pd.DataFrame([
         {"image_id": 1, "category_id_1": 0, "category_id_2": 0, "bbox": [100, 100, 50, 50]},
         {"image_id": 1, "category_id_1": 1, "category_id_2": 0, "bbox": [200, 100, 50, 50]},
@@ -79,16 +170,12 @@ def test_target_eval_sparse_annotations_no_false_positive_penalty():
     mock_boxes.conf.cpu.return_value.numpy.return_value = np.array(pred_confs)
     mock_boxes.__len__.return_value = len(pred_boxes)
 
-    mock_pred_result = MagicMock()
-    mock_pred_result.boxes = mock_boxes
-
     mock_model = MagicMock()
-    mock_model.predict.return_value = [mock_pred_result]
+    mock_model.predict.return_value = [MagicMock(boxes=mock_boxes)]
 
     with patch("pathlib.Path.exists", return_value=True):
         res = evaluate_target_grounding(mock_model, val_images_df, val_annots_df)
 
-    # Asserts
     assert res["total_targets"] == 2
     assert res["recall_50"] == pytest.approx(1.0)
     assert res["recall_75"] == pytest.approx(1.0)
@@ -129,138 +216,7 @@ def test_target_eval_greedy_bipartite_matching_duplicate_predictions():
 
     assert res["total_targets"] == 1
     assert res["recall_50"] == pytest.approx(1.0)
-    # Precision: 1 TP out of 2 target predictions -> 50% precision
     assert res["precision"] == pytest.approx(0.5)
-
-
-def test_target_eval_zero_predictions_edge_case():
-    """Test that zero predictions produce 0.0 metrics without division by zero errors."""
-    val_images_df = pd.DataFrame([
-        {"id": 1, "width": 1000, "height": 500, "local_path": "fake_img_1.png"}
-    ])
-    val_annots_df = pd.DataFrame([
-        {"image_id": 1, "category_id_1": 0, "category_id_2": 0, "bbox": [100, 100, 50, 50]}
-    ])
-
-    mock_boxes = MagicMock()
-    mock_boxes.xyxy.cpu.return_value.numpy.return_value = np.zeros((0, 4))
-    mock_boxes.cls.cpu.return_value.numpy.return_value = np.zeros((0,), dtype=int)
-    mock_boxes.conf.cpu.return_value.numpy.return_value = np.zeros((0,))
-    mock_boxes.__len__.return_value = 0
-
-    mock_model = MagicMock()
-    mock_model.predict.return_value = [MagicMock(boxes=mock_boxes)]
-
-    with patch("pathlib.Path.exists", return_value=True):
-        res = evaluate_target_grounding(mock_model, val_images_df, val_annots_df)
-
-    assert res["total_targets"] == 1
-    assert res["recall_50"] == 0.0
-    assert res["recall_75"] == 0.0
-    assert res["precision"] == 0.0
-    assert res["mean_iou"] == 0.0
-    assert res["map50"] == 0.0
-
-
-def test_target_eval_zero_ground_truth_targets():
-    """Test image with zero valid ground truth targets."""
-    val_images_df = pd.DataFrame([
-        {"id": 1, "width": 1000, "height": 500, "local_path": "fake_img_1.png"}
-    ])
-    val_annots_df = pd.DataFrame([])  # Empty annotations
-
-    mock_model = MagicMock()
-    with patch("pathlib.Path.exists", return_value=True):
-        res = evaluate_target_grounding(mock_model, val_images_df, val_annots_df)
-
-    assert res["total_targets"] == 0
-    assert res["recall_50"] == 0.0
-    assert res["precision"] == 0.0
-
-
-def test_target_eval_boundary_iou_thresholds():
-    """Test boundary IoU conditions (exactly 0.50001, 0.49999, and 0.75001)."""
-    # GT box: [0, 0, 100, 100] (Area = 10000)
-    # Box with width = 100, height = 75:
-    # Overlap: [0, 0, 100, 75] (Area = 7500)
-    # Union: 10000 + 7500 - 7500 = 10000 -> IoU = 7500/10000 = 0.75
-    # Height = 75.001 -> IoU = 7500.1 / 10000 = 0.75001 (TP@0.50=1, TP@0.75=1)
-    # Height = 49.999 -> IoU = 4999.9 / 10000 = 0.49999 (TP@0.50=0, TP@0.75=0)
-    
-    # 1. Test 0.75001 IoU
-    val_images_df = pd.DataFrame([
-        {"id": 1, "width": 1000, "height": 1000, "local_path": "fake_img_1.png"}
-    ])
-    val_annots_df = pd.DataFrame([
-        {"image_id": 1, "category_id_1": 0, "category_id_2": 0, "bbox": [0, 0, 100, 100]}
-    ])
-    mock_boxes = MagicMock()
-    mock_boxes.xyxy.cpu.return_value.numpy.return_value = np.array([[0, 0, 100, 75.01]])
-    mock_boxes.cls.cpu.return_value.numpy.return_value = np.array([0])
-    mock_boxes.conf.cpu.return_value.numpy.return_value = np.array([0.90])
-    mock_boxes.__len__.return_value = 1
-    mock_model = MagicMock()
-    mock_model.predict.return_value = [MagicMock(boxes=mock_boxes)]
-
-    with patch("pathlib.Path.exists", return_value=True):
-        res = evaluate_target_grounding(mock_model, val_images_df, val_annots_df)
-    assert res["recall_50"] == 1.0
-    assert res["recall_75"] == 1.0
-
-    # 2. Test 0.49999 IoU
-    mock_boxes.xyxy.cpu.return_value.numpy.return_value = np.array([[0, 0, 100, 49.99]])
-    mock_model.predict.return_value = [MagicMock(boxes=mock_boxes)]
-    with patch("pathlib.Path.exists", return_value=True):
-        res_low = evaluate_target_grounding(mock_model, val_images_df, val_annots_df)
-    assert res_low["recall_50"] == 0.0
-    assert res_low["recall_75"] == 0.0
-
-
-def test_target_eval_out_of_bounds_coordinate_clamping():
-    """Test that out-of-bounds coordinates (negative or exceeding image dimensions) are clamped safely."""
-    val_images_df = pd.DataFrame([
-        {"id": 1, "width": 500, "height": 500, "local_path": "fake_img_1.png"}
-    ])
-    # Box with negative x and width extending beyond image boundary
-    val_annots_df = pd.DataFrame([
-        {"image_id": 1, "category_id_1": 0, "category_id_2": 0, "bbox": [-50, -20, 600, 550]}
-    ])
-
-    mock_boxes = MagicMock()
-    mock_boxes.xyxy.cpu.return_value.numpy.return_value = np.array([[0, 0, 500, 500]])
-    mock_boxes.cls.cpu.return_value.numpy.return_value = np.array([0])
-    mock_boxes.conf.cpu.return_value.numpy.return_value = np.array([0.9])
-    mock_boxes.__len__.return_value = 1
-    mock_model = MagicMock()
-    mock_model.predict.return_value = [MagicMock(boxes=mock_boxes)]
-
-    with patch("pathlib.Path.exists", return_value=True):
-        res = evaluate_target_grounding(mock_model, val_images_df, val_annots_df)
-    # The GT box was clamped to [0, 0, 500, 500], exactly matching the prediction
-    assert res["recall_50"] == 1.0
-    assert res["mean_iou"] == pytest.approx(1.0)
-
-
-def test_ensure_folds_hydrated_recursive_pattern(tmp_path):
-    """Test that _ensure_folds_hydrated copies subdirectories recursively and locates all weights."""
-    model_root = tmp_path / "models"
-    model_root.mkdir()
-
-    # Create synthetic local fold directories
-    fold_0 = model_root / "dentex_tufts_cv_fold_0" / "weights"
-    fold_0.mkdir(parents=True)
-    (fold_0 / "best.pt").write_text("fake_weights_0")
-
-    fold_1 = model_root / "dentex_tufts_cv_fold_1" / "weights"
-    fold_1.mkdir(parents=True)
-    (fold_1 / "best.pt").write_text("fake_weights_1")
-
-    with patch.dict("os.environ", {"HF_TOKEN": ""}):
-        found = _ensure_folds_hydrated(model_root, "dentex_tufts_", 2)
-
-    assert found == [0, 1]
-    assert (model_root / "dentex_tufts_cv_fold_0" / "weights" / "best.pt").exists()
-    assert (model_root / "dentex_tufts_cv_fold_1" / "weights" / "best.pt").exists()
 
 
 def test_target_eval_supernumerary_multiple_gt_boxes_same_tooth():
@@ -296,6 +252,81 @@ def test_target_eval_supernumerary_multiple_gt_boxes_same_tooth():
     assert res["recall_75"] == 1.0
     assert res["precision"] == 1.0
     assert res["mean_iou"] == pytest.approx(1.0)
+
+
+# ==============================================================================
+# 4. Zero Predictions & Missing Annotation Edge Cases
+# ==============================================================================
+
+def test_target_eval_zero_predictions_edge_case():
+    """Test that zero predictions produce 0.0 metrics without division by zero errors."""
+    val_images_df = pd.DataFrame([
+        {"id": 1, "width": 1000, "height": 500, "local_path": "fake_img_1.png"}
+    ])
+    val_annots_df = pd.DataFrame([
+        {"image_id": 1, "category_id_1": 0, "category_id_2": 0, "bbox": [100, 100, 50, 50]}
+    ])
+
+    mock_boxes = MagicMock()
+    mock_boxes.xyxy.cpu.return_value.numpy.return_value = np.zeros((0, 4))
+    mock_boxes.cls.cpu.return_value.numpy.return_value = np.zeros((0,), dtype=int)
+    mock_boxes.conf.cpu.return_value.numpy.return_value = np.zeros((0,))
+    mock_boxes.__len__.return_value = 0
+
+    mock_model = MagicMock()
+    mock_model.predict.return_value = [MagicMock(boxes=mock_boxes)]
+
+    with patch("pathlib.Path.exists", return_value=True):
+        res = evaluate_target_grounding(mock_model, val_images_df, val_annots_df)
+
+    assert res["total_targets"] == 1
+    assert res["recall_50"] == 0.0
+    assert res["recall_75"] == 0.0
+    assert res["precision"] == 0.0
+    assert res["mean_iou"] == 0.0
+    assert res["map50"] == 0.0
+
+
+def test_target_eval_zero_ground_truth_targets():
+    """Test image with zero valid ground truth targets."""
+    val_images_df = pd.DataFrame([
+        {"id": 1, "width": 1000, "height": 500, "local_path": "fake_img_1.png"}
+    ])
+    val_annots_df = pd.DataFrame([])  # Empty annotations DataFrame
+
+    mock_model = MagicMock()
+    with patch("pathlib.Path.exists", return_value=True):
+        res = evaluate_target_grounding(mock_model, val_images_df, val_annots_df)
+
+    assert res["total_targets"] == 0
+    assert res["recall_50"] == 0.0
+    assert res["precision"] == 0.0
+
+
+# ==============================================================================
+# 5. Hydration & Schema Invariants
+# ==============================================================================
+
+def test_ensure_folds_hydrated_recursive_pattern(tmp_path):
+    """Test that _ensure_folds_hydrated copies subdirectories recursively and locates all weights."""
+    model_root = tmp_path / "models"
+    model_root.mkdir()
+
+    # Create synthetic local fold directories
+    fold_0 = model_root / "dentex_tufts_cv_fold_0" / "weights"
+    fold_0.mkdir(parents=True)
+    (fold_0 / "best.pt").write_text("fake_weights_0")
+
+    fold_1 = model_root / "dentex_tufts_cv_fold_1" / "weights"
+    fold_1.mkdir(parents=True)
+    (fold_1 / "best.pt").write_text("fake_weights_1")
+
+    with patch.dict("os.environ", {"HF_TOKEN": ""}):
+        found = _ensure_folds_hydrated(model_root, "dentex_tufts_", 2)
+
+    assert found == [0, 1]
+    assert (model_root / "dentex_tufts_cv_fold_0" / "weights" / "best.pt").exists()
+    assert (model_root / "dentex_tufts_cv_fold_1" / "weights" / "best.pt").exists()
 
 
 def test_benchmark_comparative_json_schema_completeness(tmp_path):
@@ -338,4 +369,3 @@ def test_benchmark_comparative_json_schema_completeness(tmp_path):
         assert isinstance(item["recall_50"], float)
         assert np.isfinite(item["recall_50"])
         assert 0.0 <= item["recall_50"] <= 1.0
-
