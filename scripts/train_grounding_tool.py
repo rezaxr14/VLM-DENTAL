@@ -348,18 +348,52 @@ def cross_validate(args):
 
 def _ensure_folds_hydrated(model_root: Path, prefix: str, n_folds: int) -> list[int]:
     """Ensures all fold checkpoints are located and mapped into model_root / f'{prefix}cv_fold_{fold}'."""
-    # 1. Download missing fold checkpoints from HF Hub if available (recursive subfolder download)
+    # 1. Check if all required fold checkpoints already exist locally on disk across common candidate directories
+    missing = []
+    for fold in range(n_folds):
+        target = model_root / f"{prefix}cv_fold_{fold}" / "weights" / "best.pt"
+        if not target.exists():
+            candidates = [
+                model_root / f"dentex_cv_fold_{fold}" / "weights" / "best.pt",
+                model_root / f"cv_fold_{fold}" / "weights" / "best.pt",
+                model_root / f"dentex_tufts_cv_fold_{fold}" / "weights" / "best.pt",
+                model_root / "fold_best_models" / f"fold_{fold}_best.pt",
+                model_root / "dentex_tufts_fold_best_models" / f"fold_{fold}_best.pt",
+                model_root / "dentex_fold_best_models" / f"fold_{fold}_best.pt",
+                Path("data/yolo_cv") / f"{prefix}cv_fold_{fold}" / "weights" / "best.pt",
+                Path("data/yolo_cv") / f"cv_fold_{fold}" / "weights" / "best.pt",
+                model_root / "yolo_cv" / f"{prefix}cv_fold_{fold}" / "weights" / "best.pt",
+                model_root / "yolo_cv" / f"dentex_cv_fold_{fold}" / "weights" / "best.pt",
+                model_root / "yolo_cv" / f"dentex_tufts_cv_fold_{fold}" / "weights" / "best.pt",
+            ]
+            for cand in candidates:
+                if cand.exists():
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(cand, target)
+                    break
+        if not target.exists():
+            missing.append(fold)
+
+    if not missing:
+        found_folds = []
+        for fold in range(n_folds):
+            weight_path = model_root / f"{prefix}cv_fold_{fold}" / "weights" / "best.pt"
+            if weight_path.exists():
+                found_folds.append(fold)
+        return found_folds
+
+    # 2. Download missing fold checkpoints from HF Hub only if files are genuinely missing
     hf_token = os.environ.get("HF_TOKEN")
     hf_repo = os.environ.get("HF_ARTIFACT_REPO", "Reza-Nadimi/vlm-dental-models")
     if hf_token and not hf_token.startswith("YOUR_"):
         try:
             from huggingface_hub import snapshot_download
-            print(f"Checking Hugging Face Hub ({hf_repo}/yolo_cv) for remote fold checkpoints...")
+            print(f"Checking Hugging Face Hub ({hf_repo}/yolo_cv) for {len(missing)} missing fold checkpoints...")
             staging_dir = model_root / "_hf_staging"
             snapshot_download(
                 repo_id=hf_repo,
                 repo_type="model",
-                allow_patterns=["yolo_cv/**"],  # Double asterisk downloads all recursive subfolders!
+                allow_patterns=["yolo_cv/**"],
                 local_dir=str(staging_dir),
                 token=hf_token,
             )
@@ -375,24 +409,6 @@ def _ensure_folds_hydrated(model_root: Path, prefix: str, n_folds: int) -> list[
             shutil.rmtree(staging_dir, ignore_errors=True)
         except Exception as e:
             print(f"HF auto-hydration notice: {e}")
-
-    # 2. Check for any folds in alternate directory locations or legacy paths
-    for fold in range(n_folds):
-        target_fold_dir = model_root / f"{prefix}cv_fold_{fold}"
-        if not target_fold_dir.exists() or not (target_fold_dir / "weights" / "best.pt").exists():
-            candidates = [
-                model_root / f"dentex_cv_fold_{fold}",
-                model_root / f"cv_fold_{fold}",
-                model_root / f"dentex_tufts_cv_fold_{fold}",
-                Path("data/yolo_cv") / f"{prefix}cv_fold_{fold}",
-                Path("data/yolo_cv") / f"cv_fold_{fold}",
-                model_root / "yolo_cv" / f"{prefix}cv_fold_{fold}",
-                model_root / "yolo_cv" / f"cv_fold_{fold}",
-            ]
-            for cand in candidates:
-                if cand.exists() and (cand / "weights" / "best.pt").exists():
-                    shutil.copytree(cand, target_fold_dir, dirs_exist_ok=True)
-                    break
 
     found_folds = []
     for fold in range(n_folds):
@@ -520,9 +536,9 @@ def evaluate_target_grounding(
         nom_classes = pred_classes[nominal_mask]
         nom_confs = pred_confs[nominal_mask]
 
-        matched_nom_indices = set()
+        matched_nom_gt_indices = set()
         for gt_cls, gt_box in gt_targets:
-            cand_nom_idx = [i for i, c in enumerate(nom_classes) if c == gt_cls and i not in matched_nom_indices]
+            cand_nom_idx = [i for i, c in enumerate(nom_classes) if c == gt_cls]
             if cand_nom_idx:
                 ious = [_compute_box_iou(nom_boxes[i].tolist(), gt_box) for i in cand_nom_idx]
                 best_sub_idx = int(np.argmax(ious))
@@ -530,32 +546,41 @@ def evaluate_target_grounding(
                 target_nominal_ious.append(best_iou)
                 if best_iou >= 0.50:
                     tp_50_nominal += 1
-                    matched_nom_indices.add(cand_nom_idx[best_sub_idx])
                 if best_iou >= 0.75:
                     tp_75_nominal += 1
             else:
                 target_nominal_ious.append(0.0)
 
-        for i in range(len(nom_classes)):
-            p_cls = nom_classes[i]
+        # Precision at nominal threshold: match proposals strictly against target GT boxes
+        nom_order = np.argsort(-nom_confs) if len(nom_confs) else []
+        for idx in nom_order:
+            p_cls = nom_classes[idx]
             if p_cls in gt_classes_in_img:
                 target_pred_nominal_count += 1
-                p_box = nom_boxes[i].tolist()
-                matching_gts = [gt_box for (c, gt_box) in gt_targets if c == p_cls]
-                if matching_gts and max(_compute_box_iou(p_box, gb) for gb in matching_gts) >= 0.50:
-                    target_tp_nominal_count += 1
+                p_box = nom_boxes[idx].tolist()
+                matching_gts = [(g_i, gb) for g_i, (c, gb) in enumerate(gt_targets) if c == p_cls and g_i not in matched_nom_gt_indices]
+                if matching_gts:
+                    best_g_i, best_gb = max(matching_gts, key=lambda item: _compute_box_iou(p_box, item[1]))
+                    if _compute_box_iou(p_box, best_gb) >= 0.50:
+                        target_tp_nominal_count += 1
+                        matched_nom_gt_indices.add(best_g_i)
 
-        # 2. Record all target predictions for PR curve calculation (down to conf_thresh)
-        for i in range(len(pred_classes)):
-            p_cls = pred_classes[i]
+        # 2. Record all target predictions for continuous PR curve calculation (down to conf_thresh)
+        pred_order = np.argsort(-pred_confs) if len(pred_confs) else []
+        matched_pr_gt_indices = set()
+        for idx in pred_order:
+            p_cls = pred_classes[idx]
             if p_cls in gt_classes_in_img:
-                p_box = pred_boxes[i].tolist()
-                p_conf = float(pred_confs[i])
-                matching_gts = [gt_box for (c, gt_box) in gt_targets if c == p_cls]
-                if matching_gts and max(_compute_box_iou(p_box, gb) for gb in matching_gts) >= 0.50:
-                    class_eval_records[p_cls]["preds"].append((p_conf, 1.0))
-                else:
-                    class_eval_records[p_cls]["preds"].append((p_conf, 0.0))
+                p_box = pred_boxes[idx].tolist()
+                p_conf = float(pred_confs[idx])
+                matching_gts = [(g_i, gb) for g_i, (c, gb) in enumerate(gt_targets) if c == p_cls and g_i not in matched_pr_gt_indices]
+                is_tp = 0.0
+                if matching_gts:
+                    best_g_i, best_gb = max(matching_gts, key=lambda item: _compute_box_iou(p_box, item[1]))
+                    if _compute_box_iou(p_box, best_gb) >= 0.50:
+                        is_tp = 1.0
+                        matched_pr_gt_indices.add(best_g_i)
+                class_eval_records[p_cls]["preds"].append((p_conf, is_tp))
 
     # Calculate nominal operating metrics
     recall_50 = (tp_50_nominal / max(1, total_targets))
@@ -688,13 +713,15 @@ def evaluate_yolo_labels_target_grounding(
         pred_classes = preds.boxes.cls.cpu().numpy().astype(int) if len(preds.boxes) else np.zeros((0,), dtype=int)
         pred_confs = preds.boxes.conf.cpu().numpy() if len(preds.boxes) else np.zeros((0,))
 
+        # 1. Greedy 1-to-1 matching for nominal operating point (conf >= nominal_conf_thresh)
         nominal_mask = pred_confs >= nominal_conf_thresh
         nom_boxes = pred_boxes[nominal_mask]
         nom_classes = pred_classes[nominal_mask]
+        nom_confs = pred_confs[nominal_mask]
 
-        matched_nom_indices = set()
+        matched_nom_gt_indices = set()
         for gt_cls, gt_box in gt_targets:
-            cand_nom_idx = [i for i, c in enumerate(nom_classes) if c == gt_cls and i not in matched_nom_indices]
+            cand_nom_idx = [i for i, c in enumerate(nom_classes) if c == gt_cls]
             if cand_nom_idx:
                 ious = [_compute_box_iou(nom_boxes[i].tolist(), gt_box) for i in cand_nom_idx]
                 best_sub_idx = int(np.argmax(ious))
@@ -702,31 +729,41 @@ def evaluate_yolo_labels_target_grounding(
                 target_nominal_ious.append(best_iou)
                 if best_iou >= 0.50:
                     tp_50_nominal += 1
-                    matched_nom_indices.add(cand_nom_idx[best_sub_idx])
                 if best_iou >= 0.75:
                     tp_75_nominal += 1
             else:
                 target_nominal_ious.append(0.0)
 
-        for i in range(len(nom_classes)):
-            p_cls = nom_classes[i]
+        # Precision at nominal threshold: match proposals strictly against target GT boxes
+        nom_order = np.argsort(-nom_confs) if len(nom_confs) else []
+        for idx in nom_order:
+            p_cls = nom_classes[idx]
             if p_cls in gt_classes_in_img:
                 target_pred_nominal_count += 1
-                p_box = nom_boxes[i].tolist()
-                matching_gts = [gt_box for (c, gt_box) in gt_targets if c == p_cls]
-                if matching_gts and max(_compute_box_iou(p_box, gb) for gb in matching_gts) >= 0.50:
-                    target_tp_nominal_count += 1
+                p_box = nom_boxes[idx].tolist()
+                matching_gts = [(g_i, gb) for g_i, (c, gb) in enumerate(gt_targets) if c == p_cls and g_i not in matched_nom_gt_indices]
+                if matching_gts:
+                    best_g_i, best_gb = max(matching_gts, key=lambda item: _compute_box_iou(p_box, item[1]))
+                    if _compute_box_iou(p_box, best_gb) >= 0.50:
+                        target_tp_nominal_count += 1
+                        matched_nom_gt_indices.add(best_g_i)
 
-        for i in range(len(pred_classes)):
-            p_cls = pred_classes[i]
+        # 2. Record all target predictions for continuous PR curve calculation (down to conf_thresh)
+        pred_order = np.argsort(-pred_confs) if len(pred_confs) else []
+        matched_pr_gt_indices = set()
+        for idx in pred_order:
+            p_cls = pred_classes[idx]
             if p_cls in gt_classes_in_img:
-                p_box = pred_boxes[i].tolist()
-                p_conf = float(pred_confs[i])
-                matching_gts = [gt_box for (c, gt_box) in gt_targets if c == p_cls]
-                if matching_gts and max(_compute_box_iou(p_box, gb) for gb in matching_gts) >= 0.50:
-                    class_eval_records[p_cls]["preds"].append((p_conf, 1.0))
-                else:
-                    class_eval_records[p_cls]["preds"].append((p_conf, 0.0))
+                p_box = pred_boxes[idx].tolist()
+                p_conf = float(pred_confs[idx])
+                matching_gts = [(g_i, gb) for g_i, (c, gb) in enumerate(gt_targets) if c == p_cls and g_i not in matched_pr_gt_indices]
+                is_tp = 0.0
+                if matching_gts:
+                    best_g_i, best_gb = max(matching_gts, key=lambda item: _compute_box_iou(p_box, item[1]))
+                    if _compute_box_iou(p_box, best_gb) >= 0.50:
+                        is_tp = 1.0
+                        matched_pr_gt_indices.add(best_g_i)
+                class_eval_records[p_cls]["preds"].append((p_conf, is_tp))
 
     recall_50 = (tp_50_nominal / max(1, total_targets))
     recall_75 = (tp_75_nominal / max(1, total_targets))
@@ -768,31 +805,50 @@ def evaluate_yolo_labels_target_grounding(
     }
 
 
-
-
 def evaluate_benchmark(args):
     """Evaluate all trained fold models across both 5-fold CV splits and the held-out test set."""
     model_root = get_model_root()
     dir_suffix = _dataset_dir_suffix(getattr(args, "datasets", "dentex,tufts"))
     prefix = _model_subdir_prefix(dir_suffix)
 
-    # Load test split images & annotations dynamically (auto-downloading missing test data on the fly)
-    from dental_agent.data.dentex import load_dentex_dataset
-    from scripts.prepare_yolo_dataset import _ensure_images_downloaded
-    data_dir = getattr(args, "data_dir", None)
-    val_images_df, val_annots_df, _ = load_dentex_dataset(
-        data_dir=data_dir,
-        split_name="validation",
-        combine_enumeration_splits=False,
-    )
-    val_images_df = _ensure_images_downloaded(val_images_df, "dentex", data_dir=data_dir)
-    val_images_df = val_images_df[val_images_df["local_path"].notna()].copy()
+    # Look for local test set images & labels on disk first (zero remote downloads)
+    test_img_dir = None
+    test_lbl_dir = None
+    for cand_root in [
+        Path("data/yolo_dentex_tufts_cv"),
+        Path("data/yolo_dentex_cv"),
+        Path("data/yolo_dentex"),
+        Path("data/yolo_cv"),
+    ]:
+        for img_sub, lbl_sub in [
+            (cand_root / "test" / "images", cand_root / "test" / "labels"),
+            (cand_root / "images" / "test", cand_root / "labels" / "test"),
+        ]:
+            if img_sub.exists() and lbl_sub.exists() and any(img_sub.iterdir()) and any(lbl_sub.iterdir()):
+                test_img_dir = img_sub
+                test_lbl_dir = lbl_sub
+                break
+        if test_img_dir and test_lbl_dir:
+            break
 
-    # Hydrate both model families from Hugging Face Hub / local disk
+    val_images_df = None
+    val_annots_df = None
+    if test_img_dir is None or test_lbl_dir is None:
+        from dental_agent.data.dentex import load_dentex_dataset
+        from scripts.prepare_yolo_dataset import _ensure_images_downloaded
+        data_dir = getattr(args, "data_dir", None)
+        val_images_df, val_annots_df, _ = load_dentex_dataset(
+            data_dir=data_dir,
+            split_name="validation",
+            combine_enumeration_splits=False,
+        )
+        val_images_df = _ensure_images_downloaded(val_images_df, "dentex", data_dir=data_dir)
+        val_images_df = val_images_df[val_images_df["local_path"].notna()].copy()
+
+    # Hydrate both model families from local disk or Hugging Face Hub (checks disk first!)
     n_folds = 5
     _ensure_folds_hydrated(model_root, "dentex_tufts_", n_folds)
     _ensure_folds_hydrated(model_root, "dentex_", n_folds)
-    _ensure_folds_hydrated(model_root, "", n_folds)
 
     # Determine execution device
     import torch
@@ -800,73 +856,94 @@ def evaluate_benchmark(args):
     if device in ("0", "cuda") and not torch.cuda.is_available():
         device = "cpu"
 
-    # --- Part 1: 5-Fold Cross-Validation Metrics Table ---
-    cv_results = []
-    for fold in range(n_folds):
-        fold_dir = model_root / f"{prefix}cv_fold_{fold}"
-        if not fold_dir.exists():
-            fold_dir = model_root / f"dentex_tufts_cv_fold_{fold}"
-        metrics = {"fold": fold, "map50": 0.0, "map50_95": 0.0, "precision": 0.0, "recall": 0.0}
+    # --- Part 1: 5-Fold Cross-Validation Metrics Table (Both Families) ---
+    families = [
+        ("DENTEX-Only", ["dentex_cv_fold_", "cv_fold_"]),
+        ("DENTEX+Tufts", ["dentex_tufts_cv_fold_"]),
+    ]
 
-        csv_path = fold_dir / "results.csv"
-        if csv_path.exists():
-            try:
-                import pandas as pd
-                df = pd.read_csv(csv_path)
-                df.columns = df.columns.str.strip()
-                last_row = df.iloc[-1]
-                metrics["map50"] = float(last_row.get("metrics/mAP50(B)", 0.0))
-                metrics["map50_95"] = float(last_row.get("metrics/mAP50-95(B)", 0.0))
-                metrics["precision"] = float(last_row.get("metrics/precision(B)", 0.0))
-                metrics["recall"] = float(last_row.get("metrics/recall(B)", 0.0))
-            except Exception:
-                pass
+    all_cv_results = {}
+    for family_name, prefix_options in families:
+        cv_results = []
+        for fold in range(n_folds):
+            fold_dir = None
+            for pref in prefix_options:
+                cand = model_root / f"{pref}{fold}"
+                if cand.exists():
+                    fold_dir = cand
+                    break
+            if not fold_dir:
+                continue
 
-        best_pt = fold_dir / "weights" / "best.pt"
-        if best_pt.exists() or metrics["map50"] > 0:
-            cv_results.append(metrics)
+            metrics = {"fold": fold, "map50": 0.0, "map50_95": 0.0, "precision": 0.0, "recall": 0.0}
+            csv_path = fold_dir / "results.csv"
+            if csv_path.exists():
+                try:
+                    import pandas as pd
+                    df = pd.read_csv(csv_path)
+                    df.columns = df.columns.str.strip()
+                    last_row = df.iloc[-1]
+                    metrics["map50"] = float(last_row.get("metrics/mAP50(B)", 0.0))
+                    metrics["map50_95"] = float(last_row.get("metrics/mAP50-95(B)", 0.0))
+                    metrics["precision"] = float(last_row.get("metrics/precision(B)", 0.0))
+                    metrics["recall"] = float(last_row.get("metrics/recall(B)", 0.0))
+                except Exception:
+                    pass
 
-    if cv_results:
-        print(f"\n{'=' * 60}")
-        print(f"  {len(cv_results)}-FOLD CROSS-VALIDATION RESULTS (Internal Validation)")
-        print(f"{'=' * 60}")
-        print(f"  {'Fold':<6} {'mAP50':<10} {'mAP50-95':<10} {'Precision':<10} {'Recall':<10}")
-        print(f"  {'-' * 46}")
-        for r in cv_results:
-            print(
-                f"  {r['fold']:<6} {r['map50']:<10.4f} {r['map50_95']:<10.4f} "
-                f"{r['precision']:<10.4f} {r['recall']:<10.4f}"
-            )
-        print(f"  {'-' * 46}")
-        mean_map50 = sum(r["map50"] for r in cv_results) / len(cv_results)
-        std_map50 = (sum((r["map50"] - mean_map50) ** 2 for r in cv_results) / len(cv_results)) ** 0.5
-        mean_map50_95 = sum(r["map50_95"] for r in cv_results) / len(cv_results)
-        std_map50_95 = (sum((r["map50_95"] - mean_map50_95) ** 2 for r in cv_results) / len(cv_results)) ** 0.5
-        print(f"  Mean mAP50:      {mean_map50:.4f} +/- {std_map50:.4f}")
-        print(f"  Mean mAP50-95:   {mean_map50_95:.4f} +/- {std_map50_95:.4f}")
+            best_pt = fold_dir / "weights" / "best.pt"
+            if best_pt.exists() or metrics["map50"] > 0:
+                cv_results.append(metrics)
 
-        cv_best = max(cv_results, key=lambda x: x["map50_95"])
-        cv_data = {
-            "folds": cv_results,
-            "best_fold": cv_best["fold"],
-            "mean_map50": mean_map50,
-            "std_map50": std_map50,
-            "mean_map50_95": mean_map50_95,
-            "std_map50_95": std_map50_95,
-        }
-        cv_out = model_root / f"{prefix}grounding_tool_cv_best" / "cv_results.json"
-        cv_out.parent.mkdir(parents=True, exist_ok=True)
-        cv_out.write_text(json.dumps(cv_data, indent=2))
-        print(f"  Saved CV results to: {cv_out}")
+        if cv_results:
+            all_cv_results[family_name] = cv_results
+            print(f"\n{'=' * 65}")
+            print(f"  5-FOLD CV RESULTS (Internal Validation) — {family_name}")
+            print(f"{'=' * 65}")
+            print(f"  {'Fold':<6} {'mAP50':<12} {'mAP50-95':<12} {'Precision':<12} {'Recall':<12}")
+            print(f"  {'-' * 54}")
+            for r in cv_results:
+                print(
+                    f"  {r['fold']:<6} {r['map50']:<12.4f} {r['map50_95']:<12.4f} "
+                    f"{r['precision']:<12.4f} {r['recall']:<12.4f}"
+                )
+            print(f"  {'-' * 54}")
+            mean_map50 = sum(r["map50"] for r in cv_results) / len(cv_results)
+            std_map50 = (sum((r["map50"] - mean_map50) ** 2 for r in cv_results) / len(cv_results)) ** 0.5
+            mean_map50_95 = sum(r["map50_95"] for r in cv_results) / len(cv_results)
+            std_map50_95 = (sum((r["map50_95"] - mean_map50_95) ** 2 for r in cv_results) / len(cv_results)) ** 0.5
+            mean_prec = sum(r["precision"] for r in cv_results) / len(cv_results)
+            mean_rec = sum(r["recall"] for r in cv_results) / len(cv_results)
+            print(f"  Mean mAP50:      {mean_map50:.4f} +/- {std_map50:.4f}")
+            print(f"  Mean mAP50-95:   {mean_map50_95:.4f} +/- {std_map50_95:.4f}")
+            print(f"  Mean Precision:  {mean_prec:.4f}")
+            print(f"  Mean Recall:     {mean_rec:.4f}")
+
+            cv_best = max(cv_results, key=lambda x: x["map50_95"])
+            cv_data = {
+                "family": family_name,
+                "folds": cv_results,
+                "best_fold": cv_best["fold"],
+                "mean_map50": mean_map50,
+                "std_map50": std_map50,
+                "mean_map50_95": mean_map50_95,
+                "std_map50_95": std_map50_95,
+                "mean_precision": mean_prec,
+                "mean_recall": mean_rec,
+            }
+            pref = "dentex_tufts_" if family_name == "DENTEX+Tufts" else ("dentex_" if family_name == "DENTEX-Only" else "")
+            cv_out = model_root / f"{pref}grounding_tool_cv_best" / "cv_results.json"
+            cv_out.parent.mkdir(parents=True, exist_ok=True)
+            cv_out.write_text(json.dumps(cv_data, indent=2))
+            print(f"  Saved CV results to: {cv_out}")
 
     # --- Part 2: In-Fold Cross-Validation Target Grounding Evaluation ---
     cv_val_records = []
     cv_dirs = [
-        ("DENTEX-Only", Path("data/yolo_dentex_cv"), ["dentex_cv_fold_", "cv_fold_"]),
-        ("DENTEX+Tufts", Path("data/yolo_dentex_tufts_cv"), ["dentex_tufts_cv_fold_"]),
+        ("DENTEX-Only", [Path("data/yolo_dentex_cv"), Path("data/yolo_dentex"), Path("data/yolo_cv"), Path("data/yolo_dentex_tufts_cv")], ["dentex_cv_fold_", "cv_fold_"]),
+        ("DENTEX+Tufts", [Path("data/yolo_dentex_tufts_cv")], ["dentex_tufts_cv_fold_"]),
     ]
 
-    has_cv_val_dirs = any(p[1].exists() for p in cv_dirs)
+    has_cv_val_dirs = any(any(cand.exists() for cand in p[1]) for p in cv_dirs)
     if has_cv_val_dirs:
         print(f"\n{'=' * 95}")
         print(f"  IN-FOLD TARGET TOOTH GROUNDING BENCHMARK (CV Validation Splits - Target-Filtered)")
@@ -874,7 +951,7 @@ def evaluate_benchmark(args):
         print(f"  {'Model Architecture / Fold':<30} {'Rec@0.50':<11} {'Rec@0.75':<11} {'Precision':<11} {'Mean IoU':<11} {'Target mAP50':<12}")
         print(f"  {'-' * 95}")
 
-        for family_name, cv_data_root, prefix_options in cv_dirs:
+        for family_name, cv_data_roots, prefix_options in cv_dirs:
             family_cv_metrics = []
             for fold in range(n_folds):
                 weight_path = None
@@ -888,10 +965,17 @@ def evaluate_benchmark(args):
                         weight_path = alt
                         break
 
-                fold_img_dir = cv_data_root / f"fold_{fold}" / "images" / "val"
-                fold_lbl_dir = cv_data_root / f"fold_{fold}" / "labels" / "val"
+                fold_img_dir = None
+                fold_lbl_dir = None
+                for cv_data_root in cv_data_roots:
+                    cand_img = cv_data_root / f"fold_{fold}" / "images" / "val"
+                    cand_lbl = cv_data_root / f"fold_{fold}" / "labels" / "val"
+                    if cand_img.exists() and cand_lbl.exists():
+                        fold_img_dir = cand_img
+                        fold_lbl_dir = cand_lbl
+                        break
 
-                if not weight_path or not weight_path.exists() or not fold_img_dir.exists() or not fold_lbl_dir.exists():
+                if not weight_path or not weight_path.exists() or not fold_img_dir or not fold_lbl_dir:
                     continue
 
                 model = YOLO(str(weight_path))
@@ -943,9 +1027,9 @@ def evaluate_benchmark(args):
             cv_val_json.write_text(json.dumps(cv_val_records, indent=2))
 
     # --- Part 3: Head-to-Head Target Grounding Benchmark Table ---
+    n_test_imgs = len(list(test_img_dir.iterdir())) if test_img_dir else (len(val_images_df) if val_images_df is not None else 0)
     print(f"\n{'=' * 95}")
-    print(f"  HELD-OUT TARGET TOOTH GROUNDING BENCHMARK (Official DENTEX Test Set - {len(val_images_df)} Images)")
-
+    print(f"  HELD-OUT TARGET TOOTH GROUNDING BENCHMARK (Official DENTEX Test Set - {n_test_imgs} Images)")
     print(f"{'=' * 95}")
     print(f"  {'Model Architecture / Fold':<30} {'Rec@0.50':<11} {'Rec@0.75':<11} {'Precision':<11} {'Mean IoU':<11} {'Target mAP50':<12}")
     print(f"  {'-' * 95}")
@@ -977,9 +1061,17 @@ def evaluate_benchmark(args):
                 continue
 
             model = YOLO(str(weight_path))
-            res = evaluate_target_grounding(
-                model, val_images_df, val_annots_df, conf_thresh=0.001, nominal_conf_thresh=0.25, imgsz=args.imgsz, device=device
-            )
+            if test_img_dir and test_lbl_dir:
+                res = evaluate_yolo_labels_target_grounding(
+                    model, test_img_dir, test_lbl_dir, conf_thresh=0.001, nominal_conf_thresh=0.25, imgsz=args.imgsz, device=device
+                )
+            elif val_images_df is not None and val_annots_df is not None:
+                res = evaluate_target_grounding(
+                    model, val_images_df, val_annots_df, conf_thresh=0.001, nominal_conf_thresh=0.25, imgsz=args.imgsz, device=device
+                )
+            else:
+                continue
+
             entry = {
                 "family": family_name,
                 "name": f"{family_name} (Fold {fold})",
@@ -1050,7 +1142,7 @@ def evaluate_benchmark(args):
             comp_json.write_text(json.dumps(comparison_records, indent=2))
             print(f"  Benchmark comparative results saved to: {comp_json}")
 
-        # Sync best models and benchmark results to Hugging Face
+        # Sync best models, visual artifacts, and benchmark results to Hugging Face
         if not getattr(args, "no_hf_sync", False):
             hf_token = os.environ.get("HF_TOKEN")
             hf_repo = os.environ.get("HF_ARTIFACT_REPO", "Reza-Nadimi/vlm-dental-models")
@@ -1059,14 +1151,42 @@ def evaluate_benchmark(args):
                     from huggingface_hub import HfApi
                     api = HfApi(token=hf_token)
                     api.create_repo(repo_id=hf_repo, repo_type="model", exist_ok=True)
-                    api.upload_folder(
-                        folder_path=str(model_root),
-                        path_in_repo="yolo_cv",
-                        repo_id=hf_repo,
-                        repo_type="model",
-                        commit_message="Final YOLO 5-Fold CV results & benchmark weights",
-                    )
-                    print(f"  [HF Sync] Successfully uploaded all fold checkpoints and results to {hf_repo}/yolo_cv")
+                    
+                    staging_dir = model_root / "_hf_staging"
+                    shutil.rmtree(staging_dir, ignore_errors=True)
+
+                    max_retries = 3
+                    for attempt in range(1, max_retries + 1):
+                        try:
+                            api.upload_folder(
+                                folder_path=str(model_root),
+                                path_in_repo="yolo_cv",
+                                repo_id=hf_repo,
+                                repo_type="model",
+                                allow_patterns=[
+                                    "**/*.pt",
+                                    "**/*.json",
+                                    "**/*.csv",
+                                    "**/*.yaml",
+                                    "**/*.png",
+                                    "**/*.jpg",
+                                    "**/*.jpeg",
+                                ],
+                                ignore_patterns=[
+                                    "**/_hf_staging/**",
+                                    "**/__pycache__/**",
+                                    "**/epoch*.pt",
+                                ],
+                                commit_message="Final YOLO 5-Fold CV results, visual artifacts & benchmark weights",
+                            )
+                            print(f"  [HF Sync] Successfully uploaded all fold checkpoints and results to {hf_repo}/yolo_cv")
+                            break
+                        except Exception as upload_err:
+                            if attempt < max_retries:
+                                print(f"  [HF Sync] Attempt {attempt}/{max_retries} failed ({upload_err}). Retrying in 5s...")
+                                time.sleep(5)
+                            else:
+                                raise upload_err
                 except Exception as e:
                     print(f"  [HF Sync] Notice: Could not upload benchmark results to HF: {e}")
 
@@ -1082,17 +1202,17 @@ def main():
     parser.add_argument("--device", type=str, default="0", help="Device to run on (e.g., '0' for GPU 0, 'cpu' for CPU)")
     parser.add_argument("--cross-validate", action="store_true", help="Run cross-validation training")
     parser.add_argument("--target-fold", type=str, default="all", help="Specific fold index to train (e.g. 0, 1, 2, 3, 4) or 'all' for all folds")
-    parser.add_argument("--eval-benchmark", action="store_true", help="Evaluate trained folds on the official held-out test set")
     parser.add_argument("--folds", type=int, default=5, help="Number of CV folds (only used with --cross-validate)")
-    parser.add_argument("--resume", action="store_true", help="Resume training from last checkpoint if available")
-    parser.add_argument("--no-hf-sync", action="store_true", help="Disable automatic syncing to Hugging Face Hub")
-    parser.add_argument(
-        "--datasets", type=str, default="dentex,tufts",
-        help="Comma-separated dataset names (e.g. dentex,tufts).",
-    )
+    parser.add_argument("--eval-benchmark", action="store_true", help="Evaluate trained folds on the official held-out test set")
+    parser.add_argument("--eval-cv-val", action="store_true", help="Evaluate in-fold validation splits with target-filtered metric")
+    parser.add_argument("--resume", action="store_true", help="Resume training or hydration from previous checkpoints")
+    parser.add_argument("--no-hf-sync", action="store_true", help="Skip syncing models to Hugging Face")
+    parser.add_argument("--data-dir", type=str, default=None, help="Root directory containing datasets")
+    parser.add_argument("--datasets", type=str, default="dentex,tufts", help="Comma-separated dataset names to combine (e.g. 'dentex', 'dentex,tufts')")
+    parser.add_argument("--hf-repo", type=str, default=None, help="Hugging Face repo for artifact sync")
     args = parser.parse_args()
 
-    if args.eval_benchmark:
+    if args.eval_benchmark or args.eval_cv_val:
         evaluate_benchmark(args)
     elif args.cross_validate:
         cross_validate(args)

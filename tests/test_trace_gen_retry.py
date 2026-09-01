@@ -66,6 +66,8 @@ def test_generation_retry_flow(tmp_path, monkeypatch):
     monkeypatch.setattr("scripts.run_trace_gen.load_dentex_dataset", lambda **kw: (imgs_df, annots_df, cats_df))
     monkeypatch.setattr("dental_agent.data.dentex.download_dentex_slice", lambda ids, **kw: {i: str(tmp_path / f"{i}.jpg") for i in ids})
     monkeypatch.setenv("GENERATOR_PROVIDER", "nvidia_nim")
+    monkeypatch.setattr("dental_agent.training.trace_generation.GENERATOR_PROVIDER", "nvidia_nim", raising=False)
+    monkeypatch.setattr("dental_agent.training.trace_generation.GENERATOR_MODEL", "test-model", raising=False)
     monkeypatch.setattr("scripts.run_trace_gen.verify_local_server_health", lambda **kw: True)
     monkeypatch.delenv("DENTEX_IMAGES_REPO", raising=False)
 
@@ -76,6 +78,7 @@ def test_generation_retry_flow(tmp_path, monkeypatch):
     args = MagicMock()
     args.dataset = "dentex"
     args.split = "train"
+    args.healthy_only = False
     args.total_slices = 1
     args.slice_index = 1
     args.slice_seed = 42
