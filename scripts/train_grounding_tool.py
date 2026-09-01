@@ -109,6 +109,9 @@ def cross_validate(args):
     else:
         folds_to_run = list(range(n_folds))
 
+    if resume:
+        _ensure_folds_hydrated(model_root, prefix, n_folds)
+
     results = []
 
     for fold in folds_to_run:
@@ -337,39 +340,155 @@ def cross_validate(args):
                 print(f"  [HF Sync] Notice: Could not push final models to HF: {e}")
 
 
-def evaluate_benchmark(args):
-    """Evaluate all trained fold models and the ensemble against the held-out test set."""
-    model_root = get_model_root()
-    dir_suffix = _dataset_dir_suffix(getattr(args, "datasets", "dentex,tufts"))
-    prefix = _model_subdir_prefix(dir_suffix)
-    test_yaml = Path(f"data/yolo_{dir_suffix}_cv/test/dataset.yaml")
-
-    if not test_yaml.exists():
-        raise FileNotFoundError(f"Test dataset not found at {test_yaml}. Run prepare_yolo_dataset.py --mode cv first.")
-
-    # Try downloading missing folds from HF if not local
+def _ensure_folds_hydrated(model_root: Path, prefix: str, n_folds: int) -> list[int]:
+    """Ensures all fold checkpoints are located and mapped into model_root / f'{prefix}cv_fold_{fold}'."""
+    # 1. Download missing fold checkpoints from HF Hub if available
     hf_token = os.environ.get("HF_TOKEN")
     hf_repo = os.environ.get("HF_ARTIFACT_REPO", "Reza-Nadimi/vlm-dental-models")
     if hf_token and not hf_token.startswith("YOUR_"):
         try:
             from huggingface_hub import snapshot_download
-            print(f"Checking for any remote fold checkpoints in {hf_repo}/yolo_cv...")
+            print(f"Checking Hugging Face Hub ({hf_repo}/yolo_cv) for any remote fold checkpoints...")
+            staging_dir = model_root / "_hf_staging"
             snapshot_download(
                 repo_id=hf_repo,
                 repo_type="model",
                 allow_patterns=["yolo_cv/*"],
-                local_dir=str(model_root.parent),
+                local_dir=str(staging_dir),
                 token=hf_token,
             )
+            yolo_cv_staged = staging_dir / "yolo_cv"
+            if yolo_cv_staged.exists():
+                for item in yolo_cv_staged.glob("*"):
+                    dest = model_root / item.name
+                    if not dest.exists():
+                        shutil.copytree(item, dest)
+                    else:
+                        for f in item.rglob("*"):
+                            if f.is_file():
+                                rel = f.relative_to(item)
+                                dst_f = dest / rel
+                                if not dst_f.exists():
+                                    dst_f.parent.mkdir(parents=True, exist_ok=True)
+                                    shutil.copy2(f, dst_f)
+            shutil.rmtree(staging_dir, ignore_errors=True)
         except Exception as e:
-            print(f"HF snapshot download notice: {e}")
+            print(f"HF auto-hydration notice: {e}")
 
-    summary_path = Path(f"data/yolo_{dir_suffix}_cv/fold_summary.json")
+    # 2. Check for any folds in alternate directory locations
+    for fold in range(n_folds):
+        target_fold_dir = model_root / f"{prefix}cv_fold_{fold}"
+        if not target_fold_dir.exists():
+            candidates = [
+                Path("data/yolo_cv") / f"{prefix}cv_fold_{fold}",
+                Path("data/yolo_cv") / f"cv_fold_{fold}",
+                model_root / "yolo_cv" / f"{prefix}cv_fold_{fold}",
+                model_root / f"cv_fold_{fold}",
+            ]
+            for cand in candidates:
+                if cand.exists():
+                    shutil.copytree(cand, target_fold_dir)
+                    break
+
+    found_folds = []
+    for fold in range(n_folds):
+        weight_path = model_root / f"{prefix}cv_fold_{fold}" / "weights" / "best.pt"
+        if weight_path.exists():
+            found_folds.append(fold)
+    return found_folds
+
+
+def evaluate_benchmark(args):
+    """Evaluate all trained fold models across both 5-fold CV splits and the held-out test set."""
+    model_root = get_model_root()
+    dir_suffix = _dataset_dir_suffix(getattr(args, "datasets", "dentex,tufts"))
+    prefix = _model_subdir_prefix(dir_suffix)
+    cv_dir = Path(f"data/yolo_{dir_suffix}_cv")
+    test_yaml = cv_dir / "test" / "dataset.yaml"
+
+    if not test_yaml.exists():
+        raise FileNotFoundError(f"Test dataset not found at {test_yaml}. Run prepare_yolo_dataset.py --mode cv first.")
+
+    summary_path = cv_dir / "fold_summary.json"
     n_folds = 5
     if summary_path.exists():
         summary = json.loads(summary_path.read_text())
         n_folds = summary.get("n_folds", 5)
 
+    found_folds = _ensure_folds_hydrated(model_root, prefix, n_folds)
+    print(f"Located {len(found_folds)}/{n_folds} trained fold models in {model_root}")
+
+    # --- Part 1: 5-Fold Cross-Validation Metrics Table ---
+    cv_results = []
+    for fold in range(n_folds):
+        fold_dir = model_root / f"{prefix}cv_fold_{fold}"
+        fold_yaml = cv_dir / f"fold_{fold}" / "dataset.yaml"
+        metrics = {"fold": fold, "map50": 0.0, "map50_95": 0.0, "precision": 0.0, "recall": 0.0}
+
+        csv_path = fold_dir / "results.csv"
+        if csv_path.exists():
+            try:
+                import pandas as pd
+                df = pd.read_csv(csv_path)
+                df.columns = df.columns.str.strip()
+                last_row = df.iloc[-1]
+                metrics["map50"] = float(last_row.get("metrics/mAP50(B)", 0.0))
+                metrics["map50_95"] = float(last_row.get("metrics/mAP50-95(B)", 0.0))
+                metrics["precision"] = float(last_row.get("metrics/precision(B)", 0.0))
+                metrics["recall"] = float(last_row.get("metrics/recall(B)", 0.0))
+            except Exception:
+                pass
+
+        best_pt = fold_dir / "weights" / "best.pt"
+        if best_pt.exists() and (metrics["map50"] == 0.0 and metrics["map50_95"] == 0.0) and fold_yaml.exists():
+            try:
+                model = YOLO(str(best_pt))
+                val_res = model.val(data=str(fold_yaml), split="val", batch=args.batch, imgsz=args.imgsz, device=args.device, verbose=False)
+                res_d = getattr(val_res, "results_dict", {})
+                metrics["map50"] = float(res_d.get("metrics/mAP50(B)", 0.0))
+                metrics["map50_95"] = float(res_d.get("metrics/mAP50-95(B)", 0.0))
+                metrics["precision"] = float(res_d.get("metrics/precision(B)", 0.0))
+                metrics["recall"] = float(res_d.get("metrics/recall(B)", 0.0))
+            except Exception as e:
+                print(f"Validation notice for fold {fold}: {e}")
+
+        if best_pt.exists() or metrics["map50"] > 0:
+            cv_results.append(metrics)
+
+    if cv_results:
+        print(f"\n{'=' * 60}")
+        print(f"  {len(cv_results)}-FOLD CROSS-VALIDATION RESULTS (Internal Validation)")
+        print(f"{'=' * 60}")
+        print(f"  {'Fold':<6} {'mAP50':<10} {'mAP50-95':<10} {'Precision':<10} {'Recall':<10}")
+        print(f"  {'-' * 46}")
+        for r in cv_results:
+            print(
+                f"  {r['fold']:<6} {r['map50']:<10.4f} {r['map50_95']:<10.4f} "
+                f"{r['precision']:<10.4f} {r['recall']:<10.4f}"
+            )
+        print(f"  {'-' * 46}")
+        mean_map50 = sum(r["map50"] for r in cv_results) / len(cv_results)
+        std_map50 = (sum((r["map50"] - mean_map50) ** 2 for r in cv_results) / len(cv_results)) ** 0.5
+        mean_map50_95 = sum(r["map50_95"] for r in cv_results) / len(cv_results)
+        std_map50_95 = (sum((r["map50_95"] - mean_map50_95) ** 2 for r in cv_results) / len(cv_results)) ** 0.5
+        print(f"  Mean mAP50:      {mean_map50:.4f} +/- {std_map50:.4f}")
+        print(f"  Mean mAP50-95:   {mean_map50_95:.4f} +/- {std_map50_95:.4f}")
+
+        cv_best = max(cv_results, key=lambda x: x["map50_95"])
+        cv_data = {
+            "folds": cv_results,
+            "best_fold": cv_best["fold"],
+            "mean_map50": mean_map50,
+            "std_map50": std_map50,
+            "mean_map50_95": mean_map50_95,
+            "std_map50_95": std_map50_95,
+        }
+        cv_out = model_root / f"{prefix}grounding_tool_cv_best" / "cv_results.json"
+        cv_out.parent.mkdir(parents=True, exist_ok=True)
+        cv_out.write_text(json.dumps(cv_data, indent=2))
+        print(f"  Saved CV results to: {cv_out}")
+
+    # --- Part 2: Official Held-Out Test Set Evaluation ---
     benchmark_results = []
     print(f"\n{'=' * 65}")
     print("  HELD-OUT TEST SET EVALUATION (Official DENTEX Benchmark)")
@@ -384,14 +503,15 @@ def evaluate_benchmark(args):
                 continue
             model = YOLO(str(weight_path))
             val_res = model.val(data=str(test_yaml), split="val", batch=args.batch, imgsz=args.imgsz, device=args.device, verbose=False)
+            res_dict = getattr(val_res, "results_dict", {})
             metrics = {
                 "name": f"Fold {fold} ({weight_type})",
                 "fold": fold,
                 "type": weight_type,
-                "map50": float(val_res.results_dict.get("metrics/mAP50(B)", 0)),
-                "map50_95": float(val_res.results_dict.get("metrics/mAP50-95(B)", 0)),
-                "precision": float(val_res.results_dict.get("metrics/precision(B)", 0)),
-                "recall": float(val_res.results_dict.get("metrics/recall(B)", 0)),
+                "map50": float(res_dict.get("metrics/mAP50(B)", 0)),
+                "map50_95": float(res_dict.get("metrics/mAP50-95(B)", 0)),
+                "precision": float(res_dict.get("metrics/precision(B)", 0)),
+                "recall": float(res_dict.get("metrics/recall(B)", 0)),
             }
             benchmark_results.append(metrics)
             print(
@@ -404,8 +524,7 @@ def evaluate_benchmark(args):
         best_benchmark = max(benchmark_results, key=lambda x: x["map50_95"])
         print(f"  {'-' * 65}")
         print(f"  Top Benchmark Performer: {best_benchmark['name']} (mAP50: {best_benchmark['map50']:.4f}, mAP50-95: {best_benchmark['map50_95']:.4f})")
-        
-        # Copy winning fold weights to grounding_tool_cv_best
+
         winning_fold = best_benchmark["fold"]
         winning_type = best_benchmark["type"]
         win_src = model_root / f"{prefix}cv_fold_{winning_fold}" / "weights" / f"{winning_type}.pt"
@@ -414,6 +533,14 @@ def evaluate_benchmark(args):
         if win_src.exists():
             shutil.copy2(win_src, best_dst)
             print(f"  Assigned top benchmark model ({best_benchmark['name']}) -> {best_dst}")
+
+        # Keep every fold's best model in fold_best_models/
+        for fold in range(n_folds):
+            src = model_root / f"{prefix}cv_fold_{fold}" / "weights" / "best.pt"
+            if src.exists():
+                ensemble_dst = model_root / f"{prefix}fold_best_models" / f"fold_{fold}_best.pt"
+                ensemble_dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, ensemble_dst)
 
         out_json = model_root / f"{prefix}grounding_tool_cv_best" / "benchmark_evaluation.json"
         out_json.parent.mkdir(parents=True, exist_ok=True)
@@ -430,13 +557,13 @@ def evaluate_benchmark(args):
                     api = HfApi(token=hf_token)
                     api.create_repo(repo_id=hf_repo, repo_type="model", exist_ok=True)
                     api.upload_folder(
-                        folder_path=str(model_root / f"{prefix}grounding_tool_cv_best"),
-                        path_in_repo=f"yolo_cv/{prefix}grounding_tool_cv_best",
+                        folder_path=str(model_root),
+                        path_in_repo="yolo_cv",
                         repo_id=hf_repo,
                         repo_type="model",
-                        commit_message="Upload top benchmark grounding tool model & evaluation metrics",
+                        commit_message="Final YOLO 5-Fold CV results & benchmark weights",
                     )
-                    print(f"  [HF Sync] Uploaded benchmark winner & evaluation to {hf_repo}/yolo_cv/{prefix}grounding_tool_cv_best")
+                    print(f"  [HF Sync] Successfully uploaded all fold checkpoints and results to {hf_repo}/yolo_cv")
                 except Exception as e:
                     print(f"  [HF Sync] Notice: Could not upload benchmark results to HF: {e}")
 
