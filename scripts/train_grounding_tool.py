@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import sys
+import time
 from pathlib import Path
 
 repo_root = str(Path(__file__).resolve().parent.parent)
@@ -462,8 +463,11 @@ def evaluate_target_grounding(
     target_tp_nominal_count = 0
     target_nominal_ious = []
     
+    # Standard 10 COCO IoU thresholds (0.50 to 0.95)
+    iou_thresholds = np.linspace(0.50, 0.95, 10)
+    
     # Store predictions and ground truths for precision-recall curve computation
-    # per target class: {class_idx: {"preds": [(conf, is_tp_50)], "n_gt": int}}
+    # per target class: {class_idx: {"preds": [list of {"conf": float, "tp_by_iou": list}], "n_gt": int}}
     class_eval_records = {c: {"preds": [], "n_gt": 0} for c in range(32)}
 
     for _, img_row in val_images_df.iterrows():
@@ -536,51 +540,66 @@ def evaluate_target_grounding(
         nom_classes = pred_classes[nominal_mask]
         nom_confs = pred_confs[nominal_mask]
 
-        matched_nom_gt_indices = set()
-        for gt_cls, gt_box in gt_targets:
-            cand_nom_idx = [i for i, c in enumerate(nom_classes) if c == gt_cls]
-            if cand_nom_idx:
-                ious = [_compute_box_iou(nom_boxes[i].tolist(), gt_box) for i in cand_nom_idx]
-                best_sub_idx = int(np.argmax(ious))
-                best_iou = ious[best_sub_idx]
-                target_nominal_ious.append(best_iou)
-                if best_iou >= 0.50:
-                    tp_50_nominal += 1
-                if best_iou >= 0.75:
-                    tp_75_nominal += 1
-            else:
-                target_nominal_ious.append(0.0)
-
-        # Precision at nominal threshold: match proposals strictly against target GT boxes
         nom_order = np.argsort(-nom_confs) if len(nom_confs) else []
+        matched_nom_gt_indices = set()
+        matched_gt_best_ious = {}
+
         for idx in nom_order:
             p_cls = nom_classes[idx]
             if p_cls in gt_classes_in_img:
                 target_pred_nominal_count += 1
                 p_box = nom_boxes[idx].tolist()
-                matching_gts = [(g_i, gb) for g_i, (c, gb) in enumerate(gt_targets) if c == p_cls and g_i not in matched_nom_gt_indices]
+                matching_gts = [
+                    (g_i, gb) for g_i, (c, gb) in enumerate(gt_targets)
+                    if c == p_cls and g_i not in matched_nom_gt_indices
+                ]
                 if matching_gts:
                     best_g_i, best_gb = max(matching_gts, key=lambda item: _compute_box_iou(p_box, item[1]))
-                    if _compute_box_iou(p_box, best_gb) >= 0.50:
+                    iou = _compute_box_iou(p_box, best_gb)
+                    if iou >= 0.50:
                         target_tp_nominal_count += 1
                         matched_nom_gt_indices.add(best_g_i)
+                        matched_gt_best_ious[best_g_i] = iou
 
-        # 2. Record all target predictions for continuous PR curve calculation (down to conf_thresh)
+        for g_i, (gt_cls, gt_box) in enumerate(gt_targets):
+            if g_i in matched_nom_gt_indices:
+                iou_val = matched_gt_best_ious[g_i]
+                target_nominal_ious.append(iou_val)
+                tp_50_nominal += 1
+                if iou_val >= 0.75:
+                    tp_75_nominal += 1
+            else:
+                cand_nom_idx = [i for i, c in enumerate(nom_classes) if c == gt_cls]
+                best_sub_iou = max([_compute_box_iou(nom_boxes[i].tolist(), gt_box) for i in cand_nom_idx], default=0.0)
+                target_nominal_ious.append(best_sub_iou)
+
+        # 2. Record all target predictions for continuous PR curve calculation across 10 COCO IoU thresholds (0.50 to 0.95)
+        iou_thresholds = np.linspace(0.50, 0.95, 10)
         pred_order = np.argsort(-pred_confs) if len(pred_confs) else []
-        matched_pr_gt_indices = set()
+        matched_gt_per_iou = [set() for _ in range(len(iou_thresholds))]
+
         for idx in pred_order:
-            p_cls = pred_classes[idx]
+            p_cls = int(pred_classes[idx])
             if p_cls in gt_classes_in_img:
                 p_box = pred_boxes[idx].tolist()
                 p_conf = float(pred_confs[idx])
-                matching_gts = [(g_i, gb) for g_i, (c, gb) in enumerate(gt_targets) if c == p_cls and g_i not in matched_pr_gt_indices]
-                is_tp = 0.0
-                if matching_gts:
-                    best_g_i, best_gb = max(matching_gts, key=lambda item: _compute_box_iou(p_box, item[1]))
-                    if _compute_box_iou(p_box, best_gb) >= 0.50:
-                        is_tp = 1.0
-                        matched_pr_gt_indices.add(best_g_i)
-                class_eval_records[p_cls]["preds"].append((p_conf, is_tp))
+
+                tp_flags = []
+                for t_idx, iou_t in enumerate(iou_thresholds):
+                    matching_gts = [
+                        (g_i, gb)
+                        for g_i, (c, gb) in enumerate(gt_targets)
+                        if c == p_cls and g_i not in matched_gt_per_iou[t_idx]
+                    ]
+                    is_tp = 0.0
+                    if matching_gts:
+                        best_g_i, best_gb = max(matching_gts, key=lambda item: _compute_box_iou(p_box, item[1]))
+                        if _compute_box_iou(p_box, best_gb) >= iou_t:
+                            is_tp = 1.0
+                            matched_gt_per_iou[t_idx].add(best_g_i)
+                    tp_flags.append(is_tp)
+
+                class_eval_records[p_cls]["preds"].append({"conf": p_conf, "tp_by_iou": tp_flags})
 
     # Calculate nominal operating metrics
     recall_50 = (tp_50_nominal / max(1, total_targets))
@@ -588,34 +607,36 @@ def evaluate_target_grounding(
     precision = (target_tp_nominal_count / max(1, target_pred_nominal_count)) if target_pred_nominal_count > 0 else 0.0
     mean_iou = (sum(target_nominal_ious) / max(1, len(target_nominal_ious))) if target_nominal_ious else 0.0
 
-    # Compute target class mAP50 using continuous 101-point COCO interpolated AP
-    aps_50 = []
+    # Compute target class mAP across all 10 COCO IoU thresholds (0.50 to 0.95) using 101-point continuous interpolation
+    aps_per_iou = [[] for _ in range(len(iou_thresholds))]
     for c, rec in class_eval_records.items():
         if rec["n_gt"] == 0:
             continue
         if not rec["preds"]:
-            # If target exists in ground truth but has zero predictions, AP is 0.0
-            aps_50.append(0.0)
+            for t_idx in range(len(iou_thresholds)):
+                aps_per_iou[t_idx].append(0.0)
             continue
-            
-        preds_list = rec["preds"]
-        preds_list.sort(key=lambda x: x[0], reverse=True)
-        tps = [x[1] for x in preds_list]
-        cumsum_tp = np.cumsum(tps)
-        cumsum_fp = np.cumsum([1 - x for x in tps])
-        precisions = cumsum_tp / (cumsum_tp + cumsum_fp)
-        recalls = cumsum_tp / rec["n_gt"]
-        
-        # 101-point interpolated AP (standard COCO)
-        ap = 0.0
-        for t in np.linspace(0, 1, 101):
-            p_over = precisions[recalls >= t]
-            p = np.max(p_over) if len(p_over) > 0 else 0.0
-            ap += p / 101.0
-        aps_50.append(float(ap))
 
-    map50 = float(np.mean(aps_50)) if aps_50 else recall_50
-    map50_95 = (map50 + recall_75) / 2.0 * mean_iou
+        preds_list = rec["preds"]
+        preds_list.sort(key=lambda x: x["conf"], reverse=True)
+
+        for t_idx in range(len(iou_thresholds)):
+            tps = [x["tp_by_iou"][t_idx] for x in preds_list]
+            cumsum_tp = np.cumsum(tps)
+            cumsum_fp = np.cumsum([1.0 - x for x in tps])
+            precisions = cumsum_tp / np.maximum(1e-8, cumsum_tp + cumsum_fp)
+            recalls = cumsum_tp / float(rec["n_gt"])
+
+            ap = 0.0
+            for t in np.linspace(0, 1, 101):
+                p_over = precisions[recalls >= t]
+                p = np.max(p_over) if len(p_over) > 0 else 0.0
+                ap += p / 101.0
+            aps_per_iou[t_idx].append(float(ap))
+
+    map50 = float(np.mean(aps_per_iou[0])) if aps_per_iou[0] else recall_50
+    mean_maps_across_iou = [float(np.mean(aps)) if aps else 0.0 for aps in aps_per_iou]
+    map50_95 = float(np.mean(mean_maps_across_iou)) if mean_maps_across_iou else map50
 
     return {
         "recall_50": recall_50,
@@ -640,7 +661,7 @@ def evaluate_yolo_labels_target_grounding(
     """Evaluate YOLO model against in-fold validation splits stored in YOLO .txt format.
     
     Loads (cls_idx, xc, yc, w, h) from label_dir/*.txt, matches against model predictions
-    using greedy 1-to-1 bipartite matching, and evaluates continuous 101-point COCO PR curve integration.
+    using greedy 1-to-1 bipartite matching, and evaluates continuous 10-threshold 101-point COCO PR curve integration.
     """
     img_dir = Path(img_dir)
     label_dir = Path(label_dir)
@@ -663,6 +684,10 @@ def evaluate_yolo_labels_target_grounding(
     target_pred_nominal_count = 0
     target_tp_nominal_count = 0
     target_nominal_ious = []
+    
+    # Standard 10 COCO IoU thresholds (0.50 to 0.95)
+    iou_thresholds = np.linspace(0.50, 0.95, 10)
+    
     class_eval_records = {c: {"preds": [], "n_gt": 0} for c in range(32)}
 
     for img_p in img_files:
@@ -719,80 +744,99 @@ def evaluate_yolo_labels_target_grounding(
         nom_classes = pred_classes[nominal_mask]
         nom_confs = pred_confs[nominal_mask]
 
-        matched_nom_gt_indices = set()
-        for gt_cls, gt_box in gt_targets:
-            cand_nom_idx = [i for i, c in enumerate(nom_classes) if c == gt_cls]
-            if cand_nom_idx:
-                ious = [_compute_box_iou(nom_boxes[i].tolist(), gt_box) for i in cand_nom_idx]
-                best_sub_idx = int(np.argmax(ious))
-                best_iou = ious[best_sub_idx]
-                target_nominal_ious.append(best_iou)
-                if best_iou >= 0.50:
-                    tp_50_nominal += 1
-                if best_iou >= 0.75:
-                    tp_75_nominal += 1
-            else:
-                target_nominal_ious.append(0.0)
-
-        # Precision at nominal threshold: match proposals strictly against target GT boxes
         nom_order = np.argsort(-nom_confs) if len(nom_confs) else []
+        matched_nom_gt_indices = set()
+        matched_gt_best_ious = {}
+
         for idx in nom_order:
             p_cls = nom_classes[idx]
             if p_cls in gt_classes_in_img:
                 target_pred_nominal_count += 1
                 p_box = nom_boxes[idx].tolist()
-                matching_gts = [(g_i, gb) for g_i, (c, gb) in enumerate(gt_targets) if c == p_cls and g_i not in matched_nom_gt_indices]
+                matching_gts = [
+                    (g_i, gb) for g_i, (c, gb) in enumerate(gt_targets)
+                    if c == p_cls and g_i not in matched_nom_gt_indices
+                ]
                 if matching_gts:
                     best_g_i, best_gb = max(matching_gts, key=lambda item: _compute_box_iou(p_box, item[1]))
-                    if _compute_box_iou(p_box, best_gb) >= 0.50:
+                    iou = _compute_box_iou(p_box, best_gb)
+                    if iou >= 0.50:
                         target_tp_nominal_count += 1
                         matched_nom_gt_indices.add(best_g_i)
+                        matched_gt_best_ious[best_g_i] = iou
 
-        # 2. Record all target predictions for continuous PR curve calculation (down to conf_thresh)
+        for g_i, (gt_cls, gt_box) in enumerate(gt_targets):
+            if g_i in matched_nom_gt_indices:
+                iou_val = matched_gt_best_ious[g_i]
+                target_nominal_ious.append(iou_val)
+                tp_50_nominal += 1
+                if iou_val >= 0.75:
+                    tp_75_nominal += 1
+            else:
+                cand_nom_idx = [i for i, c in enumerate(nom_classes) if c == gt_cls]
+                best_sub_iou = max([_compute_box_iou(nom_boxes[i].tolist(), gt_box) for i in cand_nom_idx], default=0.0)
+                target_nominal_ious.append(best_sub_iou)
+
+        # 2. Record all target predictions for continuous PR curve calculation across 10 COCO IoU thresholds (0.50 to 0.95)
+        iou_thresholds = np.linspace(0.50, 0.95, 10)
         pred_order = np.argsort(-pred_confs) if len(pred_confs) else []
-        matched_pr_gt_indices = set()
+        matched_gt_per_iou = [set() for _ in range(len(iou_thresholds))]
+
         for idx in pred_order:
-            p_cls = pred_classes[idx]
+            p_cls = int(pred_classes[idx])
             if p_cls in gt_classes_in_img:
                 p_box = pred_boxes[idx].tolist()
                 p_conf = float(pred_confs[idx])
-                matching_gts = [(g_i, gb) for g_i, (c, gb) in enumerate(gt_targets) if c == p_cls and g_i not in matched_pr_gt_indices]
-                is_tp = 0.0
-                if matching_gts:
-                    best_g_i, best_gb = max(matching_gts, key=lambda item: _compute_box_iou(p_box, item[1]))
-                    if _compute_box_iou(p_box, best_gb) >= 0.50:
-                        is_tp = 1.0
-                        matched_pr_gt_indices.add(best_g_i)
-                class_eval_records[p_cls]["preds"].append((p_conf, is_tp))
+
+                tp_flags = []
+                for t_idx, iou_t in enumerate(iou_thresholds):
+                    matching_gts = [
+                        (g_i, gb)
+                        for g_i, (c, gb) in enumerate(gt_targets)
+                        if c == p_cls and g_i not in matched_gt_per_iou[t_idx]
+                    ]
+                    is_tp = 0.0
+                    if matching_gts:
+                        best_g_i, best_gb = max(matching_gts, key=lambda item: _compute_box_iou(p_box, item[1]))
+                        if _compute_box_iou(p_box, best_gb) >= iou_t:
+                            is_tp = 1.0
+                            matched_gt_per_iou[t_idx].add(best_g_i)
+                    tp_flags.append(is_tp)
+
+                class_eval_records[p_cls]["preds"].append({"conf": p_conf, "tp_by_iou": tp_flags})
 
     recall_50 = (tp_50_nominal / max(1, total_targets))
     recall_75 = (tp_75_nominal / max(1, total_targets))
     precision = (target_tp_nominal_count / max(1, target_pred_nominal_count)) if target_pred_nominal_count > 0 else 0.0
     mean_iou = (sum(target_nominal_ious) / max(1, len(target_nominal_ious))) if target_nominal_ious else 0.0
 
-    aps_50 = []
+    aps_per_iou = [[] for _ in range(len(iou_thresholds))]
     for c, rec in class_eval_records.items():
         if rec["n_gt"] == 0:
             continue
         if not rec["preds"]:
-            aps_50.append(0.0)
+            for t_idx in range(len(iou_thresholds)):
+                aps_per_iou[t_idx].append(0.0)
             continue
         preds_list = rec["preds"]
-        preds_list.sort(key=lambda x: x[0], reverse=True)
-        tps = [x[1] for x in preds_list]
-        cumsum_tp = np.cumsum(tps)
-        cumsum_fp = np.cumsum([1 - x for x in tps])
-        precisions = cumsum_tp / (cumsum_tp + cumsum_fp)
-        recalls = cumsum_tp / rec["n_gt"]
-        ap = 0.0
-        for t in np.linspace(0, 1, 101):
-            p_over = precisions[recalls >= t]
-            p = np.max(p_over) if len(p_over) > 0 else 0.0
-            ap += p / 101.0
-        aps_50.append(float(ap))
+        preds_list.sort(key=lambda x: x["conf"], reverse=True)
 
-    map50 = float(np.mean(aps_50)) if aps_50 else recall_50
-    map50_95 = (map50 + recall_75) / 2.0 * mean_iou
+        for t_idx in range(len(iou_thresholds)):
+            tps = [x["tp_by_iou"][t_idx] for x in preds_list]
+            cumsum_tp = np.cumsum(tps)
+            cumsum_fp = np.cumsum([1.0 - x for x in tps])
+            precisions = cumsum_tp / np.maximum(1e-8, cumsum_tp + cumsum_fp)
+            recalls = cumsum_tp / float(rec["n_gt"])
+            ap = 0.0
+            for t in np.linspace(0, 1, 101):
+                p_over = precisions[recalls >= t]
+                p = np.max(p_over) if len(p_over) > 0 else 0.0
+                ap += p / 101.0
+            aps_per_iou[t_idx].append(float(ap))
+
+    map50 = float(np.mean(aps_per_iou[0])) if aps_per_iou[0] else recall_50
+    mean_maps_across_iou = [float(np.mean(aps)) if aps else 0.0 for aps in aps_per_iou]
+    map50_95 = float(np.mean(mean_maps_across_iou)) if mean_maps_across_iou else map50
 
     return {
         "recall_50": recall_50,
@@ -850,19 +894,12 @@ def evaluate_benchmark(args):
     _ensure_folds_hydrated(model_root, "dentex_tufts_", n_folds)
     _ensure_folds_hydrated(model_root, "dentex_", n_folds)
 
-    # Determine execution device
+    device = str(getattr(args, "device", "0"))
     import torch
-    device = getattr(args, "device", "0")
     if device in ("0", "cuda") and not torch.cuda.is_available():
         device = "cpu"
 
-    # --- Part 1: In-Fold Cross-Validation Target Grounding Benchmark (Live Target-Filtered) ---
-    print(f"\n{'=' * 95}")
-    print(f"  IN-FOLD TARGET TOOTH GROUNDING BENCHMARK (CV Validation Splits - Target-Filtered)")
-    print(f"{'=' * 95}")
-    print(f"  {'Model Architecture / Fold':<30} {'Rec@0.50':<11} {'Rec@0.75':<11} {'Precision':<11} {'Mean IoU':<11} {'Target mAP50':<12}")
-    print(f"  {'-' * 95}")
-
+    # --- Part 1: In-Fold Cross-Validation Target Grounding Benchmark (Target-Filtered) ---
     cv_val_records = []
     cv_configs = [
         ("DENTEX-Only", ["dentex_cv_fold_", "cv_fold_"], ["dentex"]),
@@ -872,12 +909,15 @@ def evaluate_benchmark(args):
     all_cv_results = {}
     from sklearn.model_selection import KFold
 
+    train_pools_cache = {}
     for family_name, prefix_options, dataset_names in cv_configs:
         family_cv_metrics = []
         
-        # Load dataset training pool for this family if local yolo folder doesn't exist
         train_pools = []
         for dname in dataset_names:
+            if dname in train_pools_cache:
+                train_pools.append(train_pools_cache[dname])
+                continue
             if dname == "dentex":
                 from dental_agent.data.dentex import load_dentex_dataset
                 from scripts.prepare_yolo_dataset import _ensure_images_downloaded
@@ -885,6 +925,7 @@ def evaluate_benchmark(args):
                 imgs_df, ann_df, _ = load_dentex_dataset(data_dir=data_dir, split_name="train", combine_enumeration_splits=True)
                 imgs_df = _ensure_images_downloaded(imgs_df, "dentex", data_dir=data_dir)
                 imgs_df = imgs_df[imgs_df["local_path"].notna()].copy()
+                train_pools_cache[dname] = (dname, imgs_df, ann_df)
                 train_pools.append((dname, imgs_df, ann_df))
             elif dname == "tufts":
                 from dental_agent.data.tufts import load_tufts_dataset
@@ -894,6 +935,7 @@ def evaluate_benchmark(args):
                     imgs_df, ann_df, _ = load_tufts_dataset(data_dir=data_dir)
                     imgs_df = _ensure_images_downloaded(imgs_df, "tufts", data_dir=data_dir)
                     imgs_df = imgs_df[imgs_df["local_path"].notna()].copy()
+                    train_pools_cache[dname] = (dname, imgs_df, ann_df)
                     train_pools.append((dname, imgs_df, ann_df))
                 except Exception as e:
                     print(f"  Notice: Could not load Tufts dataset pool: {e}")
@@ -921,7 +963,6 @@ def evaluate_benchmark(args):
             if not weight_path or not weight_path.exists():
                 continue
 
-            # Look for existing in-fold validation directory on disk
             fold_img_dir = None
             fold_lbl_dir = None
             dir_suffix = _dataset_dir_suffix(",".join(dataset_names))
@@ -940,7 +981,6 @@ def evaluate_benchmark(args):
                     model, fold_img_dir, fold_lbl_dir, conf_thresh=0.001, nominal_conf_thresh=0.25, imgsz=args.imgsz, device=device
                 )
             elif fold_splits and fold < len(fold_splits):
-                # Dynamically evaluate on in-memory validation split for this fold
                 _, val_idx = fold_splits[fold]
                 val_keys = {combined_keys[i] for i in val_idx}
                 
@@ -972,10 +1012,6 @@ def evaluate_benchmark(args):
             }
             family_cv_metrics.append(entry)
             cv_val_records.append(entry)
-            print(
-                f"  {entry['name']:<30} {entry['recall_50']:<11.4f} {entry['recall_75']:<11.4f} "
-                f"{entry['precision']:<11.4f} {entry['mean_iou']:<11.4f} {entry['map50']:<12.4f}"
-            )
 
         if family_cv_metrics:
             all_cv_results[family_name] = family_cv_metrics
@@ -984,6 +1020,7 @@ def evaluate_benchmark(args):
             mean_prec = sum(m["precision"] for m in family_cv_metrics) / len(family_cv_metrics)
             mean_iou_val = sum(m["mean_iou"] for m in family_cv_metrics) / len(family_cv_metrics)
             mean_map = sum(m["map50"] for m in family_cv_metrics) / len(family_cv_metrics)
+            mean_map50_95 = sum(m["map50_95"] for m in family_cv_metrics) / len(family_cv_metrics)
             summary_entry = {
                 "family": family_name,
                 "name": f"{family_name} (5-Fold Mean)",
@@ -993,16 +1030,10 @@ def evaluate_benchmark(args):
                 "precision": mean_prec,
                 "mean_iou": mean_iou_val,
                 "map50": mean_map,
+                "map50_95": mean_map50_95,
             }
             cv_val_records.append(summary_entry)
-            print(f"  {'-' * 95}")
-            print(
-                f"  {summary_entry['name']:<30} {mean_rec50:<11.4f} {mean_rec75:<11.4f} "
-                f"{mean_prec:<11.4f} {mean_iou_val:<11.4f} {mean_map:<12.4f}"
-            )
-            print(f"  {'-' * 95}")
 
-            # Save clean target-filtered CV results
             pref = "dentex_tufts_" if family_name == "DENTEX+Tufts" else ("dentex_" if family_name == "DENTEX-Only" else "")
             cv_out = model_root / f"{pref}grounding_tool_cv_best" / "cv_results.json"
             cv_out.parent.mkdir(parents=True, exist_ok=True)
@@ -1014,22 +1045,31 @@ def evaluate_benchmark(args):
                 "mean_precision": mean_prec,
                 "mean_iou": mean_iou_val,
                 "mean_map50": mean_map,
+                "mean_map50_95": mean_map50_95,
             }
             cv_out.write_text(json.dumps(cv_data, indent=2))
             print(f"  Saved clean target-filtered CV results to: {cv_out}")
 
     if cv_val_records:
+        print(f"\n{'=' * 110}")
+        print(f"  IN-FOLD TARGET TOOTH GROUNDING BENCHMARK (CV Validation Splits - Target-Filtered)")
+        print(f"{'=' * 110}")
+        print(f"  {'Model Architecture / Fold':<30} {'mAP50':<11} {'mAP50-95':<11} {'Precision':<11} {'Rec@0.50':<11} {'Rec@0.75':<11} {'Mean IoU':<11}")
+        print(f"  {'-' * 110}")
+        for r in cv_val_records:
+            if r.get("fold") == "mean":
+                print(f"  {'-' * 110}")
+            print(
+                f"  {r['name']:<30} {r['map50']:<11.4f} {r['map50_95']:<11.4f} "
+                f"{r['precision']:<11.4f} {r['recall_50']:<11.4f} {r['recall_75']:<11.4f} {r['mean_iou']:<11.4f}"
+            )
+            if r.get("fold") == "mean":
+                print(f"  {'-' * 110}")
         cv_val_json = model_root / "cv_val_target_evaluation.json"
         cv_val_json.write_text(json.dumps(cv_val_records, indent=2))
 
     # --- Part 3: Head-to-Head Target Grounding Benchmark Table ---
     n_test_imgs = len(list(test_img_dir.iterdir())) if test_img_dir else (len(val_images_df) if val_images_df is not None else 0)
-    print(f"\n{'=' * 95}")
-    print(f"  HELD-OUT TARGET TOOTH GROUNDING BENCHMARK (Official DENTEX Test Set - {n_test_imgs} Images)")
-    print(f"{'=' * 95}")
-    print(f"  {'Model Architecture / Fold':<30} {'Rec@0.50':<11} {'Rec@0.75':<11} {'Precision':<11} {'Mean IoU':<11} {'Target mAP50':<12}")
-    print(f"  {'-' * 95}")
-
     comparison_records = []
     
     # Evaluate both families: DENTEX-Only and DENTEX+Tufts
@@ -1047,7 +1087,6 @@ def evaluate_benchmark(args):
                 if cand.exists():
                     weight_path = cand
                     break
-                # Fallback to fold_best_models/
                 alt = model_root / "fold_best_models" / f"fold_{fold}_best.pt"
                 if alt.exists():
                     weight_path = alt
@@ -1077,10 +1116,6 @@ def evaluate_benchmark(args):
             }
             family_metrics.append(entry)
             comparison_records.append(entry)
-            print(
-                f"  {entry['name']:<30} {entry['recall_50']:<11.4f} {entry['recall_75']:<11.4f} "
-                f"{entry['precision']:<11.4f} {entry['mean_iou']:<11.4f} {entry['map50']:<12.4f}"
-            )
 
         if family_metrics:
             mean_rec50 = sum(m["recall_50"] for m in family_metrics) / len(family_metrics)
@@ -1088,6 +1123,7 @@ def evaluate_benchmark(args):
             mean_prec = sum(m["precision"] for m in family_metrics) / len(family_metrics)
             mean_iou_val = sum(m["mean_iou"] for m in family_metrics) / len(family_metrics)
             mean_map = sum(m["map50"] for m in family_metrics) / len(family_metrics)
+            mean_map50_95 = sum(m["map50_95"] for m in family_metrics) / len(family_metrics)
             summary_entry = {
                 "family": family_name,
                 "name": f"{family_name} (5-Fold Mean)",
@@ -1097,14 +1133,25 @@ def evaluate_benchmark(args):
                 "precision": mean_prec,
                 "mean_iou": mean_iou_val,
                 "map50": mean_map,
+                "map50_95": mean_map50_95,
             }
             comparison_records.append(summary_entry)
-            print(f"  {'-' * 95}")
+
+    if comparison_records:
+        print(f"\n{'=' * 110}")
+        print(f"  HELD-OUT TARGET TOOTH GROUNDING BENCHMARK (Official DENTEX Test Set - {n_test_imgs} Images)")
+        print(f"{'=' * 110}")
+        print(f"  {'Model Architecture / Fold':<30} {'mAP50':<11} {'mAP50-95':<11} {'Precision':<11} {'Rec@0.50':<11} {'Rec@0.75':<11} {'Mean IoU':<11}")
+        print(f"  {'-' * 110}")
+        for r in comparison_records:
+            if r.get("fold") == "mean":
+                print(f"  {'-' * 110}")
             print(
-                f"  {summary_entry['name']:<30} {mean_rec50:<11.4f} {mean_rec75:<11.4f} "
-                f"{mean_prec:<11.4f} {mean_iou_val:<11.4f} {mean_map:<12.4f}"
+                f"  {r['name']:<30} {r['map50']:<11.4f} {r['map50_95']:<11.4f} "
+                f"{r['precision']:<11.4f} {r['recall_50']:<11.4f} {r['recall_75']:<11.4f} {r['mean_iou']:<11.4f}"
             )
-            print(f"  {'-' * 95}")
+            if r.get("fold") == "mean":
+                print(f"  {'-' * 110}")
 
     # Save benchmark results & copy top performer weights to grounding_tool_cv_best
     if comparison_records:

@@ -478,4 +478,100 @@ def test_ensure_folds_hydrated_local_disk_precedence(tmp_path):
         mock_download.assert_not_called()
 
 
+# ==============================================================================
+# 6. True COCO 10-Threshold mAP50-95 Invariant Tests
+# ==============================================================================
+
+def test_map50_95_monotonicity_and_perfect_score():
+    """Test that perfect predictions yield mAP50 = 1.0 and mAP50-95 = 1.0."""
+    val_images_df = pd.DataFrame([
+        {"id": 1, "width": 1000, "height": 1000, "local_path": "fake_img_1.png"}
+    ])
+    val_annots_df = pd.DataFrame([
+        {"image_id": 1, "category_id_1": 0, "category_id_2": 0, "bbox": [100, 100, 50, 50]},
+        {"image_id": 1, "category_id_1": 1, "category_id_2": 1, "bbox": [200, 200, 50, 50]},
+    ])
+
+    # Perfect predictions with IoU = 1.0
+    mock_boxes = MagicMock()
+    mock_boxes.xyxy.cpu.return_value.numpy.return_value = np.array([
+        [100, 100, 150, 150],
+        [200, 200, 250, 250],
+    ])
+    # Class 0: Q1 P1 -> cls 0; Class 1: Q2 P2 -> cls 9
+    mock_boxes.cls.cpu.return_value.numpy.return_value = np.array([0, 9])
+    mock_boxes.conf.cpu.return_value.numpy.return_value = np.array([0.95, 0.90])
+    mock_boxes.__len__.return_value = 2
+
+    mock_model = MagicMock()
+    mock_model.predict.return_value = [MagicMock(boxes=mock_boxes)]
+
+    with patch("pathlib.Path.exists", return_value=True):
+        res = evaluate_target_grounding(mock_model, val_images_df, val_annots_df)
+
+    assert res["map50"] == pytest.approx(1.0)
+    assert res["map50_95"] == pytest.approx(1.0)
+    assert res["map50"] >= res["map50_95"]
+
+
+def test_map50_95_partial_iou_dropoff():
+    """Test that predictions with ~0.60 IoU have mAP50 = 1.0 but mAP50-95 < 1.0."""
+    val_images_df = pd.DataFrame([
+        {"id": 1, "width": 1000, "height": 1000, "local_path": "fake_img_1.png"}
+    ])
+    val_annots_df = pd.DataFrame([
+        {"image_id": 1, "category_id_1": 0, "category_id_2": 0, "bbox": [100, 100, 100, 100]},  # [100, 100, 200, 200] Area 10000
+    ])
+
+    # Prediction [100, 100, 200, 160] -> Inter = 100 * 60 = 6000, Union = 10000 -> IoU = 0.60
+    # At IoU thresh 0.50, 0.55, 0.60 -> TP (3 thresholds)
+    # At IoU thresh 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95 -> FP (7 thresholds)
+    # So mAP50 == 1.0, but mAP50_95 == 3/10 = 0.30
+    mock_boxes = MagicMock()
+    mock_boxes.xyxy.cpu.return_value.numpy.return_value = np.array([[100, 100, 200, 160]])
+    mock_boxes.cls.cpu.return_value.numpy.return_value = np.array([0])
+    mock_boxes.conf.cpu.return_value.numpy.return_value = np.array([0.95])
+    mock_boxes.__len__.return_value = 1
+
+    mock_model = MagicMock()
+    mock_model.predict.return_value = [MagicMock(boxes=mock_boxes)]
+
+    with patch("pathlib.Path.exists", return_value=True):
+        res = evaluate_target_grounding(mock_model, val_images_df, val_annots_df)
+
+    assert res["map50"] == pytest.approx(1.0)
+    assert res["map50_95"] == pytest.approx(0.30)
+    assert res["map50"] > res["map50_95"]
+
+
+def test_nominal_matching_no_double_counting_recall():
+    """Test that a single prediction box matching two GT targets of the same class
+    is only counted ONCE for TP (Recall = 0.50, NOT 1.0)."""
+    val_images_df = pd.DataFrame([
+        {"id": 1, "width": 1000, "height": 1000, "local_path": "fake_img_1.png"}
+    ])
+    val_annots_df = pd.DataFrame([
+        {"image_id": 1, "category_id_1": 0, "category_id_2": 0, "bbox": [100, 100, 50, 50]},
+        {"image_id": 1, "category_id_1": 0, "category_id_2": 0, "bbox": [110, 110, 50, 50]},
+    ])
+
+    # Only 1 prediction box
+    mock_boxes = MagicMock()
+    mock_boxes.xyxy.cpu.return_value.numpy.return_value = np.array([[100, 100, 150, 150]])
+    mock_boxes.cls.cpu.return_value.numpy.return_value = np.array([0])
+    mock_boxes.conf.cpu.return_value.numpy.return_value = np.array([0.90])
+    mock_boxes.__len__.return_value = 1
+
+    mock_model = MagicMock()
+    mock_model.predict.return_value = [MagicMock(boxes=mock_boxes)]
+
+    with patch("pathlib.Path.exists", return_value=True):
+        res = evaluate_target_grounding(mock_model, val_images_df, val_annots_df)
+
+    assert res["total_targets"] == 2
+    assert res["recall_50"] == pytest.approx(0.50)  # Exactly 1 of 2 GTs matched!
+    assert res["precision"] == pytest.approx(1.0)
+
+
+
 
