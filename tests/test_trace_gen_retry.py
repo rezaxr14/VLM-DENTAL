@@ -64,8 +64,13 @@ def test_generation_retry_flow(tmp_path, monkeypatch):
 
     monkeypatch.setattr("scripts.run_trace_gen.generate_only", mock_generate_only)
     monkeypatch.setattr("scripts.run_trace_gen.load_dentex_dataset", lambda **kw: (imgs_df, annots_df, cats_df))
-    monkeypatch.setattr("scripts.run_trace_gen.tg.GENERATOR_PROVIDER", "nvidia_nim")
+    monkeypatch.setattr("dental_agent.data.dentex.download_dentex_slice", lambda ids, **kw: {i: str(tmp_path / f"{i}.jpg") for i in ids})
+    monkeypatch.setenv("GENERATOR_PROVIDER", "nvidia_nim")
     monkeypatch.setattr("scripts.run_trace_gen.verify_local_server_health", lambda **kw: True)
+    monkeypatch.delenv("DENTEX_IMAGES_REPO", raising=False)
+
+
+
 
     # Build mock args
     args = MagicMock()

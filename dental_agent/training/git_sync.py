@@ -143,23 +143,26 @@ def check_for_duplicate_ids(path: str | Path) -> dict[tuple[str, int], int]:
     from collections import Counter
 
     path = Path(path)
-    if not path.exists():
+    if not path.exists() or path.suffix.lower() != ".jsonl":
         return {}
 
     counts: Counter[tuple[str, int]] = Counter()
-    with open(path) as f:
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
         for line in f:
             line = line.strip()
             if not line:
                 continue
             try:
                 record = json.loads(line)
-            except json.JSONDecodeError:
+            except Exception:
                 continue
-            if "image_id" not in record:
+            if not isinstance(record, dict) or "image_id" not in record:
                 continue
-            key = (record.get("dataset", "dentex"), int(record["image_id"]))
-            counts[key] += 1
+            try:
+                key = (str(record.get("dataset", "dentex")), int(record["image_id"]))
+                counts[key] += 1
+            except (ValueError, TypeError):
+                continue
 
     return {k: v for k, v in counts.items() if v > 1}
 

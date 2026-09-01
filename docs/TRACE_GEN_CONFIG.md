@@ -16,8 +16,10 @@ and adjust, rather than re-deriving the reasoning from scratch.
 - **Historical DENTEX-Only Baseline (634 Images)**:
   - 5-fold cross-validation: mean mAP50 = 0.5820 ± 0.0076, mean mAP50-95 = 0.3379 ± 0.0067
   - Best fold (fold 1): mAP50 = 0.5901, mAP50-95 = 0.3464, Precision = 0.5457, Recall = 0.8880
-- **Held-Out Note**:
-  - DENTEX `validation_triple.json` annotates only diseased teeth (~3.6 teeth/image). Full-mouth YOLO detects all ~30 teeth in the mouth, so unannotated healthy teeth are counted as false positives on that specific sparse file. The true full-mouth tooth localization performance is measured by the 5-fold cross-validation on complete tooth annotations (`mAP50 = 0.8695`).
+- **Held-Out Benchmark (`validation_triple.json` - 46 Images, 182 Targets)**:
+  - **DENTEX+Tufts (5-Fold Mean)**: **Target mAP50 = 0.9296**, **Precision = 0.9647**, **Recall@0.50 = 0.7769**, **Mean IoU = 0.6605**
+  - **DENTEX-Only (5-Fold Mean)**: **Target mAP50 = 0.9319**, **Precision = 0.9397**, **Recall@0.50 = 0.8176**, **Mean IoU = 0.6978**
+  - Evaluated via target-filtered 1-to-1 bipartite matching to avoid false positive penalties on unannotated healthy teeth. Full results in `docs/YOLO_CV_RESULTS.md`.
 
 ## Trace-gen Ground-Truth Grounding
 

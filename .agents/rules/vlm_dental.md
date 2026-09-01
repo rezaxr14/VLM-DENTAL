@@ -39,3 +39,7 @@ All agents must adhere to the modular rules in `.agents/rules/`:
    - Zero unprompted local command execution; mandatory consultation before launching commands.
    - Cloud-first delegation: heavy training, cross-validation, and evaluations belong in Google Colab.
    - Zero bandwidth waste: no downloading multi-gigabyte models or datasets to the local development machine.
+
+7. **[Implementation Plan Versioning & Backup](implementation_plan_backup_discipline.md)**:
+   - Mandatory plan archiving: before modifying or rewriting ANY implementation plan (even for a single line), always save the full prior version to the IDE session directory (`<appDataDir>/brain/<conversation-id>/plans/`).
+   - Never overwrite active plans in-place, and never pollute the project repository with backup plans.
