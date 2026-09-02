@@ -47,6 +47,8 @@ data/*.zip
 *.zip
 
 # Ignore all 10 raw CV fold directories and temporary staging folders
+data/models/**/*.jpg
+data/models/**/*.png
 data/models/cv_fold_*
 data/models/dentex_cv_fold_*
 data/models/dentex_tufts_cv_fold_*
