@@ -25,20 +25,39 @@ ENV/
 # Jupyter
 .ipynb_checkpoints/
 
-# Project-specific caches & large files
+# Model weights & large binaries (ignore everywhere)
+*.bin
+*.safetensors
+*.pt
+*.pth
+*.onnx
+*.ckpt
+
+# Project-specific datasets & large files
 hf_cache/
 checkpoints/
 data/dentex/
 data/Tufts/
 data/tufts/
-data/yolo_dentex/
+data/yolo_*/
 data/sample_images/
 data/tool_verification/
 data/*.parquet
 data/*.zip
 *.zip
 
-# Allow synthetic traces and evaluation results to be tracked and synchronized via Git
+# Ignore all 10 raw CV fold directories and temporary staging folders
+data/models/cv_fold_*
+data/models/dentex_cv_fold_*
+data/models/dentex_tufts_cv_fold_*
+data/models/fold_best_models/
+data/models/*_fold_best_models/
+data/models/grounding_tool_heavy/
+data/models/_hf_staging/
+data/models/_hf_download_temp/
+data/models/vllm_cache/
+
+# Allow synthetic traces and evaluation results to be tracked via Git
 !data/traces/
 !data/traces/*
 !data/evaluations/
@@ -53,31 +72,11 @@ data/*.zip
 .DS_Store
 Thumbs.db
 
-# Model weights & large binaries
-*.bin
-*.safetensors
-*.pt
-*.pth
-*.onnx
-*.ckpt
-
 # Logs & state
 *.log
 run_log.jsonl
 runs/
 data/*_pool_state.json
-
-# Ignore raw CV folds and heavy models
-data/models/cv_fold_*
-data/models/fold_best_models/
-data/models/grounding_tool_heavy/
-
-# Allow best grounding tool fold
-!data/models/grounding_tool_cv_best/
-!data/models/grounding_tool_cv_best/*
-!data/models/grounding_tool_cv_best/weights/
-!data/models/grounding_tool_cv_best/weights/best.pt
-
 data/api_usage_state.json
 data/traces/train_cot_traces_unverified.jsonl.bak
 data/traces/train_cot_traces_unverified_no_tools.jsonl.bak
