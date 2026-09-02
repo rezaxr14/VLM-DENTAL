@@ -158,7 +158,7 @@ def download_dentex_slice(
         repo_id = os.environ.get("DENTEX_IMAGES_REPO")
     from dental_agent.data.hf_dataset_utils import download_dataset_slice
     
-    filename_template = "train_images/{id}.png" if split_name in ("train", "training") else "validation_images/{id}.png"
+    filename_template = "images/{id}.png" if split_name in ("train", "training") else "validation_images/{id}.png"
     return download_dataset_slice(image_ids, repo_id=repo_id, filename_template=filename_template, cache_dir=cache_dir)
 
 

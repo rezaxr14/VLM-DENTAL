@@ -88,7 +88,6 @@ def _prepare_dentex_bundle(temp_dir_path: Path, cfg):
         print(f"WARNING: No validation_triple.json found under {dentex_path}.")
 
     return [
-        (train_eligible, "png", "train_images"),
         (val_eligible, "png", "validation_images") if not val_eligible.empty else None
     ]
 
