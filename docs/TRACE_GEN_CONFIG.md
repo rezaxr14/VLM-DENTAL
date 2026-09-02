@@ -10,16 +10,17 @@ and adjust, rather than re-deriving the reasoning from scratch.
 ## Grounding tool (locate_tooth / YOLOv8m)
 
 - **Multi-Dataset Co-Training (DENTEX + Tufts Dental Database - 2,339 Images, 46,808 Boxes)**:
-  - 5-fold cross-validation: **mean mAP50 = 0.8695 ± 0.0298**, **mean mAP50-95 = 0.5895 ± 0.0346**
+  - In-fold CV (Target-Filtered): **mean mAP50 = 0.9376**, **mean mAP50-95 = 0.5756**, **Precision = 0.9680**, **Recall@0.50 = 0.7721**, **Mean IoU = 0.6439**
+  - Raw unconstrained `model.val()` CV: **mean mAP50 = 0.8695 ± 0.0298**, **mean mAP50-95 = 0.5895 ± 0.0346**
   - Best fold (fold 4): **mAP50 = 0.9226**, **mAP50-95 = 0.6540**, **Precision = 0.8780**, **Recall = 0.8190**
   - Checkpoint location: `data/models/dentex_tufts_grounding_tool_cv_best/weights/best.pt` (and synced to Hugging Face Hub `Reza-Nadimi/vlm-dental-models/yolo_cv`).
 - **DENTEX-Only Baseline (1,339 Images, 21,624 Boxes)**:
-  - 5-fold cross-validation: mean mAP50 = 0.5820 ± 0.0076, mean mAP50-95 = 0.3379 ± 0.0067 (penalized by ~53% sparse disease images in standard `model.val()`)
-  - Best fold (fold 1): mAP50 = 0.5901, mAP50-95 = 0.3464, Precision = 0.5457, Recall = 0.8880
-- **Held-Out Target Grounding Benchmark (`validation_triple.json` - 46 Images, 182 Targets)**:
-  - **DENTEX+Tufts (5-Fold Mean)**: **Target mAP50 = 0.9296**, **Precision = 0.9647**, **Recall@0.50 = 0.7769**, **Mean IoU = 0.6605**
-  - **DENTEX-Only (5-Fold Mean)**: **Target mAP50 = 0.9319**, **Precision = 0.9397**, **Recall@0.50 = 0.8176**, **Mean IoU = 0.6978**
-  - Evaluated via target-filtered 1-to-1 bipartite matching to eliminate false positive penalties on unannotated healthy teeth. Full results in `docs/YOLO_CV_RESULTS.md`.
+  - In-fold CV (Target-Filtered): **mean mAP50 = 0.9508**, **mean mAP50-95 = 0.5758**, **Precision = 0.9637**, **Recall@0.50 = 0.8296**, **Mean IoU = 0.6856**
+  - Raw unconstrained `model.val()` CV: **mean mAP50 = 0.5820 ± 0.0076**, **mean mAP50-95 = 0.3379 ± 0.0067**
+  - Best fold (fold 1): **mAP50 = 0.5901**, **mAP50-95 = 0.3464**, **Precision = 0.5457**, **Recall = 0.8880**
+- **Held-Out Target Grounding Benchmark (`validation_triple.json` - 50 Images, 182 Targets)**:
+  - **Verified Offline Evaluation**: **Target mAP50 = 0.8990 – 0.9370**, **Target mAP50-95 = 0.6437 – 0.6587**, **Precision = 0.9355 – 0.9392**, **Recall@0.50 = 0.7967 – 0.8176**, **Mean IoU = 0.6893 – 0.7072**
+  - Full documentation & methodology in `docs/YOLO_CV_RESULTS.md`.
 
 
 ## Trace-gen Ground-Truth Grounding

@@ -855,44 +855,46 @@ def evaluate_benchmark(args):
     dir_suffix = _dataset_dir_suffix(getattr(args, "datasets", "dentex,tufts"))
     prefix = _model_subdir_prefix(dir_suffix)
 
-    # Look for local test set images & labels on disk first (zero remote downloads)
-    test_img_dir = None
-    test_lbl_dir = None
-    for cand_root in [
-        Path(f"data/yolo_{dir_suffix}_cv"),
-        Path("data/yolo_dentex_tufts_cv"),
-        Path("data/yolo_dentex_cv"),
-        Path(f"data/yolo_{dir_suffix}"),
-        Path("data/yolo_dentex"),
-        Path("data/yolo_cv"),
-    ]:
-        for img_sub, lbl_sub in [
-            (cand_root / "test" / "images", cand_root / "test" / "labels"),
-            (cand_root / "images" / "test", cand_root / "labels" / "test"),
-        ]:
-            if img_sub.exists() and lbl_sub.exists() and any(img_sub.iterdir()) and any(lbl_sub.iterdir()):
-                test_img_dir = img_sub
-                test_lbl_dir = lbl_sub
-                break
-        if test_img_dir and test_lbl_dir:
-            break
-
+    # Load authoritative held-out test set (validation split from DENTEX)
     val_images_df = None
     val_annots_df = None
-    if test_img_dir is None or test_lbl_dir is None:
-        try:
-            from dental_agent.data.dentex import load_dentex_dataset
-            from scripts.prepare_yolo_dataset import _ensure_images_downloaded
-            data_dir = getattr(args, "data_dir", None)
-            val_images_df, val_annots_df, _ = load_dentex_dataset(
-                data_dir=data_dir,
-                split_name="validation",
-                combine_enumeration_splits=False,
-            )
-            val_images_df = _ensure_images_downloaded(val_images_df, "dentex", data_dir=data_dir)
-            val_images_df = val_images_df[val_images_df["local_path"].notna()].copy()
-        except Exception as e:
-            print(f"  [Benchmark] Notice: Could not load raw validation DataFrame: {e}")
+    try:
+        from dental_agent.data.dentex import load_dentex_dataset
+        from scripts.prepare_yolo_dataset import _ensure_images_downloaded
+        data_dir = getattr(args, "data_dir", None)
+        val_images_df, val_annots_df, _ = load_dentex_dataset(
+            data_dir=data_dir,
+            split_name="validation",
+            combine_enumeration_splits=False,
+        )
+        val_images_df = _ensure_images_downloaded(val_images_df, "dentex", data_dir=data_dir)
+        val_images_df = val_images_df[val_images_df["local_path"].notna()].copy()
+    except Exception as e:
+        print(f"  [Benchmark] Notice: Could not load raw validation DataFrame: {e}")
+
+    # Fallback: check local YOLO test directories on disk if DataFrame could not be resolved
+    test_img_dir = None
+    test_lbl_dir = None
+    if val_images_df is None or len(val_images_df) == 0:
+        for cand_root in [
+            Path(f"data/yolo_{dir_suffix}_cv"),
+            Path("data/yolo_dentex_tufts_cv"),
+            Path("data/yolo_dentex_cv"),
+            Path(f"data/yolo_{dir_suffix}"),
+            Path("data/yolo_dentex"),
+            Path("data/yolo_cv"),
+        ]:
+            for img_sub, lbl_sub in [
+                (cand_root / "test" / "images", cand_root / "test" / "labels"),
+                (cand_root / "images" / "test", cand_root / "labels" / "test"),
+                (cand_root / "images" / "validation", cand_root / "labels" / "validation"),
+            ]:
+                if img_sub.exists() and lbl_sub.exists() and any(img_sub.iterdir()) and any(lbl_sub.iterdir()):
+                    test_img_dir = img_sub
+                    test_lbl_dir = lbl_sub
+                    break
+            if test_img_dir and test_lbl_dir:
+                break
 
     # Hydrate both model families from local disk or Hugging Face Hub (checks disk first!)
     n_folds = 5
@@ -1129,13 +1131,13 @@ def evaluate_benchmark(args):
 
             print(f"  Evaluating {family_name} Fold {fold + 1}/{n_folds} on held-out test set ({weight_path.name})...")
             model = YOLO(str(weight_path))
-            if test_img_dir and test_lbl_dir:
-                res = evaluate_yolo_labels_target_grounding(
-                    model, test_img_dir, test_lbl_dir, conf_thresh=0.001, nominal_conf_thresh=0.25, imgsz=args.imgsz, device=device
-                )
-            elif val_images_df is not None and val_annots_df is not None:
+            if val_images_df is not None and val_annots_df is not None and len(val_images_df) > 0:
                 res = evaluate_target_grounding(
                     model, val_images_df, val_annots_df, conf_thresh=0.001, nominal_conf_thresh=0.25, imgsz=args.imgsz, device=device
+                )
+            elif test_img_dir and test_lbl_dir:
+                res = evaluate_yolo_labels_target_grounding(
+                    model, test_img_dir, test_lbl_dir, conf_thresh=0.001, nominal_conf_thresh=0.25, imgsz=args.imgsz, device=device
                 )
             else:
                 continue

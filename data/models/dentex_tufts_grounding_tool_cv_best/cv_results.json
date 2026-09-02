@@ -1,0 +1,76 @@
+{
+  "family": "DENTEX+Tufts",
+  "folds": [
+    {
+      "family": "DENTEX+Tufts",
+      "name": "DENTEX+Tufts (CV Fold 0)",
+      "fold": 0,
+      "weight_path": "/content/VLM-DENTAL/data/models/dentex_tufts_cv_fold_0/weights/best.pt",
+      "recall_50": 0.8639386189258312,
+      "recall_75": 0.7127877237851662,
+      "precision": 0.9791304347826087,
+      "mean_iou": 0.7215631782855876,
+      "map50": 0.9675568777305907,
+      "map50_95": 0.606574778577113,
+      "total_targets": 3910
+    },
+    {
+      "family": "DENTEX+Tufts",
+      "name": "DENTEX+Tufts (CV Fold 1)",
+      "fold": 1,
+      "weight_path": "/content/VLM-DENTAL/data/models/dentex_tufts_cv_fold_1/weights/best.pt",
+      "recall_50": 0.8677379480840544,
+      "recall_75": 0.7250927070457355,
+      "precision": 0.9698811826471401,
+      "mean_iou": 0.7274545584730029,
+      "map50": 0.9502415963373587,
+      "map50_95": 0.6017566298402192,
+      "total_targets": 4045
+    },
+    {
+      "family": "DENTEX+Tufts",
+      "name": "DENTEX+Tufts (CV Fold 2)",
+      "fold": 2,
+      "weight_path": "/content/VLM-DENTAL/data/models/dentex_tufts_cv_fold_2/weights/best.pt",
+      "recall_50": 0.6665821501014199,
+      "recall_75": 0.5415821501014199,
+      "precision": 0.9737037037037037,
+      "mean_iou": 0.5555341222609832,
+      "map50": 0.9383577677942708,
+      "map50_95": 0.5688528614391891,
+      "total_targets": 3944
+    },
+    {
+      "family": "DENTEX+Tufts",
+      "name": "DENTEX+Tufts (CV Fold 3)",
+      "fold": 3,
+      "weight_path": "/content/VLM-DENTAL/data/models/dentex_tufts_cv_fold_3/weights/best.pt",
+      "recall_50": 0.8194103194103194,
+      "recall_75": 0.6604422604422604,
+      "precision": 0.9740070093457944,
+      "mean_iou": 0.683801420181313,
+      "map50": 0.9503608255211617,
+      "map50_95": 0.5838566054151957,
+      "total_targets": 4070
+    },
+    {
+      "family": "DENTEX+Tufts",
+      "name": "DENTEX+Tufts (CV Fold 4)",
+      "fold": 4,
+      "weight_path": "/content/VLM-DENTAL/data/models/dentex_tufts_cv_fold_4/weights/best.pt",
+      "recall_50": 0.6430776537639515,
+      "recall_75": 0.5046307290429827,
+      "precision": 0.9432253570184604,
+      "mean_iou": 0.5311480913715085,
+      "map50": 0.8813900715042872,
+      "map50_95": 0.5169112514882361,
+      "total_targets": 4211
+    }
+  ],
+  "mean_recall_50": 0.7721493380571153,
+  "mean_recall_75": 0.628907114083513,
+  "mean_precision": 0.9679895374995414,
+  "mean_iou": 0.643900274114479,
+  "mean_map50": 0.9375814277775338,
+  "mean_map50_95": 0.5755904253519907
+}
