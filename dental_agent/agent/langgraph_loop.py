@@ -672,8 +672,11 @@ def run_trace_gen(
             "You MUST systematically survey candidate teeth across quadrants using locate_tooth and zoom_crop to inspect crown integrity and bone levels, "
             "confirm absence of pathology, and conclude with an empty final answer: final_answer: [].\n\n"
             "Use locate_tooth and zoom_crop to inspect teeth before answering. You MUST use at least one tool before answering — "
-            "do not output final_answer on the first turn. "
-            "Never mention in your reasoning that you were told this is a normal scan — write your thought as genuine clinical observation."
+            "do not output final_answer on the first turn.\n"
+            "CRITICAL INVARIANTS FOR HEALTHY SCANS:\n"
+            "1. Genuine Clinical Observation: Describe normal anatomical structures (intact lamina dura, normal periodontal ligament spaces, clear maxillary sinuses, symmetrical mandibular canals).\n"
+            "2. No Leaks: Never mention in your reasoning that you were given a directive, told this is a normal scan, or instructed to output empty.\n"
+            "3. Internal Consistency: Do NOT claim in your thoughts to observe active pathology (e.g. active caries, apical lesions, pathological impactions) and then contradict yourself by outputting an empty final answer. If a tooth has normal restorations or benign anatomy, explicitly confirm that there is no active disease before concluding with final_answer: []."
         )
     else:
         hint_text = "; ".join(

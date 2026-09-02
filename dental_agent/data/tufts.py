@@ -862,8 +862,11 @@ def load_tufts_normal_dataset(
     normal_ids = set()
     for entry in findings_by_image:
         image_id = entry["image_id"]
-        # If image has zero findings or all findings have title 'None' / unmapped
-        if not entry["findings"] or all(f.get("title") in ("None", None) or f.get("dentex_category_id") is None for f in entry["findings"]):
+        # Strictly normal: must have either zero findings or only explicit 'None' annotations.
+        # Images with unmapped pathologies (Non-Odontogenic cysts, Pericoronal impactions, Inter-Radicular lesions)
+        # must NEVER be classified as normal/healthy negative controls.
+        f_list = entry.get("findings", [])
+        if not f_list or all(f.get("title") in ("None", None) for f in f_list):
             normal_ids.add(image_id)
 
     if available_ids:
