@@ -13,7 +13,7 @@ and adjust, rather than re-deriving the reasoning from scratch.
   - In-fold CV (Target-Filtered): **mean mAP50 = 0.9376**, **mean mAP50-95 = 0.5756**, **Precision = 0.9680**, **Recall@0.50 = 0.7721**, **Mean IoU = 0.6439**
   - Raw unconstrained `model.val()` CV: **mean mAP50 = 0.8695 ± 0.0298**, **mean mAP50-95 = 0.5895 ± 0.0346**
   - Best fold (fold 4): **mAP50 = 0.9226**, **mAP50-95 = 0.6540**, **Precision = 0.8780**, **Recall = 0.8190**
-  - Checkpoint location: `data/models/dentex_tufts_grounding_tool_cv_best/weights/best.pt` (and synced to Hugging Face Hub `Reza-Nadimi/vlm-dental-models/yolo_cv`).
+  - Checkpoint location: `data/models/yolo_cv_best/weights/best.pt` (and synced to Hugging Face Hub `Reza-Nadimi/vlm-dental-models/yolo_cv`).
 - **DENTEX-Only Baseline (1,339 Images, 21,624 Boxes)**:
   - In-fold CV (Target-Filtered): **mean mAP50 = 0.9508**, **mean mAP50-95 = 0.5758**, **Precision = 0.9637**, **Recall@0.50 = 0.8296**, **Mean IoU = 0.6856**
   - Raw unconstrained `model.val()` CV: **mean mAP50 = 0.5820 ± 0.0076**, **mean mAP50-95 = 0.3379 ± 0.0067**

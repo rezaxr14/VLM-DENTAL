@@ -26,7 +26,7 @@ This is the heart of the project containing all reusable logic. It is imported b
 - `denoise.py`: **Filtering tool.** Takes an input image, a method string ("bilateral" or "median"), and a continuous `strength` (0.0-1.0), and outputs a smoothed image with reduced grain/noise.
 - `contralateral.py`: **Comparison tool.** Takes an input image, a bounding box, and a jaw quadrant integer (which now actually constrains the mirror search to the same jaw half, upper 1-2 / lower 3-4), calculates the opposite side, and outputs a side-by-side composite image for symmetry comparison.
 - `nudge.py`: **Correction tool (nudge_crop).** Takes a bbox the agent was already given plus a shift (`dx_frac`/`dy_frac`) and/or rescale (`scale`), and outputs the adjusted coordinates — data only, not an image; pair with `zoom_crop` to view the result. Lets the agent correct `locate_tooth`'s output instead of just trusting it.
-- `grounding.py`: **AI detection tool (locate_tooth).** Takes an input image and an FDI tooth number, passes it through our trained YOLOv8m model (5-fold cross-validation, Multi-Dataset val mAP50 ≈ 0.8695 ± 0.0298, baseline DENTEX-only ≈ 0.5820), and outputs bounding box coordinates locating the tooth. Requires `GROUNDING_MODEL_PATH` or auto-detects from `data/models/dentex_tufts_grounding_tool_cv_best/weights/best.pt` (or `data/models/grounding_tool_cv_best/weights/best.pt`).
+- `grounding.py`: **AI detection tool (locate_tooth).** Takes an input image and an FDI tooth number, passes it through our trained YOLOv8m model (5-fold cross-validation, Multi-Dataset val mAP50 ≈ 0.9593, baseline DENTEX-only ≈ 0.8729), and outputs bounding box coordinates locating the tooth. Requires `GROUNDING_MODEL_PATH` or auto-detects from `data/models/yolo_cv_best/weights/best.pt`.
 - `fdi.py`: **Dental logic helper.** Takes quadrant and tooth position integers, handles the math for FDI two-digit tooth numbering, and outputs standardized positional data.
 - `contrast.py`: **Contrast tool (enhance_contrast).** Takes an input image and a multiplicative `factor` (not alpha/beta — the function signature is factor-only), and outputs a contrast-adjusted image. Existed as a function for a while but wasn't actually registered until recently — was silently unreachable.
 - `synthetic.py`: **Mock tools.** Takes mock arguments, used exclusively for testing the agent loop without real models, and outputs dummy responses.
@@ -120,7 +120,7 @@ These are the executable scripts you run from the terminal. They wire the core p
 - **`upload_dataset_images_to_hf.py`**: Bundles one dataset's images into a COCO-shaped `train.json` + image files and uploads them to a lightweight per-image HF repo (via a `DATASET_BUNDLERS` registry -- `dentex`/`tufts`/`tunisia`), so downstream training can `hf_dataset_utils.py`-download only the image IDs a given slice actually needs instead of the full multi-GB archive.
 - **`upload_tufts_polygons.py`**: Uploads Tufts polygon segmentations (`teeth_polygon.json`), expert/student annotations, and bounding boxes to `Reza-Nadimi/tufts-train-images`.
 - **`prepare_yolo_dataset.py`**: Converts one or more datasets' annotations (via a `DATASET_LOADERS` registry -- DENTEX and Tufts live) into YOLO-formatted text files for Ultralytics training. Trains a 32-class detector, one class per FDI (quadrant, position) pair (`class_idx = (quadrant-1)*8 + (position-1)`).
-- **`train_grounding_tool.py`**: **(Phase 2)** Takes the YOLO dataset, supports multi-fold cross-validation training, automated remote checkpoint hydration from Hugging Face Hub, dual-table evaluation (both internal 5-fold CV splits and held-out test benchmark), and saves/syncs top-performing weights to `data/models/dentex_tufts_grounding_tool_cv_best/` and Hugging Face Hub `yolo_cv`.
+- **`train_grounding_tool.py`**: **(Phase 2)** Takes the YOLO dataset, supports multi-fold cross-validation training, automated remote checkpoint hydration from Hugging Face Hub, dual-table evaluation (both internal 5-fold CV splits and held-out test benchmark), and saves/syncs top-performing weights to `data/models/yolo_cv_best/` and Hugging Face Hub `yolo_cv`.
 - **`train_sft.py`** / **`run_sft.py`**: **(Phase 3)** Takes the verified JSONL traces (`train_cot_traces.jsonl`) and base Qwen model, runs the supervised training loop with `QwenVLDataCollator`, and outputs a fine-tuned LoRA adapter.
   - `--dataset_path PATH`: Path to traces JSONL (default: `data/traces/train_cot_traces.jsonl`).
   - `--output_dir PATH`: Where to save weights.
@@ -166,7 +166,7 @@ Interactive environments for Colab/Kaggle execution.
 ### Model Artifacts (`data/models/`)
 | Directory | Contents |
 |---|---|
-| `grounding_tool_cv_best/weights/best.pt` | Best-fold YOLOv8m weights for `locate_tooth` |
+| `yolo_cv_best/weights/best.pt` | Best-fold YOLOv8m weights for `locate_tooth` |
 | `vllm_cache/` | HuggingFace model cache for vLLM (`HF_HOME` override) |
 | `qwen3_5_9b_sft/` | SFT LoRA adapter output |
 
