@@ -43,3 +43,7 @@ All agents must adhere to the modular rules in `.agents/rules/`:
 7. **[Implementation Plan Versioning & Backup](implementation_plan_backup_discipline.md)**:
    - Mandatory plan archiving: before modifying or rewriting ANY implementation plan (even for a single line), always save the full prior version to the IDE session directory (`<appDataDir>/brain/<conversation-id>/plans/`).
    - Never overwrite active plans in-place, and never pollute the project repository with backup plans.
+
+8. **[Visual Verification Discipline](visual_verification_discipline.md)**:
+   - Zero-hallucination image checking: before claiming an image contains generated visual elements (bounding boxes, charts, etc.), the agent MUST visually verify the image itself using the `view_file` tool.
+   - Never assume an image was rendered correctly just because the code executed without errors.
