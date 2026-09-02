@@ -814,6 +814,8 @@ def download_tufts_slice(
     repo_id: str | None = None,
     cache_dir: str | None = None,
     token: str | None = None,
+    split_name: str | None = None,
+    **kwargs,
 ) -> dict[int, Path | None]:
     """Download only the given image_ids from Tufts' HF images repo (once
     uploaded by scripts/upload_dataset_images_to_hf.py --dataset tufts --
@@ -824,9 +826,13 @@ def download_tufts_slice(
 
     filename_template mirrors Radiographs/{id}.JPG -- the real local Tufts
     folder layout, not a flattened images/{id}.jpg bundle.
+    Accepts split_name (ignored since Tufts images reside under Radiographs/
+    for all splits) and **kwargs for full polymorphism with download_dentex_slice.
     """
     if repo_id is None:
         repo_id = os.environ.get("TUFTS_IMAGES_REPO", "Reza-Nadimi/tufts-train-images")
+    if token is None:
+        token = os.environ.get("HF_TOKEN")
     from dental_agent.data.hf_dataset_utils import download_dataset_slice
     return download_dataset_slice(image_ids, repo_id=repo_id, filename_template="Radiographs/{id}.JPG", cache_dir=cache_dir, token=token)
 

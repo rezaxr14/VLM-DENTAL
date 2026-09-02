@@ -22,9 +22,22 @@ class ToothGrounder:
         # (mAP50 ≈ 0.590, R ≈ 0.888, P ≈ 0.546, from the current CV run in YOLO_CV_RESULTS.md)
         # already clear the bar this tool needs to hit. Point GROUNDING_MODEL_PATH at that
         # fold's best.pt.
-        self.model_path = Path(
-            model_path or os.environ.get("GROUNDING_MODEL_PATH", "data/models/yolo_cv_best/weights/best.pt")
-        )
+        # Resolve model path: explicit argument > candidates/env > default fallback
+        if model_path:
+            self.model_path = Path(model_path)
+        else:
+            candidates = [
+                Path(os.environ["GROUNDING_MODEL_PATH"]) if "GROUNDING_MODEL_PATH" in os.environ else None,
+                Path("data/models/yolo_cv_best/weights/best.pt"),
+                Path("data/models/grounding_tool_cv_best/weights/best.pt"),
+            ]
+            existing = next((c for c in candidates if c and c.exists()), None)
+            if existing:
+                self.model_path = existing
+            else:
+                self.model_path = Path(
+                    os.environ.get("GROUNDING_MODEL_PATH", "data/models/yolo_cv_best/weights/best.pt")
+                )
         self.model = None
         
         if not self.model_path.exists():
@@ -32,20 +45,14 @@ class ToothGrounder:
             try:
                 from huggingface_hub import hf_hub_download
                 repo_id = os.environ.get("HF_ARTIFACT_REPO", "Reza-Nadimi/vlm-dental-models")
-                # The file on HF is stored under 'yolo_cv/' prefix
                 remote_filename = "yolo_cv/yolo_cv_best/weights/best.pt"
-                # Download to data/models (it will map yolo_cv/... properly if we adjust it, but wait: 
-                # actually, local_dir puts the exact path inside. 
-                # If remote is yolo_cv/yolo_cv_best/weights/best.pt, it'll create data/models/yolo_cv/...
-                # which doesn't match our data/models/yolo_cv_best/weights/best.pt directly unless local_dir="data/models".
-                # Let's download it to a temporary spot or just trust hf_hub_download local_dir.
-                # Actually, let's just download the specific file and move it.
+                token = os.environ.get("HF_TOKEN")
                 downloaded_path = hf_hub_download(
                     repo_id=repo_id,
                     filename=remote_filename,
-                    repo_type="model"
+                    repo_type="model",
+                    token=token,
                 )
-                # Ensure the local destination directory exists
                 self.model_path.parent.mkdir(parents=True, exist_ok=True)
                 import shutil
                 shutil.copy2(downloaded_path, self.model_path)
