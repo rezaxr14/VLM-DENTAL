@@ -48,13 +48,23 @@ def main():
     if fetch_models:
         print(f"\n🤖 Fetching YOLO models & checkpoints from {models_repo}/yolo_cv...")
         staging = Path("data/models/_hf_download_temp")
-        snapshot_download(
-            repo_id=models_repo,
-            repo_type="model",
-            token=token,
-            allow_patterns=["yolo_cv/**"],
-            local_dir=str(staging),
-        )
+        while True:
+            try:
+                print("Attempting to download YOLO models...")
+                snapshot_download(
+                    repo_id=models_repo,
+                    repo_type="model",
+                    token=token,
+                    allow_patterns=["yolo_cv/**/*.pt"],
+                    local_dir=str(staging),
+                )
+                break  # Success
+            except Exception as e:
+                print(f"Download failed with error: {e}")
+                print("Retrying in 5 seconds... (Infinite loop enabled)")
+                import time
+                time.sleep(5)
+                
         yolo_dir = staging / "yolo_cv"
         if yolo_dir.exists():
             target_dir = Path("data/models")

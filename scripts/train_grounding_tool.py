@@ -909,8 +909,8 @@ def evaluate_benchmark(args):
     # --- Part 1: In-Fold Cross-Validation Target Grounding Benchmark (Target-Filtered) ---
     cv_val_records = []
     cv_configs = [
-        ("DENTEX-Only", ["dentex_cv_fold_", "cv_fold_"], ["dentex"]),
-        ("DENTEX+Tufts", ["dentex_tufts_cv_fold_"], ["dentex", "tufts"]),
+        ("DENTEX-Only", ["dentex_only_fold_", "dentex_only_fold_"], ["dentex"]),
+        ("DENTEX+Tufts", ["dentex_tufts_fold_"], ["dentex", "tufts"]),
     ]
 
     all_cv_results = {}
@@ -1103,8 +1103,8 @@ def evaluate_benchmark(args):
     
     # Evaluate both families: DENTEX-Only and DENTEX+Tufts
     families = [
-        ("DENTEX-Only", ["dentex_cv_fold_", "cv_fold_"]),
-        ("DENTEX+Tufts", ["dentex_tufts_cv_fold_"]),
+        ("DENTEX-Only", ["dentex_only_fold_", "dentex_only_fold_"]),
+        ("DENTEX+Tufts", ["dentex_tufts_fold_"]),
     ]
 
     for family_name, prefix_options in families:
