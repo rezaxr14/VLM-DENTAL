@@ -316,7 +316,7 @@ def _run_zero_shot_for_target(
                 from dental_agent.data.tufts import download_tufts_slice as _download_slice
             else:
                 from dental_agent.data.dentex import download_dentex_slice as _download_slice
-            local_paths_map = _download_slice(missing_ids, repo_id=repo_id, cache_dir=cfg.data_dir)
+            local_paths_map = _download_slice(missing_ids, repo_id=repo_id, cache_dir=cfg.data_dir, split_name=args.split)
             def _update_path(row):
                 pid = row["id"]
                 if pid in local_paths_map and local_paths_map[pid] is not None:

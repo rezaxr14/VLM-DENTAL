@@ -292,7 +292,7 @@ def _run_generate_for_dataset(args: argparse.Namespace, cfg: Any, dataset_name: 
             from dental_agent.data.tufts import download_tufts_slice as _download_slice
         else:
             from dental_agent.data.dentex import download_dentex_slice as _download_slice
-        local_paths_map = _download_slice(needed_ids, repo_id=repo_id, cache_dir=cfg.data_dir)
+        local_paths_map = _download_slice(needed_ids, repo_id=repo_id, cache_dir=cfg.data_dir, split_name=args.split)
         def _update_path(row):
             pid = row["id"]
             if pid in local_paths_map and local_paths_map[pid] is not None:
@@ -647,7 +647,7 @@ def _run_verify_for_dataset(
                 from dental_agent.data.tufts import download_tufts_slice as _download_slice
             else:
                 from dental_agent.data.dentex import download_dentex_slice as _download_slice
-            _download_slice(pending_to_verify, repo_id=repo_id, cache_dir=cfg.data_dir)
+            _download_slice(pending_to_verify, repo_id=repo_id, cache_dir=cfg.data_dir, split_name=args.split)
         except Exception as e:
             print(f"Warning: Slice pre-fetch skipped ({e})")
 

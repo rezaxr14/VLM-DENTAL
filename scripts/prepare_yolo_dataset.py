@@ -163,6 +163,7 @@ def _ensure_images_downloaded(
     images_df: pd.DataFrame,
     dataset_name: str,
     data_dir: str | Path | None = None,
+    split_name: str = "validation",
 ) -> pd.DataFrame:
     """Check if images_df has rows with missing local_path (e.g. fresh Colab session).
     If so, auto-download the missing image slices via download_dentex_slice / download_tufts_slice
@@ -193,7 +194,7 @@ def _ensure_images_downloaded(
         from dental_agent.data.dentex import download_dentex_slice
         repo_id = os.environ.get("DENTEX_IMAGES_REPO")
         if repo_id:
-            paths_map = download_dentex_slice(missing_ids, repo_id=repo_id, cache_dir=str(data_dir) if data_dir else None)
+            paths_map = download_dentex_slice(missing_ids, repo_id=repo_id, cache_dir=str(data_dir) if data_dir else None, split_name=split_name)
             for img_id, p in paths_map.items():
                 if p and Path(p).exists():
                     images_df.loc[images_df["id"] == img_id, "local_path"] = str(Path(p).resolve())
@@ -286,7 +287,7 @@ def convert_to_yolo_format(output_dir: str | Path, split: str = "train", data_di
             print(f"Failed to load '{dataset_name}' split '{split}': {e}")
             continue
 
-        images_df = _ensure_images_downloaded(images_df, dataset_name, data_dir=data_dir)
+        images_df = _ensure_images_downloaded(images_df, dataset_name, data_dir=data_dir, split_name=split)
         valid_images = images_df[images_df["local_path"].notna()].copy()
         print(f"Found {len(valid_images)} valid images in {dataset_name} for split '{split}'. Processing...")
 

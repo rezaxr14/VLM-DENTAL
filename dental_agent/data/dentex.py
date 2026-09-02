@@ -145,6 +145,7 @@ def download_dentex_slice(
     image_ids: list[int],
     repo_id: str | None = None,
     cache_dir: str | None = None,
+    split_name: str = "validation",
 ) -> dict[int, Path | None]:
     """Download only the given image_ids from the lightweight per-image HF repo.
     Returns {image_id: local_path}. Falls back to None entries if fetch fails.
@@ -156,7 +157,9 @@ def download_dentex_slice(
     if repo_id is None:
         repo_id = os.environ.get("DENTEX_IMAGES_REPO")
     from dental_agent.data.hf_dataset_utils import download_dataset_slice
-    return download_dataset_slice(image_ids, repo_id=repo_id, filename_template="images/{id}.png", cache_dir=cache_dir)
+    
+    filename_template = "train_images/{id}.png" if split_name in ("train", "training") else "validation_images/{id}.png"
+    return download_dataset_slice(image_ids, repo_id=repo_id, filename_template=filename_template, cache_dir=cache_dir)
 
 
 def extract_dentex_zips(root_dir: str | Path, remove_zips: bool = True) -> None:

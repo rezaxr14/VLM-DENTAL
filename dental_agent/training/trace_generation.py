@@ -808,7 +808,7 @@ def resolve_trace_image_path(
         if repo_id:
             try:
                 from dental_agent.data.dentex import download_dentex_slice
-                paths_map = download_dentex_slice([norm_id], repo_id=repo_id, cache_dir=data_dir)
+                paths_map = download_dentex_slice([norm_id], repo_id=repo_id, cache_dir=data_dir, split_name="train")
                 if norm_id in paths_map and paths_map[norm_id] is not None:
                     p_down = Path(paths_map[norm_id])
                     if p_down.exists():

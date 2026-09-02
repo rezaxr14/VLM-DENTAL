@@ -87,8 +87,10 @@ def _prepare_dentex_bundle(temp_dir_path: Path, cfg):
     else:
         print(f"WARNING: No validation_triple.json found under {dentex_path}.")
 
-    eligible_imgs = pd.concat([train_eligible, val_eligible]).drop_duplicates(subset=["id"]) if not val_eligible.empty else train_eligible
-    return eligible_imgs, "png", "images"
+    return [
+        (train_eligible, "png", "train_images"),
+        (val_eligible, "png", "validation_images") if not val_eligible.empty else None
+    ]
 
 
 def _prepare_tufts_bundle(temp_dir_path: Path, cfg):
@@ -139,7 +141,7 @@ def _prepare_tufts_bundle(temp_dir_path: Path, cfg):
 
     # Return all 1,000 images from load_tufts_tooth_boxes
     all_imgs_df, _, _ = load_tufts_tooth_boxes(data_dir=cfg.data_dir)
-    return all_imgs_df, "JPG", "Radiographs"
+    return [(all_imgs_df, "JPG", "Radiographs")]
 
 
 def _prepare_tunisia_bundle(temp_dir_path: Path, cfg):
@@ -162,7 +164,7 @@ def _prepare_tunisia_bundle(temp_dir_path: Path, cfg):
     valid_imgs = imgs_df[imgs_df["local_path"].notna()]
     annotated_ids = set(annots_df["image_id"].unique())
     eligible_imgs = valid_imgs[valid_imgs["id"].isin(annotated_ids)]
-    return eligible_imgs, "jpg", "images"
+    return [(eligible_imgs, "jpg", "images")]
 
 
 # Add a new dataset by adding one entry here, pointing at a new bundler
@@ -198,21 +200,24 @@ def main():
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_dir_path = Path(temp_dir)
 
-        eligible_imgs, image_ext, target_subfolder = DATASET_BUNDLERS[args.dataset](temp_dir_path, cfg)
-        dest_images_dir = temp_dir_path / target_subfolder
-        dest_images_dir.mkdir(parents=True, exist_ok=True)
-        print(f"Found {len(eligible_imgs)} valid annotated images to stage into {target_subfolder}/...")
+        bundles = DATASET_BUNDLERS[args.dataset](temp_dir_path, cfg)
+        for bundle in bundles:
+            if not bundle: continue
+            eligible_imgs, image_ext, target_subfolder = bundle
+            dest_images_dir = temp_dir_path / target_subfolder
+            dest_images_dir.mkdir(parents=True, exist_ok=True)
+            print(f"Found {len(eligible_imgs)} valid annotated images to stage into {target_subfolder}/...")
 
-        for idx, row in eligible_imgs.reset_index(drop=True).iterrows():
-            img_id = int(row["id"])
-            local_path = str(row["local_path"])
-            dest_path = dest_images_dir / f"{img_id}.{image_ext}"
-            try:
-                os.link(local_path, dest_path)
-            except Exception:
-                shutil.copy2(local_path, dest_path)
-            if (idx + 1) % 250 == 0 or (idx + 1) == len(eligible_imgs):
-                print(f"  Staged {idx + 1}/{len(eligible_imgs)} images...")
+            for idx, row in eligible_imgs.reset_index(drop=True).iterrows():
+                img_id = int(row["id"])
+                local_path = str(row["local_path"])
+                dest_path = dest_images_dir / f"{img_id}.{image_ext}"
+                try:
+                    os.link(local_path, dest_path)
+                except Exception:
+                    shutil.copy2(local_path, dest_path)
+                if (idx + 1) % 250 == 0 or (idx + 1) == len(eligible_imgs):
+                    print(f"  Staged {idx + 1}/{len(eligible_imgs)} images into {target_subfolder}/...")
 
         print(f"Uploading bundled dataset to {args.repo_id} (private={not args.public})...")
         max_retries = 12
