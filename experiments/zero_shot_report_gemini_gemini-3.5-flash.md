@@ -2,9 +2,9 @@
 
 ## Benchmark Performance Summary
 
-| Method / Model                      | Format Ok (%)   | FDI Acc (%)   |   FDI F1 | Pathology Acc (%)   |   Pathology F1 | Exact Match (%)   | Exact Match 95% CI   |   Closeness |    ECE |   Avg Tool Calls |
-|-------------------------------------|-----------------|---------------|----------|---------------------|----------------|-------------------|----------------------|-------------|--------|------------------|
-| Zero-Shot (gemini/gemini-3.5-flash) | 100.0%          | 58.7%         |    0.285 | 28.3%               |          0.283 | 28.3%             | [0.152, 0.413]       |       0.462 | 0.6391 |                0 |
+| Method / Model                      | Format Ok (%)   | FDI Acc (%)   |   FDI F1 | Pathology Acc (%)   |   Pathology F1 | Exact Match (%)   | Exact Match 95% CI   |   Closeness |   ECE |   Avg Tool Calls |
+|-------------------------------------|-----------------|---------------|----------|---------------------|----------------|-------------------|----------------------|-------------|-------|------------------|
+| Zero-Shot (gemini/gemini-3.5-flash) | 100.0%          | 60.0%         |    0.405 | 40.0%               |            0.4 | 40.0%             | [0.000, 0.800]       |        0.66 | 0.536 |                0 |
 
 ---
 
@@ -13,9 +13,9 @@
 ```latex
 \begin{tabular}{lllrlrllrrr}
 \hline
- Method / Model                      & Format Ok (\%)   & FDI Acc (\%)   &   FDI F1 & Pathology Acc (\%)   &   Pathology F1 & Exact Match (\%)   & Exact Match 95\% CI   &   Closeness &    ECE &   Avg Tool Calls \\
+ Method / Model                      & Format Ok (\%)   & FDI Acc (\%)   &   FDI F1 & Pathology Acc (\%)   &   Pathology F1 & Exact Match (\%)   & Exact Match 95\% CI   &   Closeness &   ECE &   Avg Tool Calls \\
 \hline
- Zero-Shot (gemini/gemini-3.5-flash) & 100.0\%          & 58.7\%         &    0.285 & 28.3\%               &          0.283 & 28.3\%             & [0.152, 0.413]       &       0.462 & 0.6391 &                0 \\
+ Zero-Shot (gemini/gemini-3.5-flash) & 100.0\%          & 60.0\%         &    0.405 & 40.0\%               &            0.4 & 40.0\%             & [0.000, 0.800]       &        0.66 & 0.536 &                0 \\
 \hline
 \end{tabular}
 ```
