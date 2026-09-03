@@ -4,7 +4,7 @@
 
 | Method / Model                            | Format Ok (%)   | FDI Acc (%)   |   FDI F1 | Pathology Acc (%)   |   Pathology F1 | Exact Match (%)   | Exact Match 95% CI   |   Closeness |   ECE |   Avg Tool Calls |
 |-------------------------------------------|-----------------|---------------|----------|---------------------|----------------|-------------------|----------------------|-------------|-------|------------------|
-| Zero-Shot (nvidia_nim/moonshotai/kimi-k3) | 100.0%          | 50.0%         |    0.327 | 50.0%               |            0.5 | 50.0%             | [0.125, 0.875]       |       0.566 |  0.19 |                0 |
+| Zero-Shot (nvidia_nim/moonshotai/kimi-k3) | 100.0%          | 66.7%         |    0.408 | 50.0%               |            0.5 | 50.0%             | [0.248, 0.750]       |       0.606 | 0.255 |                0 |
 
 ---
 
@@ -15,7 +15,7 @@
 \hline
  Method / Model                            & Format Ok (\%)   & FDI Acc (\%)   &   FDI F1 & Pathology Acc (\%)   &   Pathology F1 & Exact Match (\%)   & Exact Match 95\% CI   &   Closeness &   ECE &   Avg Tool Calls \\
 \hline
- Zero-Shot (nvidia\_nim/moonshotai/kimi-k3) & 100.0\%          & 50.0\%         &    0.327 & 50.0\%               &            0.5 & 50.0\%             & [0.125, 0.875]       &       0.566 &  0.19 &                0 \\
+ Zero-Shot (nvidia\_nim/moonshotai/kimi-k3) & 100.0\%          & 66.7\%         &    0.408 & 50.0\%               &            0.5 & 50.0\%             & [0.248, 0.750]       &       0.606 & 0.255 &                0 \\
 \hline
 \end{tabular}
 ```
