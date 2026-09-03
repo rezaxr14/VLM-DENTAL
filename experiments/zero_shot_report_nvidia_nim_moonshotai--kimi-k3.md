@@ -2,9 +2,9 @@
 
 ## Benchmark Performance Summary
 
-| Method / Model                            | Format Ok (%)   | FDI Acc (%)   |   FDI F1 | Pathology Acc (%)   |   Pathology F1 | Exact Match (%)   | Exact Match 95% CI   |   Closeness |   ECE |   Avg Tool Calls |
-|-------------------------------------------|-----------------|---------------|----------|---------------------|----------------|-------------------|----------------------|-------------|-------|------------------|
-| Zero-Shot (nvidia_nim/moonshotai/kimi-k3) | 100.0%          | 66.7%         |    0.408 | 50.0%               |            0.5 | 50.0%             | [0.248, 0.750]       |       0.606 | 0.255 |                0 |
+| Method / Model                            | Format Ok (%)   | FDI Acc (%)   |   FDI F1 | Pathology Acc (%)   |   Pathology F1 | Exact Match (%)   | Exact Match 95% CI   |   Closeness |    ECE |   Avg Tool Calls |
+|-------------------------------------------|-----------------|---------------|----------|---------------------|----------------|-------------------|----------------------|-------------|--------|------------------|
+| Zero-Shot (nvidia_nim/moonshotai/kimi-k3) | 100.0%          | 62.5%         |    0.358 | 50.0%               |            0.5 | 50.0%             | [0.250, 0.750]       |       0.588 | 0.2144 |                0 |
 
 ---
 
@@ -13,9 +13,9 @@
 ```latex
 \begin{tabular}{lllrlrllrrr}
 \hline
- Method / Model                            & Format Ok (\%)   & FDI Acc (\%)   &   FDI F1 & Pathology Acc (\%)   &   Pathology F1 & Exact Match (\%)   & Exact Match 95\% CI   &   Closeness &   ECE &   Avg Tool Calls \\
+ Method / Model                            & Format Ok (\%)   & FDI Acc (\%)   &   FDI F1 & Pathology Acc (\%)   &   Pathology F1 & Exact Match (\%)   & Exact Match 95\% CI   &   Closeness &    ECE &   Avg Tool Calls \\
 \hline
- Zero-Shot (nvidia\_nim/moonshotai/kimi-k3) & 100.0\%          & 66.7\%         &    0.408 & 50.0\%               &            0.5 & 50.0\%             & [0.248, 0.750]       &       0.606 & 0.255 &                0 \\
+ Zero-Shot (nvidia\_nim/moonshotai/kimi-k3) & 100.0\%          & 62.5\%         &    0.358 & 50.0\%               &            0.5 & 50.0\%             & [0.250, 0.750]       &       0.588 & 0.2144 &                0 \\
 \hline
 \end{tabular}
 ```
