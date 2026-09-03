@@ -152,6 +152,7 @@ def generate_interactive_trajectory(
     provider: str | None = None,
     model: str | None = None,
     call_llm_fn: Callable[..., str] | None = None,
+    dataset: str = "dentex",
 ) -> tuple[dict[str, Any] | None, str | None]:
     """Ground-truth-directed trace generation with REAL tool execution via LangGraph.
 
@@ -162,7 +163,7 @@ def generate_interactive_trajectory(
     here (tests/ should do this via monkeypatch, not this parameter).
     """
     gen_provider, gen_model = (provider, model) if provider and model else _resolve_generator()
-    system_prompt = build_agent_system_prompt(registry.format_tool_descriptions())
+    system_prompt = build_agent_system_prompt(registry.format_tool_descriptions(), dataset=dataset)
     
     return run_trace_gen(
         image=image,
@@ -519,6 +520,7 @@ def generate_only(
     healthy_only: bool = False,
     provider: str | None = None,
     model: str | None = None,
+    dataset: str = "dentex",
 ) -> dict[str, Any] | None:
     """Generate a raw (unverified) trace for a single image.
     
@@ -573,6 +575,7 @@ def generate_only(
         max_identical_repeats=max_identical_repeats,
         provider=provider,
         model=model,
+        dataset=dataset,
     )
     if traj is None or traj.get("final_answer") is None:
         return {
@@ -605,6 +608,7 @@ def generate_only_no_tools(
     healthy_only: bool = False,
     provider: str | None = None,
     model: str | None = None,
+    dataset: str = "dentex",
 ) -> dict[str, Any] | None:
     """Tool-free sibling of generate_only -- for baseline #3's SFT training
     data (dentex-agentic-vlm-proposal.md §6). Mirrors generate_only's exact

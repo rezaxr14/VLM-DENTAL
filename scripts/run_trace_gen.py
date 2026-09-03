@@ -358,6 +358,7 @@ def _run_generate_for_dataset(args: argparse.Namespace, cfg: Any, dataset_name: 
                 healthy_only=healthy,
                 provider=gen_prov,
                 model=gen_mod,
+                dataset=dataset_name,
             )
         else:
             res = generate_only(
@@ -379,6 +380,7 @@ def _run_generate_for_dataset(args: argparse.Namespace, cfg: Any, dataset_name: 
                 healthy_only=healthy,
                 provider=gen_prov,
                 model=gen_mod,
+                dataset=dataset_name,
             )
         elapsed = time.time() - t0
         return res, elapsed

@@ -85,6 +85,7 @@ def _reasoning_node_factory(
     provider: str,
     model: str,
     max_tool_calls: int,
+    ground_truth: list[dict[str, Any]] | None = None,
     min_turns: int = 5,
     max_turns: int = 25,
     max_tokens: int | None = None,
@@ -347,6 +348,23 @@ def _reasoning_node_factory(
                 return state
 
             proposed = parsed["final_answer"]
+
+            # Ground-truth healthy invariant: clinically verified healthy scans must not output findings
+            if not ground_truth and proposed != [] and proposed is not None:
+                turn_record["status"] = "rejected_final_answer"
+                state["turns"].append(turn_record)
+                state["messages"].append({
+                    "role": "user",
+                    "content": (
+                        "Error: This radiograph is from a clinically verified healthy cohort with NO pathology/disease findings (0 findings). "
+                        "Do not diagnose any pathologies or impactions in final_answer. Third molars or anatomical variations are physiological. "
+                        "Review your observations to confirm absence of disease, and conclude with an empty final answer: "
+                        '{"thought": "<clinical reasoning confirming physiological anatomy>", "final_answer": []}'
+                    ),
+                })
+                state["status"] = "running"
+                return state
+
             if isinstance(proposed, list):
                 unlocated = [
                     f for f in proposed
@@ -616,6 +634,7 @@ def build_trace_gen_graph(
         provider=provider,
         model=model,
         max_tool_calls=max_tool_calls,
+        ground_truth=ground_truth or [],
         min_turns=min_turns,
         max_turns=max_turns,
         max_tokens=max_tokens,
@@ -676,7 +695,8 @@ def run_trace_gen(
             "CRITICAL INVARIANTS FOR HEALTHY SCANS:\n"
             "1. Genuine Clinical Observation: Describe normal anatomical structures (intact lamina dura, normal periodontal ligament spaces, clear maxillary sinuses, symmetrical mandibular canals).\n"
             "2. No Leaks: Never mention in your reasoning that you were given a directive, told this is a normal scan, or instructed to output empty.\n"
-            "3. Internal Consistency: Do NOT claim in your thoughts to observe active pathology (e.g. active caries, apical lesions, pathological impactions) and then contradict yourself by outputting an empty final answer. If a tooth has normal restorations or benign anatomy, explicitly confirm that there is no active disease before concluding with final_answer: []."
+            "3. Internal Consistency: Do NOT claim in your thoughts to observe active pathology (e.g. active caries, apical lesions, pathological impactions) and then contradict yourself by outputting an empty final answer. If a tooth has normal restorations or benign anatomy, explicitly confirm that there is no active disease before concluding with final_answer: [].\n"
+            "4. Normal Anatomical Variations & Third Molars: Developing, unerupted, or partially erupted third molars (teeth 18, 28, 38, 48) and minor crowding are normal physiological variations in this cohort and are NOT pathologies. Do NOT diagnose them as 'Impacted Tooth' or disease. Always conclude with: final_answer: []."
         )
     else:
         hint_text = "; ".join(

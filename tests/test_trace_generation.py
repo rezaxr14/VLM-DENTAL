@@ -97,4 +97,38 @@ def test_identical_tool_loop_guard():
         assert "identical_tool_loop" in error
 
 
+def test_healthy_scan_final_answer_enforcement():
+    """Test that on a healthy scan (gt=[]), non-empty final_answer is rejected until corrected to []."""
+    registry = ToolRegistry.create_default()
+    image = Image.new("RGB", (100, 100), color="white")
+    gt = []
+
+    responses = [
+        '{"thought": "Bone window", "tool_calls": [{"tool": "window_level", "args": {"preset": "bone"}}]}',
+        '{"thought": "Locating 18", "tool_calls": [{"tool": "locate_tooth", "args": {"tooth": 18}}]}',
+        '{"thought": "Zooming", "tool_calls": [{"tool": "zoom_crop", "args": {"bbox": [10, 10, 20, 20]}}]}',
+        '{"thought": "Tooth 18 is impacted", "final_answer": [{"quadrant": 1, "tooth_position": 8, "diagnosis": "Impacted Tooth", "confidence": 0.9}]}',
+        '{"thought": "Re-evaluating confirms normal physiological anatomy with no pathology across all quadrants.", "final_answer": []}',
+    ]
+    resp_iter = iter(responses)
+
+    with patch("dental_agent.agent.langgraph_loop.call_llm", side_effect=lambda **kw: next(resp_iter)):
+        traj, error = run_trace_gen(
+            image=image,
+            ground_truth=gt,
+            registry=registry,
+            system_prompt="",
+            min_turns=3,
+            max_turns=10,
+        )
+        assert traj is not None
+        assert error is None
+        assert traj["final_answer"] == []
+
+        # Verify that the faulty turn was rejected
+        statuses = [t.get("status") for t in traj.get("turns", [])]
+        assert "rejected_final_answer" in statuses
+
+
+
 
