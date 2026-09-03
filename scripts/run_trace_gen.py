@@ -94,6 +94,7 @@ def resolve_trace_paths(
     dataset_name: str = "dentex",
     no_tools: bool = False,
     healthy_only: bool = False,
+    tufts_all_diseases: bool = False,
     explicit_output: str | Path | None = None,
     explicit_verified_output: str | Path | None = None,
 ) -> tuple[Path, Path]:
@@ -101,13 +102,14 @@ def resolve_trace_paths(
     clean_ds = (dataset_name.split(",")[0] if "," in dataset_name else dataset_name).strip().lower()
     suffix = "_no_tools" if no_tools else ""
     healthy_prefix = "healthy_" if healthy_only else ""
+    ds_key = f"{clean_ds}_all" if (clean_ds == "tufts" and tufts_all_diseases and not healthy_only) else clean_ds
 
     # 1. Resolve unverified path
     if explicit_output:
         unverified_path = Path(explicit_output)
     else:
-        canonical_unverified = Path(f"data/traces/train_cot_traces_unverified_{healthy_prefix}{clean_ds}{suffix}.jsonl")
-        if canonical_unverified.exists() or healthy_only:
+        canonical_unverified = Path(f"data/traces/train_cot_traces_unverified_{healthy_prefix}{ds_key}{suffix}.jsonl")
+        if canonical_unverified.exists() or healthy_only or tufts_all_diseases:
             unverified_path = canonical_unverified
         else:
             legacy_candidates = [
@@ -130,6 +132,8 @@ def resolve_trace_paths(
     else:
         if healthy_only:
             verified_path = Path(f"data/traces/train_cot_traces_healthy_{clean_ds}{suffix}.jsonl")
+        elif tufts_all_diseases and clean_ds == "tufts":
+            verified_path = Path(f"data/traces/train_cot_traces_tufts_all{suffix}.jsonl")
         else:
             verified_path = Path(f"data/traces/train_cot_traces{suffix}.jsonl")
 
@@ -240,12 +244,14 @@ def run_generate(args: argparse.Namespace, cfg: Any) -> None:
         dataset_list = ["dentex"]
 
     healthy = getattr(args, "healthy_only", False)
+    tufts_all = getattr(args, "tufts_all_diseases", False)
 
     for dataset_name in dataset_list:
         output_path, _ = resolve_trace_paths(
             dataset_name=dataset_name,
             no_tools=args.no_tools,
             healthy_only=healthy,
+            tufts_all_diseases=tufts_all,
             explicit_output=args.output or getattr(args, "output_path", None),
         )
 
@@ -266,7 +272,9 @@ def _run_generate_for_dataset(args: argparse.Namespace, cfg: Any, dataset_name: 
         eligible_imgs = imgs_df.copy()
     else:
         if dataset_name == "tufts":
-            imgs_df, annots_df, cats_df = load_tufts_dataset(data_dir=cfg.data_dir)
+            imgs_df, annots_df, cats_df = load_tufts_dataset(
+                data_dir=cfg.data_dir, all_diseases=getattr(args, "tufts_all_diseases", False)
+            )
         else:
             imgs_df, annots_df, cats_df = load_dentex_dataset(
                 data_dir=cfg.data_dir, split_name=args.split
@@ -348,6 +356,7 @@ def _run_generate_for_dataset(args: argparse.Namespace, cfg: Any, dataset_name: 
 
     def _execute_gen_attempt(target_id: int) -> tuple[dict[str, Any] | None, float]:
         t0 = time.time()
+        dataset_key = "tufts_all" if (dataset_name == "tufts" and getattr(args, "tufts_all_diseases", False)) else dataset_name
         if args.no_tools:
             res = generate_only_no_tools(
                 image_id=target_id,
@@ -358,7 +367,7 @@ def _run_generate_for_dataset(args: argparse.Namespace, cfg: Any, dataset_name: 
                 healthy_only=healthy,
                 provider=gen_prov,
                 model=gen_mod,
-                dataset=dataset_name,
+                dataset=dataset_key,
             )
         else:
             res = generate_only(
@@ -380,7 +389,7 @@ def _run_generate_for_dataset(args: argparse.Namespace, cfg: Any, dataset_name: 
                 healthy_only=healthy,
                 provider=gen_prov,
                 model=gen_mod,
-                dataset=dataset_name,
+                dataset=dataset_key,
             )
         elapsed = time.time() - t0
         return res, elapsed
@@ -589,6 +598,7 @@ def run_verify(args: argparse.Namespace, cfg: Any) -> None:
             dataset_name=dataset_name,
             no_tools=args.no_tools,
             healthy_only=getattr(args, "healthy_only", False),
+            tufts_all_diseases=getattr(args, "tufts_all_diseases", False),
             explicit_output=args.output,
             explicit_verified_output=getattr(args, "verified_output", None),
         )
@@ -727,6 +737,7 @@ def run_repair(args: argparse.Namespace, cfg: Any) -> None:
         dataset_name=dataset_name,
         no_tools=args.no_tools,
         healthy_only=healthy,
+        tufts_all_diseases=getattr(args, "tufts_all_diseases", False),
         explicit_output=args.output or getattr(args, "output_path", None),
         explicit_verified_output=getattr(args, "verified_output", None) or getattr(args, "verified_output_path", None),
     )
@@ -1017,6 +1028,12 @@ def parse_args() -> argparse.Namespace:
         "--ignore-api-errors",
         action="store_true",
         help="Ignore all API errors (including rate limits) and retry up to 10 times (overrides rule)",
+    )
+    parser.add_argument(
+        "--tufts-all-diseases",
+        action="store_true",
+        default=False,
+        help="Generate or verify traces across all 4 native Tufts disease categories (Periapical, Non-Odontogenic, Pericoronal, Inter-Radicular)",
     )
     args = parser.parse_args()
     if args.total_slices > 1 and not (1 <= args.slice_index <= args.total_slices):

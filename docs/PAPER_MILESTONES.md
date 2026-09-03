@@ -55,3 +55,62 @@ Future SFT, GRPO, and Trace Generation findings should also be appended here.
 2. **Dense Dataset Transfer**: Co-training with 1,000 dense Tufts images increases target grounding Target mAP50 from **0.9089 to 0.9260** and Precision from **0.9393 to 0.9634**.
 3. **Model Artifacts**: Best models and evaluation summaries are preserved at `data/models/yolo_cv_best/` and synced to Hugging Face Hub `Reza-Nadimi/vlm-dental-models/yolo_cv`.
 
+---
+
+## 4. Chain-of-Thought (CoT) Synthetic Traces & Autonomous Verifier Benchmark
+
+*Methodology: Measures synthetic clinical reasoning trace generation under real dynamic tool execution (LangGraph agent loop) and strict multi-modal verification via frontier LLM verifiers (MiniMax M3 / Gemini 3.5 Flash Lite). Evaluates first-pass compliance, automated repair recovery yield, multi-turn reasoning depth, and multi-finding clinical completeness across 3,134 verified traces.*
+
+### Comprehensive Dataset Verification & Historical Repair Audit
+
+| Cohort / Dataset Split | Tool Modality | Total Target | First-Pass Verified | Rejected | Repaired & Promoted | Final Verified Yield | First-Pass Pass Rate | Final Yield Rate | Canonical File / Commit Reference |
+|---|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|---|
+| **DENTEX Pathology** | With Tools (Main Policy) | 678 | 667 | 11 | 11 | **678** | 98.38% | **100.0%** | `train_cot_traces_dentex.jsonl` (Git `3c2ce7f`) |
+| **DENTEX Pathology** | No-Tools (Baseline 3) | 678 | 666 | 12 | 12 | **678** | 98.23% | **100.0%** | `train_cot_traces_dentex_no_tools.jsonl` (Git `f6e8b37`, `4c0f627`) |
+| **DENTEX Normal (Healthy)** | With Tools | 27 | 27 | 0 | 0 | **27** | 100.0% | **100.0%** | `train_cot_traces_healthy_dentex.jsonl` (Git `990157a`) |
+| **DENTEX Normal (Healthy)** | No-Tools | 27 | 27 | 0 | 0 | **27** | 100.0% | **100.0%** | `train_cot_traces_healthy_dentex_no_tools.jsonl` |
+| **TUFTS Overlap Pathology** | With Tools (Main Policy) | 202 | 202 | 0 | 0 | **202** | 100.0% | **100.0%** | `train_cot_traces_tufts.jsonl` (Git `6d2eb06`) |
+| **TUFTS Overlap Pathology** | No-Tools (Baseline 3) | 202 | 199 | 3 | 3 | **202** | 98.51% | **100.0%** | `train_cot_traces_tufts_no_tools.jsonl` (Git `27b2e47`, `298d9a0`) |
+| **TUFTS Normal (Healthy)** | With Tools | 660 | 594 | 66 | 66 | **660** | 90.00% | **100.0%** | `train_cot_traces_healthy_tufts.jsonl` (Git `60f450b`) |
+| **TUFTS Normal (Healthy)** | No-Tools | 660 | 660 | 0 | 0 | **660** | 100.0% | **100.0%** | `train_cot_traces_healthy_tufts_no_tools.jsonl` (Git `1a32c32`) |
+| **TOTALS ACROSS PROJECT** | **Combined Corpus** | **3,134** | **3,042** | **92** | **92** | **3,134** | **97.06%** | **100.0%** | Canonical Unified SFT / RL Training Corpus |
+
+### Hybrid Composition of the Canonical Training Corpus
+The canonical training files used by downstream Stage 1 SFT (`VLM_Dental_Colab_SFT.ipynb`) and Stage 2 GRPO (`VLM_Dental_Colab_GRPO.ipynb`) are unified hybrid corpora containing **880 pathology traces**:
+- **Lines 1 to 678 (678 traces)**: DENTEX pathology cohort (Images 1 to 705).
+- **Lines 679 to 880 (202 traces)**: Tufts Dental Database Periapical Lesion overlap cohort (Images 1 to 1037).
+- To preserve maximum experimental reproducibility, decoupled standalone files are maintained at `train_cot_traces_dentex.jsonl`, `train_cot_traces_tufts.jsonl`, and their respective `_no_tools.jsonl` variants.
+
+### Quantitative Quality & Tool Analytics (With-Tools Corpus)
+- **Multi-Turn Reasoning Depth**:
+  - Pathology with tools: Mean **12.85 turns**, Median **11.0 turns**, Range **4 to 35 turns**.
+  - Healthy negative controls with tools: Mean **13.09 turns**, Median **12.0 turns**, Range **5 to 25 turns** (demonstrating systematic full-mouth quadrant surveying before confirming absence of disease).
+  - Single-turn baseline (no-tools): Exactly **1.0 turn** committing directly to direct visual diagnosis.
+- **Tool Utilization Frequency**:
+  - `locate_tooth`: 299 invocations (primary spatial anchor across all quadrants).
+  - `fdi_label`: 142 invocations (clinical quadrant-to-FDI coordinate normalization).
+  - `zoom_crop`: 131 invocations (high-resolution region of interest magnification).
+  - `window_level`: 45 invocations (contrast preset tuning for bone and enamel demineralization).
+  - `nudge_crop`: 19 invocations (self-correcting spatial refinement of misaligned initial bounding boxes).
+  - `contralateral_compare`: 12 invocations (bilateral symmetry comparison against contralateral anatomy).
+- **Multi-Finding Pathology Complexity**:
+  - Single-finding scans: 124 images (14.1%).
+  - Multi-finding scans: 756 images (85.9%), with finding counts up to **23 distinct pathologies** per panoramic radiograph.
+- **Clinical Syntactic & Format Compliance**:
+  - JSON action schema compliance: **100.0%** (zero unparsed `<fake_tool_call>` or XML artifacts).
+  - FDI World Dental Federation notation (Quadrants 1–4, Positions 1–8): **100.0%** adherence.
+  - Zero-finding negative control commitment: **100.0%** of healthy scans terminate with `final_answer: []`.
+
+### Tufts Multi-Disease Finding Analysis & 4-Disease Expansion
+- Detailed investigation of the complete 1,000-image Tufts Dental Database reveals:
+  - **660 Normal Scans**: `abnormality: None` (zero findings across all disease categories; 100% negative controls).
+  - **340 Abnormal Scans**: Containing 374 total expert-annotated findings.
+  - **20 Multi-Disease Scans**: Contain multiple distinct disease categories simultaneously on the same radiograph:
+    - 12 images: `Non-Odontogenic` + `Periapical`
+    - 6 images: `Periapical` + `Pericoronal`
+    - 2 images: `Non-Odontogenic` + `Pericoronal`
+  - In the 202 DENTEX-overlap dataset, 16 images had their non-periapical findings omitted due to taxonomy restriction.
+  - The newly implemented `TUFTS_ALL_DISEASES` feature (`--tufts-all-diseases`) loads all **280 abnormal images** with tooth-associated pathology across the native 4-disease taxonomy (`Periapical`, `Non-Odontogenic`, `Pericoronal`, `Inter-Radicular`), generating multi-finding reasoning chains covering every lesion on the radiograph.
+  - **Exclusion Rationale for 60 Zero-Overlap Images**: Out of the 340 abnormal images, exactly 60 images depict pathology entirely disconnected from any tooth structure (e.g. maxillary sinus mucoceles or mandibular ramus radiolucencies). These scans are excluded because agent diagnostic actions (`locate_tooth`, `contralateral_compare`, `fdi_label`) fundamentally require an anchoring tooth position and FDI quadrant coordinates.
+
+

@@ -14,17 +14,21 @@ def main():
     parser = argparse.ArgumentParser(description="Fetch dataset images and model checkpoints from Hugging Face Hub.")
     parser.add_argument("--images", action="store_true", help="Download DENTEX & Tufts dataset images.")
     parser.add_argument("--models", action="store_true", help="Download YOLO model weights from HF models repo.")
-    parser.add_argument("--all", action="store_true", help="Download both images and models.")
+    parser.add_argument("--traces", action="store_true", help="Download synthetic traces from HF traces dataset repo.")
+    parser.add_argument("--all", action="store_true", help="Download images, models, and traces.")
     args = parser.parse_args()
 
-    # Default to fetching both if no specific flag passed
-    fetch_images = args.images or args.all or (not args.images and not args.models)
-    fetch_models = args.models or args.all or (not args.images and not args.models)
+    # Default to fetching images and models if no specific flag passed
+    has_specific_flag = args.images or args.models or args.traces
+    fetch_images = args.images or args.all or not has_specific_flag
+    fetch_models = args.models or args.all or not has_specific_flag
+    fetch_traces = args.traces or args.all
 
     token = os.environ.get("HF_TOKEN")
     dentex_repo = os.environ.get("DENTEX_IMAGES_REPO", "Reza-Nadimi/dentex-train-images")
     tufts_repo = os.environ.get("TUFTS_IMAGES_REPO", "Reza-Nadimi/tufts-train-images")
     models_repo = os.environ.get("HF_ARTIFACT_REPO", "Reza-Nadimi/vlm-dental-models")
+    traces_repo = os.environ.get("HF_TRACES_REPO", "Reza-Nadimi/vlm-dental-traces")
 
     if fetch_images:
         print(f"\n📦 Fetching DENTEX images from {dentex_repo}...")
@@ -77,6 +81,12 @@ def main():
                     shutil.copy2(item, dest)
             shutil.rmtree(staging, ignore_errors=True)
         print("✅ YOLO model checkpoints ready in data/models/")
+
+    if fetch_traces:
+        print(f"\n📝 Fetching synthetic traces from {traces_repo}...")
+        from scripts.sync_traces_hf import download_traces
+        download_traces(repo_id=traces_repo, target_dir="data/traces", token=token)
+        print("✅ Synthetic traces ready in data/traces/")
 
     print("\n🎉 Download complete!")
 

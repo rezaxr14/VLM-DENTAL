@@ -64,10 +64,14 @@ you use it:
    load_tufts_dataset() emits one annotation row per overlapping tooth
    (so a two-tooth lesion becomes two rows sharing the same diagnosis and
    pathology polygon) and tags each with n_teeth_matched so a caller can
-   filter to n_teeth_matched == 1 for an unambiguous-only subset. Findings
-   with zero tooth overlap are excluded from annots_df (can't populate
-   category_id_1/2 without a tooth) but counted in the printed summary,
-   not silently dropped.
+   filter to n_teeth_matched == 1 for an unambiguous-only subset.
+   CLINICAL / ARCHITECTURAL INVARIANT: Across all 340 abnormal images in Tufts,
+   exactly 60 images contain pathology with zero tooth overlap (e.g. maxillary sinus
+   or mandibular ramus cysts far from teeth, or extreme periapical radiopacities
+   located beyond the segmented root box). These 60 images are excluded from diagnosis-bearing
+   trace generation because the agent diagnostic toolset (`locate_tooth`, `contralateral_compare`,
+   `fdi_label`, `nudge_crop`) inherently operates on tooth regions and requires an FDI coordinate.
+   They are reported in the loader summary and not silently lost.
 
 4. TOOTH-BBOX OVERLAP UNDER-RECALLS FOR TRUE PERIAPICAL LESIONS, BY
    CLINICAL DEFINITION. "Periapical" means at/beyond the root apex --
@@ -191,6 +195,21 @@ _TUFTS_TITLE_TO_DENTEX_CATEGORY_ID: dict[str, int | None] = {
     "Non-Odontogenic": None,
     "Pericoronal": None,
     "Inter-Radicular": None,
+}
+
+TUFTS_NATIVE_CATEGORIES = [
+    {"id": 0, "name": "Periapical Lesion", "supercategory": "Periapical Lesion"},
+    {"id": 1, "name": "Non-Odontogenic Lesion", "supercategory": "Non-Odontogenic Lesion"},
+    {"id": 2, "name": "Pericoronal Lesion", "supercategory": "Pericoronal Lesion"},
+    {"id": 3, "name": "Inter-Radicular Lesion", "supercategory": "Inter-Radicular Lesion"},
+]
+
+_TUFTS_ALL_TITLE_TO_CATEGORY_ID: dict[str, int | None] = {
+    "None": None,
+    "Periapical": 0,
+    "Non-Odontogenic": 1,
+    "Pericoronal": 2,
+    "Inter-Radicular": 3,
 }
 
 
@@ -467,7 +486,7 @@ def _map_tufts_pathology_to_dentex_category(title: str) -> int | None:
     return _TUFTS_TITLE_TO_DENTEX_CATEGORY_ID.get(title)
 
 
-def _load_findings(annotation_path: Path) -> list[dict]:
+def _load_findings(annotation_path: Path, all_diseases: bool = False) -> list[dict]:
     """Parse expert.json or student.json into a flat list of per-image
     dicts: {"image_id", "description", "findings": [{"title",
     "dentex_category_id", "ring_bboxes_xyxy", "level_1".."level_4"}]}.
@@ -494,7 +513,10 @@ def _load_findings(annotation_path: Path) -> list[dict]:
             title = obj.get("title")
             if title in (None, "None"):
                 continue
-            dentex_cat = _map_tufts_pathology_to_dentex_category(title)
+            if all_diseases:
+                dentex_cat = _TUFTS_ALL_TITLE_TO_CATEGORY_ID.get(title)
+            else:
+                dentex_cat = _map_tufts_pathology_to_dentex_category(title)
             polygons = obj.get("polygons")
             if not isinstance(polygons, list) or not polygons:
                 continue  # can't geometrically locate this finding at all
@@ -645,27 +667,21 @@ def load_tufts_dataset(
     data_dir: str | None = None,
     max_images: int | None = None,
     include_primary_teeth: bool = False,
+    all_diseases: bool = False,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Load Tufts into the same (images_df, annots_df, categories_df) shape
     dentex.py's load_dentex_dataset returns.
 
-    annots_df is diagnosis-bearing only (mirrors DENTEX: teeth without an
-    abnormality finding don't get a row here -- use load_tufts_tooth_boxes
-    separately for the full per-tooth grounding corpus). Each row's bbox is
-    the AFFECTED TOOTH's box (from teeth_bbox.json), matching DENTEX's
-    convention where bbox identifies the tooth region a diagnosis applies
-    to; the lesion's own polygon-derived box is preserved in
-    extra["pathology_bbox_xyxy"] for tools like nudge_crop that want the
-    finer target. category_id_1/2 are already 1-indexed FDI (see module
-    docstring point 1 -- do NOT pass these through dentex_row_to_fdi).
+    When all_diseases=False (default), annots_df is restricted to DENTEX-overlapping
+    Periapical Lesion findings (~202 images).
+    When all_diseases=True, maps all 4 native Tufts categories (Periapical,
+    Non-Odontogenic, Pericoronal, Inter-Radicular) to support comprehensive
+    multi-disease trace generation (~280 abnormal images).
 
-    A multi-tooth lesion produces one row per overlapping tooth (see
-    module docstring point 3); extra["n_teeth_matched"] lets a caller
-    filter to unambiguous single-tooth findings if they want a stricter
-    subset. Tooth assignment is bbox-overlap-only and under-recalls true
-    periapical findings for a clinical-definition reason -- see module
-    docstring point 4 before treating the printed no-overlap count as a
-    reliability figure.
+    Note: Exactly 60 of the 340 abnormal images have lesions with zero tooth overlap
+    (e.g. maxillary sinus / mandibular ramus cysts far from teeth). They are excluded
+    from diagnosis-bearing traces because radiologist tools (locate_tooth, contralateral_compare,
+    fdi_label) require a tooth position and FDI coordinates.
     """
     tufts_root = find_local_tufts_dir()
     if tufts_root is None:
@@ -693,7 +709,7 @@ def load_tufts_dataset(
     available_ids = set(images_df["id"]) if len(images_df) else set()
 
     tooth_index, tooth_stats = _load_tooth_index(bbox_path, include_primary_teeth=include_primary_teeth)
-    findings_by_image = _load_findings(expert_path)
+    findings_by_image = _load_findings(expert_path, all_diseases=all_diseases)
 
     annot_rows = []
     n_findings_unmapped_category = 0
@@ -750,13 +766,17 @@ def load_tufts_dataset(
                     },
                 })
     annots_df = pd.DataFrame(annot_rows)
-    categories_df = pd.DataFrame(DENTEX_CATEGORIES)
+    categories_df = pd.DataFrame(TUFTS_NATIVE_CATEGORIES if all_diseases else DENTEX_CATEGORIES)
 
+    unmapped_msg = (
+        f"{n_findings_unmapped_category} findings excluded: no DENTEX category analog [Non-Odontogenic/Pericoronal/Inter-Radicular]; "
+        if not all_diseases
+        else f"{n_findings_unmapped_category} findings unmapped; "
+    )
     print(
         f"load_tufts_dataset: {len(images_df)} images, {len(annots_df)} diagnosis-bearing "
         f"tooth annotations from {n_findings_mapped} findings "
-        f"({n_findings_unmapped_category} findings excluded: no DENTEX category analog "
-        f"[Non-Odontogenic/Pericoronal/Inter-Radicular]; "
+        f"({unmapped_msg}"
         f"{n_findings_no_tooth_overlap} excluded: zero tooth-box overlap; "
         f"{tooth_stats['n_degenerate_excluded']} degenerate tooth boxes excluded; "
         f"{tooth_stats['n_primary_excluded']} primary-tooth boxes excluded "

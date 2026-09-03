@@ -142,6 +142,10 @@ outputs correct FDI; `dentex_row_to_fdi` only for DENTEX). Applying
 DENTEX's conversion to a dataset that doesn't need it would double-increment
 and reintroduce a version of the same bug in the opposite direction.
 
+### Non-Tooth Pathology Exclusion Rationale (Tufts Dataset)
+Out of 340 abnormal images in the Tufts Dental Database, exactly 60 images contain pathology with zero tooth overlap (e.g., isolated maxillary sinus lesions, cysts in the ascending mandibular ramus far from any tooth structure, or extreme periapical radiopacities located beyond the segmented root box).
+These 60 images are excluded from diagnosis-bearing trace generation because the agent diagnostic toolset (`locate_tooth`, `contralateral_compare`, `fdi_label`, `nudge_crop`) inherently requires a spatial tooth anchor and FDI coordinate. They are reported in the loader summary and preserved in raw files, not silently lost.
+
 ---
 
 ## 🧠 5. Aim 2 & 3: Model Training Strategy

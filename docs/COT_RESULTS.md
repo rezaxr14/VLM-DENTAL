@@ -17,10 +17,31 @@ The synthetic data generation leverages a two-phase architecture orchestrated by
    - **Verifier:** `MiniMax M3`
 3. **Training Student:** Once verified, the traces are utilized to train the unified backbone policy: a **Qwen/Qwen3.5-9B** model serving as the Student in both Stage 1 SFT (QLoRA) and Stage 2 GRPO (dual-adapter RL).
 
-### Trace Quality & Repair Analytics
-- **Multi-Step Reasoning:** 100% of the verified interactive traces (678/678) exhibit profound multi-step reasoning, utilizing multiple turns to reach a diagnosis.
-- **Verifier Rigor:** The `MiniMax M3` verifier produces highly detailed, multi-sentence feedback that explicitly validates the agent's tool sequence (e.g., confirming appropriate usage of `nudge_crop` and `contralateral_compare`) against the clinical ground truth.
-- **Self-Healing Pipeline:** During the generation of these traces, 11 traces required active repair (successfully fixed via Cell 7f in the trace generation pipeline), highlighting the robustness of the automated generation loop in recovering from formatting or logic faults.
+### Trace Quality, Verifier Rigor & Autonomous Repair Analytics
+
+The synthesis pipeline employs an autonomous generator-verifier-editor loop where candidate traces undergo strict multi-modal clinical verification before being accepted into the training corpus.
+
+#### Multi-Cohort Verification & Repair Census (Total Verified: 3,134 Traces)
+
+| Cohort / Split | Tool Modality | Total Target | First-Pass Verified | Rejected | Repaired & Promoted | Final Verified Yield | First-Pass Pass Rate | Final Yield Rate | Canonical File / Commit Reference |
+|---|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|---|
+| **DENTEX Pathology** | With Tools (Main) | 678 | 667 | 11 | 11 | **678** | 98.38% | **100.0%** | `train_cot_traces_dentex.jsonl` (Git `3c2ce7f`) |
+| **DENTEX Pathology** | No-Tools (Baseline 3) | 678 | 666 | 12 | 12 | **678** | 98.23% | **100.0%** | `train_cot_traces_dentex_no_tools.jsonl` (Git `f6e8b37`, `4c0f627`) |
+| **DENTEX Normal (Healthy)** | With Tools | 27 | 27 | 0 | 0 | **27** | 100.0% | **100.0%** | `train_cot_traces_healthy_dentex.jsonl` (Git `990157a`) |
+| **DENTEX Normal (Healthy)** | No-Tools | 27 | 27 | 0 | 0 | **27** | 100.0% | **100.0%** | `train_cot_traces_healthy_dentex_no_tools.jsonl` |
+| **TUFTS Overlap Pathology** | With Tools (Main) | 202 | 202 | 0 | 0 | **202** | 100.0% | **100.0%** | `train_cot_traces_tufts.jsonl` (Git `6d2eb06`) |
+| **TUFTS Overlap Pathology** | No-Tools (Baseline 3) | 202 | 199 | 3 | 3 | **202** | 98.51% | **100.0%** | `train_cot_traces_tufts_no_tools.jsonl` (Git `27b2e47`, `298d9a0`) |
+| **TUFTS Normal (Healthy)** | With Tools | 660 | 594 | 66 | 66 | **660** | 90.00% | **100.0%** | `train_cot_traces_healthy_tufts.jsonl` (Git `60f450b`) |
+| **TUFTS Normal (Healthy)** | No-Tools | 660 | 660 | 0 | 0 | **660** | 100.0% | **100.0%** | `train_cot_traces_healthy_tufts_no_tools.jsonl` (Git `1a32c32`) |
+| **TOTALS ACROSS PROJECT** | **Combined Corpus** | **3,134** | **3,042** | **92** | **92** | **3,134** | **97.06%** | **100.0%** | Complete Multi-Dataset Training Corpus |
+
+#### Key Analytical Takeaways
+- **Self-Healing Loop Efficiency**: Across all 92 candidate trace rejections (primarily caused by subtle box shifts or formatting edge cases), the automated verifier-repair pipeline achieved a **100.0% recovery yield**, repairing and promoting every rejected trace into compliance without manual curation.
+- **Hybrid Composition of `train_cot_traces.jsonl`**: The combined 880-trace pathology dataset contains DENTEX (lines 1–678) and Tufts Periapical overlap (lines 679–880). Standalone decoupled files (`train_cot_traces_dentex.jsonl`, `train_cot_traces_tufts.jsonl`) are also provided for isolated dataset experiments.
+- **Tufts Multi-Disease Expansion Scope**: Clinical auditing of `expert.json` identified 20 multi-disease radiographs (12 Non-Odontogenic + Periapical, 6 Periapical + Pericoronal, 2 Non-Odontogenic + Pericoronal). To prevent single-disease truncation, `--tufts-all-diseases` enables full 4-disease trace generation across all 280 tooth-associated abnormal scans into `train_cot_traces_tufts_all.jsonl`.
+- **Exclusion of Non-Tooth Lesions (60 Scans)**: Out of the 340 abnormal images in Tufts, exactly 60 images contain pathology with zero tooth overlap (e.g. maxillary sinus / mandibular ramus cysts far from teeth, or radiopacities located beyond segmented root apices). These 60 images are excluded because agent diagnostic tools (`locate_tooth(36)`, `contralateral_compare(3)`, `fdi_label`) fundamentally require a spatial tooth anchor and FDI coordinate.
+- **Healthy Control Scans**: All 660 healthy Tufts scans have `abnormality: None` across all categories, serving as 100% negative controls requiring zero re-runs.
+- **Tool-Use Depth**: Verified interactive traces exhibit a mean reasoning trajectory of **12.85 turns** (range 4–35 turns), invoking `locate_tooth`, `fdi_label`, `zoom_crop`, `window_level`, and `nudge_crop` turn-by-turn before issuing diagnoses.
 
 ---
 

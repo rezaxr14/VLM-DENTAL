@@ -34,7 +34,14 @@ def build_agent_system_prompt(
     tailored to the target dataset's pathology taxonomy.
     """
     if allowed_classes is None:
-        if dataset.lower() == "tufts":
+        if dataset.lower() == "tufts_all":
+            allowed_classes = [
+                "Periapical Lesion",
+                "Non-Odontogenic Lesion",
+                "Pericoronal Lesion",
+                "Inter-Radicular Lesion",
+            ]
+        elif dataset.lower() == "tufts":
             allowed_classes = ["Periapical Lesion"]
         else:
             allowed_classes = ["Caries", "Deep Caries", "Periapical Lesion", "Impacted Tooth"]

@@ -165,3 +165,36 @@ def test_load_tooth_index_and_findings_mock(tmp_path: Path):
     assert f0["dentex_category_id"] == 2
     assert f0["level_1"] == "Periapical Radiolucency"
     assert f0["level_2"] == "Ill-defined"
+
+
+def test_load_tufts_all_diseases_mock(tmp_path: Path):
+    from dental_agent.data.tufts import _TUFTS_ALL_TITLE_TO_CATEGORY_ID, TUFTS_NATIVE_CATEGORIES
+
+    expert_data = [
+        {
+            "External ID": "2.JPG",
+            "Description": "Multiple lesions on teeth",
+            "Label": {
+                "objects": [
+                    {"title": "Periapical", "polygons": [[[10, 10], [50, 10], [50, 50], [10, 50]]]},
+                    {"title": "Non-Odontogenic", "polygons": [[[60, 60], [100, 60], [100, 100], [60, 100]]]},
+                    {"title": "Pericoronal", "polygons": [[[110, 110], [150, 110], [150, 150], [110, 150]]]},
+                    {"title": "Inter-Radicular", "polygons": [[[160, 160], [200, 160], [200, 200], [160, 200]]]},
+                ]
+            }
+        }
+    ]
+    expert_file = tmp_path / "expert_multi.json"
+    expert_file.write_text(json.dumps(expert_data))
+
+    # Test default: only Periapical is mapped
+    findings_default = _load_findings(expert_file, all_diseases=False)
+    mapped_default = [f["dentex_category_id"] for f in findings_default[0]["findings"] if f["dentex_category_id"] is not None]
+    assert mapped_default == [2]
+
+    # Test all_diseases=True: all 4 are mapped to 0, 1, 2, 3
+    findings_all = _load_findings(expert_file, all_diseases=True)
+    mapped_all = [f["dentex_category_id"] for f in findings_all[0]["findings"]]
+    assert mapped_all == [0, 1, 2, 3]
+    assert len(TUFTS_NATIVE_CATEGORIES) == 4
+

@@ -59,11 +59,19 @@ data/models/_hf_staging/
 data/models/_hf_download_temp/
 data/models/vllm_cache/
 
-# Allow synthetic traces and evaluation results to be tracked via Git
-!data/traces/
-!data/traces/*
+# Synthetic Chain-of-Thought Traces (Completed traces hosted on Hugging Face: Reza-Nadimi/vlm-dental-traces)
+data/traces/*.jsonl
+data/traces/*.bak
+
+# Allow analysis charts and evaluation results to be tracked via Git
+!data/traces/analysis_charts/
+!data/traces/analysis_charts/**
 !data/evaluations/
 !data/evaluations/*
+
+# Retain multi-Colab git-sync for active Tufts all-diseases generation until complete:
+!data/traces/train_cot_traces_unverified_tufts_all*.jsonl
+!data/traces/train_cot_traces_tufts_all*.jsonl
 
 # API keys & secrets
 .env
