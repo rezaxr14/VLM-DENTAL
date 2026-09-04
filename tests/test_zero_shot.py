@@ -381,6 +381,79 @@ def test_hungarian_bipartite_matching():
     assert res["closeness_score"] == 1.0
 
 
+def test_run_zero_shot_baseline_multi_finding_and_tokens(tmp_path):
+    """Test run_zero_shot_baseline with multiple ground-truth findings and custom max_tokens."""
+    from dental_agent.evaluation.baselines import run_zero_shot_baseline
+    import pandas as pd
+    from unittest.mock import patch
+    from PIL import Image
+
+    # Create dummy image on disk
+    img_path = tmp_path / "dummy_1.png"
+    Image.new("RGB", (200, 100), color="gray").save(img_path)
+
+    images_df = pd.DataFrame([{"id": 1, "local_path": str(img_path)}])
+    # Image 1 has 2 ground-truth findings: tooth 18 Impacted, tooth 48 Impacted
+    annots_df = pd.DataFrame([
+        {"image_id": 1, "category_id_1": 0, "category_id_2": 7, "category_id_3": "Impacted"},
+        {"image_id": 1, "category_id_1": 3, "category_id_2": 7, "category_id_3": "Impacted"},
+    ])
+    categories_df = pd.DataFrame([{"id": "Impacted", "name": "Impacted"}])
+
+    mock_llm_response = json.dumps({
+        "findings": [
+            {"quadrant": 1, "tooth_position": 8, "diagnosis": "Impacted", "confidence": 0.95},
+            {"quadrant": 4, "tooth_position": 8, "diagnosis": "Impacted", "confidence": 0.90},
+        ]
+    })
+
+    call_records = []
+    def mock_call_llm(*args, **kwargs):
+        call_records.append(kwargs)
+        return mock_llm_response
+
+    with patch("dental_agent.evaluation.baselines.call_llm", side_effect=mock_call_llm):
+        results = run_zero_shot_baseline(
+            image_ids=[1],
+            images_df=images_df,
+            annots_df=annots_df,
+            categories_df=categories_df,
+            provider="local",
+            model="Qwen/Qwen3.5-9B",
+            max_tokens=16384,
+            image_max_dim=640,
+        )
+
+    assert len(results) == 1
+    rec = results[0]
+    # Check that both findings were captured in ground_truth (Rule 13)
+    assert len(rec["ground_truth"]) == 2
+    quad_positions = [(g["quadrant"], g["tooth_position"]) for g in rec["ground_truth"]]
+    assert (1, 8) in quad_positions
+    assert (4, 8) in quad_positions
+
+    # Check multi-finding exact match
+    assert rec["exact_f1"] == 1.0
+    assert rec["fdi_f1"] == 1.0
+    assert rec["format_ok"] is True
+
+    # Check that custom max_tokens=16384 propagated to call_llm
+    assert len(call_records) == 1
+    assert call_records[0].get("max_tokens") == 16384
+
+
+def test_cli_parser_max_tokens_and_dims():
+    """Test CLI argument parsing for max-tokens and image-max-dim."""
+    from scripts.run_zero_shot import build_parser
+
+    parser = build_parser()
+    args = parser.parse_args(["--provider", "groq", "--max-tokens", "4096", "--image-max-dim", "640"])
+    assert args.provider == "groq"
+    assert args.max_tokens == 4096
+    assert args.image_max_dim == 640
+
+
+
 
 
 

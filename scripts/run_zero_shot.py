@@ -447,7 +447,7 @@ def _run_zero_shot_for_target(
             elif env_dim is not None and env_dim.strip():
                 dim_to_use = int(env_dim)
             else:
-                default_max_dims = {"GROQ": 1280, "OPENROUTER": 1600}
+                default_max_dims = {"GROQ": 640, "OPENROUTER": 1600}
                 dim_to_use = default_max_dims.get(prefix, 0)
 
             image = Image.open(image_path).convert("RGB")
@@ -461,7 +461,15 @@ def _run_zero_shot_for_target(
             elif env_tokens is not None and env_tokens.strip():
                 tokens_to_use = int(env_tokens)
             else:
-                default_max_tokens = {"GROQ": 2048, "LOCAL": 2048, "GEMINI": 16384, "OPENROUTER": 16384}
+                default_max_tokens = {
+                    "GROQ": 4096,
+                    "LOCAL": 16384,
+                    "NVIDIA": 16384,
+                    "GEMINI": 16384,
+                    "OPENROUTER": 16384,
+                    "OPENAI": 4096,
+                    "ANTHROPIC": 4096,
+                }
                 tokens_to_use = default_max_tokens.get(prefix, 4096)
 
             # Call VLM with ZERO_SHOT_PROMPT (with reasoning & multi-finding guidelines)

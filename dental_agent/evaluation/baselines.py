@@ -21,7 +21,12 @@ from dental_agent.agent.parsing import parse_agent_json
 from dental_agent.training.api_pool import call_llm
 from dental_agent.data.fdi_utils import row_to_fdi
 from dental_agent.rewards.components import reward_accuracy
-from dental_agent.evaluation.metrics import compute_evaluation_metrics
+from dental_agent.evaluation.metrics import (
+    compute_evaluation_metrics,
+    match_multi_findings,
+    extract_predicted_findings,
+    normalize_dental_diagnosis,
+)
 from dental_agent.utils.serialization import to_jsonable
 
 
@@ -402,6 +407,7 @@ def run_zero_shot_baseline(
     pacing_delay: float = 0.0,
     image_max_dim: int = 0,
     temperature: float = 0.0,
+    max_tokens: int = 16384,
     on_result_callback: Any = None,
 ) -> list[dict[str, Any]]:
     """No fine-tuning, no tool access, single pass — zero-shot commercial VLM evaluation."""
@@ -447,13 +453,18 @@ def run_zero_shot_baseline(
         anns = annots_df[annots_df["image_id"] == image_id]
         if anns.empty:
             continue
-        ann0 = anns.iloc[0]
-        quadrant, tooth_position = row_to_fdi(ann0)
-        ground_truth = {
-            "quadrant": quadrant,
-            "tooth_position": tooth_position,
-            "diagnosis": cat_lookup.get(ann0.get(diag_col), "Caries"),
-        }
+        
+        # Extract ALL ground truth findings for this image (Rule 13 multi-finding completeness)
+        gt_findings = []
+        for _, ann_row in anns.iterrows():
+            quadrant, tooth_position = row_to_fdi(ann_row)
+            d_raw = cat_lookup.get(ann_row.get(diag_col), "Caries")
+            gt_findings.append({
+                "quadrant": quadrant,
+                "tooth_position": tooth_position,
+                "diagnosis": normalize_dental_diagnosis(d_raw),
+                "raw_diagnosis": str(d_raw),
+            })
 
         matches = images_df[images_df["id"] == image_id]
         if matches.empty:
@@ -463,6 +474,8 @@ def run_zero_shot_baseline(
         if not image_path or not os.path.exists(str(image_path)):
             continue
         image = Image.open(image_path).convert("RGB")
+        if image_max_dim > 0:
+            image.thumbnail((image_max_dim, image_max_dim), Image.Resampling.LANCZOS)
 
         if pacing_delay > 0:
             time.sleep(pacing_delay)
@@ -475,29 +488,43 @@ def run_zero_shot_baseline(
                 user_content=ZERO_SHOT_PROMPT,
                 image=image,
                 temperature=temperature,
-                max_tokens=2048,
+                max_tokens=max_tokens,
             )
             parsed_raw = parse_zero_shot_response(raw)
-            parsed_final = match_zero_shot_finding(parsed_raw, gt_quadrant=quadrant, gt_tooth_position=tooth_position)
+            pred_findings = extract_predicted_findings(parsed_raw)
+            match_res = match_multi_findings(gt_findings, pred_findings)
+            first_gt = gt_findings[0] if gt_findings else {}
+            parsed_final = match_zero_shot_finding(
+                parsed_raw,
+                gt_quadrant=first_gt.get("quadrant"),
+                gt_tooth_position=first_gt.get("tooth_position"),
+            )
             err_msg = None
         except Exception as e:
             raw = f"Error: {e}"
             parsed_raw = None
+            pred_findings = []
+            match_res = match_multi_findings(gt_findings, [])
             parsed_final = None
             err_msg = str(e)
 
-        reward_val = reward_accuracy({"final_answer": parsed_final}, ground_truth) if parsed_final else 0.0
-        format_ok = bool(
-            parsed_final
-            and isinstance(parsed_final, dict)
-            and "diagnosis" in parsed_final
-            and "quadrant" in parsed_final
-            and "tooth_position" in parsed_final
-        )
+        reward_val = match_res.get("exact_f1", 0.0)
+        format_ok = bool(parsed_raw is not None and (len(pred_findings) > 0 or isinstance(parsed_raw, (dict, list))))
 
         item = to_jsonable({
             "image_id": image_id,
-            "ground_truth": ground_truth,
+            "ground_truth": gt_findings,
+            "predictions": pred_findings,
+            "matched_pairs": match_res.get("matched_pairs", []),
+            "fdi_precision": match_res.get("fdi_precision", 0.0),
+            "fdi_recall": match_res.get("fdi_recall", 0.0),
+            "fdi_f1": match_res.get("fdi_f1", 0.0),
+            "exact_precision": match_res.get("exact_precision", 0.0),
+            "exact_recall": match_res.get("exact_recall", 0.0),
+            "exact_f1": match_res.get("exact_f1", 0.0),
+            "closeness_score": match_res.get("closeness_score", 0.0),
+            "spatial_proximity": match_res.get("spatial_proximity", 0.0),
+            "diagnostic_similarity": match_res.get("diagnostic_similarity", 0.0),
             "final_answer": parsed_final,
             "raw_output": raw,
             "tool_calls": 0,
