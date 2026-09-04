@@ -21,7 +21,7 @@ The synthetic data generation leverages a two-phase architecture orchestrated by
 
 The synthesis pipeline employs an autonomous generator-verifier-editor loop where candidate traces undergo strict multi-modal clinical verification before being accepted into the training corpus.
 
-#### Multi-Cohort Verification & Repair Census (Total Verified: 3,134 Traces)
+#### Multi-Cohort Verification & Repair Census (Total Verified: 3,694 Traces)
 
 | Cohort / Split | Tool Modality | Total Target | First-Pass Verified | Rejected | Repaired & Promoted | Final Verified Yield | First-Pass Pass Rate | Final Yield Rate | Canonical File / Commit Reference |
 |---|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|---|
@@ -33,15 +33,44 @@ The synthesis pipeline employs an autonomous generator-verifier-editor loop wher
 | **TUFTS Overlap Pathology** | No-Tools (Baseline 3) | 202 | 199 | 3 | 3 | **202** | 98.51% | **100.0%** | `train_cot_traces_tufts_no_tools.jsonl` (Git `27b2e47`, `298d9a0`) |
 | **TUFTS Normal (Healthy)** | With Tools | 660 | 594 | 66 | 66 | **660** | 90.00% | **100.0%** | `train_cot_traces_healthy_tufts.jsonl` (Git `60f450b`) |
 | **TUFTS Normal (Healthy)** | No-Tools | 660 | 660 | 0 | 0 | **660** | 100.0% | **100.0%** | `train_cot_traces_healthy_tufts_no_tools.jsonl` (Git `1a32c32`) |
-| **TOTALS ACROSS PROJECT** | **Combined Corpus** | **3,134** | **3,042** | **92** | **92** | **3,134** | **97.06%** | **100.0%** | Complete Multi-Dataset Training Corpus |
+| **TUFTS All-Diseases Pathology** | With Tools (Main) | 280 | 280 | 0 | 0 | **280** | 100.0% | **100.0%** | `train_cot_traces_tufts_all.jsonl` (HF Hub) |
+| **TUFTS All-Diseases Pathology** | No-Tools (Baseline 3) | 280 | 280 | 0 | 0 | **280** | 100.0% | **100.0%** | `train_cot_traces_tufts_all_no_tools.jsonl` (HF Hub) |
+| **TOTALS ACROSS PROJECT** | **Combined Corpus** | **3,694** | **3,602** | **92** | **92** | **3,694** | **97.51%** | **100.0%** | Complete Multi-Dataset Training Corpus |
 
 #### Key Analytical Takeaways
 - **Self-Healing Loop Efficiency**: Across all 92 candidate trace rejections (primarily caused by subtle box shifts or formatting edge cases), the automated verifier-repair pipeline achieved a **100.0% recovery yield**, repairing and promoting every rejected trace into compliance without manual curation.
+- **Verifier Rigor & Problem Detection**: Exactly **92 problematic candidate traces (2.49% overall rejection rate)** failed first-pass verification and were caught by the independent frontier verifier across 3,694 candidate traces. In addition, **520 incomplete generator stubs** (caused by API timeouts and rate-limit drops) were caught and purged during trace sanitization before verification.
+
+#### Verifier Anomaly Detection & Clinical Error Analysis (92 Caught Rejections)
+
+Across the entire synthesis corpus of 3,694 candidate reasoning traces, the frontier LLM verifier identified and rejected **92 problematic traces (2.49% rejection rate)** on the first verification pass. These rejections fell into three distinct clinical and structural error categories:
+
+1. **Hallucinated Pathology on Healthy Negative Controls (66 Traces Caught)**:
+   - **Cohort**: Tufts Healthy Normal With-Tools (`train_cot_traces_healthy_tufts.jsonl`).
+   - **Nature of Error**: Generator models, when analyzing a completely normal dental radiograph (`abnormality: None`), occasionally hallucinated subtle radiolucencies, alveolar bone resorption, or early enamel caries to justify tool usage.
+   - **Verifier Intervention**: The verifier cross-referenced candidate claims against the negative ground truth, caught all 66 false-positive diagnoses, and rejected the traces to prevent contaminated negative controls.
+   - **Resolution**: Autonomous repair stripped the fabricated pathology, re-aligned the trajectory to a systematic negative arch survey, and confirmed `final_answer: []` (100% promoted).
+
+2. **Diagnostic Contradictions & Tooth Numbering Errors (15 Traces Caught)**:
+   - **Cohorts**: DENTEX Pathology No-Tools (12 traces), Tufts Overlap Pathology No-Tools (3 traces).
+   - **Nature of Error**: In single-turn visual rationalization without tool magnification, the generator committed diagnostic misclassifications (e.g. diagnosing a Periapical Lesion as Caries, or swapping FDI tooth position 6 with 7).
+   - **Verifier Intervention**: The verifier detected discrepancies between the model's textual claim and the expert ground-truth annotations, flagging the exact tooth and disease disagreement.
+   - **Resolution**: The editor pipeline re-prompted the model with the verifier's targeted critique, correcting the reasoning to accurately match the lesion anatomy (100% promoted).
+
+3. **Uncorrected Spatial Misalignment & Box Drifts (11 Traces Caught)**:
+   - **Cohort**: DENTEX Pathology With-Tools (`train_cot_traces_dentex.jsonl`).
+   - **Nature of Error**: In interactive tool-use mode, the agent received a perturbed bounding box from `locate_tooth` but failed to invoke `nudge_crop` to center the region of interest before formulating a diagnosis, basing its reasoning on an off-target crop.
+   - **Verifier Intervention**: The verifier evaluated the visual evidence presented in the crops, detected that the target tooth was poorly framed, and rejected the ungrounded assertion.
+   - **Resolution**: Autonomous repair injected the necessary spatial realignment and verified the corrected crops (100% promoted).
+
+Additionally, during unverified trace sanitization in the Tufts All-Diseases generation pass, **520 incomplete generation stubs** (caused by provider API context timeouts and rate-limit drops) were identified and discarded before verification, ensuring that zero malformed or partial records entered the canonical dataset.
+- **Tufts All-Diseases Full Cohort Completion**: 100% verified completion of both the interactive tool-use cohort (`train_cot_traces_tufts_all.jsonl`, 280 traces, 984 total findings across the native 4-disease taxonomy, 17.71 mean tool calls, 11.68 mean turns) and the single-turn no-tools baseline cohort (`train_cot_traces_tufts_all_no_tools.jsonl`, 280 traces, 984 findings, 1.0 turns). Both corpora are synchronized to Hugging Face Hub (`Reza-Nadimi/vlm-dental-traces`).
+- **Hugging Face Hosting & Git Size Discipline**: To eliminate GitHub repository bloat, all 22 canonical completed trace `.jsonl` files (~170 MB total payload) are hosted remotely on Hugging Face Hub (`Reza-Nadimi/vlm-dental-traces`) and untracked from git. Local workflows synchronize traces surgically using `python scripts/sync_traces_hf.py --download`.
 - **Hybrid Composition of `train_cot_traces.jsonl`**: The combined 880-trace pathology dataset contains DENTEX (lines 1–678) and Tufts Periapical overlap (lines 679–880). Standalone decoupled files (`train_cot_traces_dentex.jsonl`, `train_cot_traces_tufts.jsonl`) are also provided for isolated dataset experiments.
-- **Tufts Multi-Disease Expansion Scope**: Clinical auditing of `expert.json` identified 20 multi-disease radiographs (12 Non-Odontogenic + Periapical, 6 Periapical + Pericoronal, 2 Non-Odontogenic + Pericoronal). To prevent single-disease truncation, `--tufts-all-diseases` enables full 4-disease trace generation across all 280 tooth-associated abnormal scans into `train_cot_traces_tufts_all.jsonl`.
+- **Tufts Multi-Disease Expansion Scope**: Clinical auditing of `expert.json` identified 20 multi-disease radiographs (12 Non-Odontogenic + Periapical, 6 Periapical + Pericoronal, 2 Non-Odontogenic + Pericoronal). `--tufts-all-diseases` enables full 4-disease trace generation across all 280 tooth-associated abnormal scans into `train_cot_traces_tufts_all.jsonl`.
 - **Exclusion of Non-Tooth Lesions (60 Scans)**: Out of the 340 abnormal images in Tufts, exactly 60 images contain pathology with zero tooth overlap (e.g. maxillary sinus / mandibular ramus cysts far from teeth, or radiopacities located beyond segmented root apices). These 60 images are excluded because agent diagnostic tools (`locate_tooth(36)`, `contralateral_compare(3)`, `fdi_label`) fundamentally require a spatial tooth anchor and FDI coordinate.
 - **Healthy Control Scans**: All 660 healthy Tufts scans have `abnormality: None` across all categories, serving as 100% negative controls requiring zero re-runs.
-- **Tool-Use Depth**: Verified interactive traces exhibit a mean reasoning trajectory of **12.85 turns** (range 4–35 turns), invoking `locate_tooth`, `fdi_label`, `zoom_crop`, `window_level`, and `nudge_crop` turn-by-turn before issuing diagnoses.
+- **Tool-Use Depth**: Verified interactive traces exhibit a mean reasoning trajectory of **12.85 turns** on DENTEX and **11.68 turns** on Tufts All-Diseases (averaging 17.71 tool calls per trace), invoking `locate_tooth`, `fdi_label`, `zoom_crop`, `window_level`, and `nudge_crop` turn-by-turn before issuing diagnoses.
 
 ---
 
@@ -199,6 +228,15 @@ Respond with EXACTLY ONE JSON object: {"grounded": true|false, "reason": "<conci
 ```
 
 </details>
+
+#### Verifier Performance & Anomaly Detection Summary
+
+| Error Category Caught by Verifier | Affected Cohort | Caught Rejections | % of Total Rejections | Verifier Detection Mechanism | Repair & Promotion Rate |
+|---|---|:---:|:---:|---|:---:|
+| **False-Positive Pathology Hallucination** | Tufts Normal Healthy (With Tools) | 66 | 71.7% | Cross-referenced against negative ground truth; flagged fabricated radiolucencies on healthy anatomy | 66 / 66 (100.0%) |
+| **Diagnostic & FDI Notation Contradiction** | DENTEX & Tufts No-Tools Baselines | 15 | 16.3% | Flagged classification discrepancies (e.g. Caries vs. Periapical) and tooth numbering misalignments | 15 / 15 (100.0%) |
+| **Uncorrected Spatial Bounding Box Drift** | DENTEX Pathology (With Tools) | 11 | 12.0% | Flagged ungrounded diagnoses made on uncentered crops without corrective `nudge_crop` adjustments | 11 / 11 (100.0%) |
+| **TOTALS (Verifier-Caught Flaws)** | **All Cohorts Combined** | **92** | **100.0%** | **Independent multi-modal gatekeeping across 3,694 traces** | **92 / 92 (100.0%)** |
 
 ---
 

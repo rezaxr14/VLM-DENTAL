@@ -14,7 +14,9 @@ def test_canonical_trace_files_list():
     assert "train_cot_traces_dentex.jsonl" in CANONICAL_TRACE_FILES
     assert "train_cot_traces_tufts.jsonl" in CANONICAL_TRACE_FILES
     assert "train_cot_traces_healthy_tufts.jsonl" in CANONICAL_TRACE_FILES
-    assert len(CANONICAL_TRACE_FILES) == 18
+    assert "train_cot_traces_tufts_all.jsonl" in CANONICAL_TRACE_FILES
+    assert "train_cot_traces_tufts_all_no_tools.jsonl" in CANONICAL_TRACE_FILES
+    assert len(CANONICAL_TRACE_FILES) == 22
 
 
 @patch("huggingface_hub.list_repo_files")

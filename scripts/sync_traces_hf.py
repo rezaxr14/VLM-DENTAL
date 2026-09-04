@@ -47,6 +47,10 @@ CANONICAL_TRACE_FILES = [
     "train_cot_traces_unverified_healthy_tufts_no_tools.jsonl",
     "train_cot_traces_unverified_tufts.jsonl",
     "train_cot_traces_unverified_tufts_no_tools.jsonl",
+    "train_cot_traces_tufts_all.jsonl",
+    "train_cot_traces_tufts_all_no_tools.jsonl",
+    "train_cot_traces_unverified_tufts_all.jsonl",
+    "train_cot_traces_unverified_tufts_all_no_tools.jsonl",
 ]
 
 
@@ -68,6 +72,8 @@ def upload_traces(
     source_dir: str | Path = "data/traces",
     public: bool = False,
     token: str | None = None,
+    files: list[str] | None = None,
+    force: bool = False,
 ) -> None:
     """Uploads completed trace files from source_dir to Hugging Face dataset repo."""
     api = get_hf_api(token)
@@ -86,22 +92,41 @@ def upload_traces(
     except Exception as e:
         print(f"[WARNING] Could not create/verify repo {repo_id} directly ({e}). Proceeding with upload attempts...")
 
+    # Fetch remote files for surgical delta upload (Rule 16)
+    try:
+        from huggingface_hub import list_repo_files
+        t = token or os.environ.get("HF_TOKEN")
+        if not t or t.startswith("your_"):
+            t = None
+        remote_files = set(list_repo_files(repo_id=repo_id, repo_type="dataset", token=t))
+    except Exception as e:
+        print(f"[WARNING] Could not list remote repo files ({e}).")
+        remote_files = set()
+
     # 2. Collect files to upload
-    local_files = [source_path / f for f in CANONICAL_TRACE_FILES if (source_path / f).exists()]
-    if not local_files:
+    target_names = files if files else CANONICAL_TRACE_FILES
+    local_files = [source_path / f for f in target_names if (source_path / f).exists()]
+    if not local_files and not files:
         # Fallback to any jsonl in source_path
         local_files = list(source_path.glob("*.jsonl"))
 
-    print(f"Found {len(local_files)} trace files to upload:")
+    print(f"Found {len(local_files)} trace files candidate for upload:")
     total_bytes = sum(f.stat().st_size for f in local_files)
-    print(f"Total payload size: {total_bytes / (1024 * 1024):.2f} MB\n")
+    print(f"Total candidate payload: {total_bytes / (1024 * 1024):.2f} MB\n")
 
     # 3. Upload files with retry logic
     max_retries = 5
     uploaded = 0
+    skipped = 0
     for idx, f in enumerate(local_files, 1):
         rel_name = f.name
         fsize_mb = f.stat().st_size / (1024 * 1024)
+
+        if not force and rel_name in remote_files:
+            print(f"[{idx}/{len(local_files)}] [CACHED] {rel_name} ({fsize_mb:.2f} MB) already on HF. Skipping.", flush=True)
+            skipped += 1
+            continue
+
         print(f"[{idx}/{len(local_files)}] Uploading {rel_name} ({fsize_mb:.2f} MB)...", flush=True)
 
         for attempt in range(max_retries):
@@ -126,7 +151,7 @@ def upload_traces(
                 else:
                     print(f"  [FAILED] Could not upload {rel_name}: {e}")
 
-    print(f"\nUpload pass complete: {uploaded}/{len(local_files)} files uploaded to {repo_id}.\n")
+    print(f"\nUpload pass complete: {uploaded} uploaded, {skipped} skipped (already present) out of {len(local_files)} files to {repo_id}.\n")
 
 
 def download_traces(
@@ -244,13 +269,14 @@ def main():
     parser.add_argument("--target-dir", type=str, default="data/traces", help="Target directory for downloads (default: data/traces)")
     parser.add_argument("--source-dir", type=str, default="data/traces", help="Source directory for uploads (default: data/traces)")
     parser.add_argument("--public", action="store_true", help="Set repository to public (default: private)")
-    parser.add_argument("--force", action="store_true", help="Force overwrite existing local files on download.")
+    parser.add_argument("--files", nargs="+", help="Specific files to upload or download.")
+    parser.add_argument("--force", action="store_true", help="Force overwrite existing files on download or upload.")
     args = parser.parse_args()
 
     if args.upload:
-        upload_traces(repo_id=args.repo_id, source_dir=args.source_dir, public=args.public)
+        upload_traces(repo_id=args.repo_id, source_dir=args.source_dir, public=args.public, files=args.files, force=args.force)
     elif args.download:
-        download_traces(repo_id=args.repo_id, target_dir=args.target_dir, force=args.force)
+        download_traces(repo_id=args.repo_id, target_dir=args.target_dir, files=args.files, force=args.force)
     elif args.status:
         status_traces(repo_id=args.repo_id, source_dir=args.source_dir)
     else:

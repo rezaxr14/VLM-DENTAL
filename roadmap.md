@@ -174,6 +174,15 @@ hand-rolled copy of the same logic.
   `trajectory["messages"]` against `ground_truth`, nothing tool-specific.
   Reads/writes separate `_no_tools`-suffixed files (both unverified and
   verified) so these never mix into the main system's SFT training set.
+- **Multi-Cohort Trace Generation Complete (3,694 Verified Traces):** Full synthetic dataset generation has completed with a 100.0% final verified yield across all target cohorts:
+  - **DENTEX Pathology:** 678 with-tools, 678 no-tools (100% yield, 12.85 avg turns).
+  - **DENTEX Normal (Healthy):** 27 with-tools, 27 no-tools (100% negative controls).
+  - **Tufts Overlap Pathology:** 202 with-tools, 202 no-tools (100% yield).
+  - **Tufts Normal (Healthy):** 660 with-tools, 660 no-tools (100% negative controls, 13.09 avg turns).
+  - **Tufts All-Diseases Pathology:** 280 with-tools, 280 no-tools (100% yield, 984 total findings across the native 4-disease taxonomy, 17.71 avg tool calls, 11.68 avg turns).
+  - **Canonical Corpus:** Total **3,694 verified traces** across 10 cohorts. Full quantitative analytics, case studies, and verification logs are detailed in `docs/COT_RESULTS.md` and `docs/PAPER_MILESTONES.md`.
+- **Hugging Face Hub Synchronization & Git Untracking (`scripts/sync_traces_hf.py`):**
+  To prevent repository bloat, all 22 canonical completed trace files (~170 MB) are hosted on Hugging Face Hub (`Reza-Nadimi/vlm-dental-traces`) and untracked from Git (`git rm --cached`). Downstream Colab/Kaggle training workflows synchronize traces on demand via `python scripts/sync_traces_hf.py --download` with automated surgical delta caching.
 
 ### 3. The FDI 0-Index Bug Fix (CRITICAL — read this even if you skip everything else)
 DENTEX's raw JSON labels `category_id_1`/`category_id_2` as **0-indexed**
@@ -357,10 +366,14 @@ re-checking it against those same two papers.
   has 108 traces, but those **predate the real-tool-execution rewrite** —
   they were generated under the old `<fake_tool_call>`-narration paradigm
   this codebase has since moved away from (see `.agents/rules/vlm_dental.md`
-  Rule 3: don't reintroduce that paradigm). No post-rewrite
-  `train_cot_traces.jsonl` is currently committed to the repo. This is the
-  real bottleneck right now — not the training code, which is built out
-  and tested ahead of having volume to run it on.
+  Rule 3: don't reintroduce that paradigm). Post-rewrite trace generation has
+  now successfully produced and verified **3,694 canonical traces** across 10 cohorts
+  (see `docs/COT_RESULTS.md` and `docs/PAPER_MILESTONES.md`), fully synchronized
+  to Hugging Face Hub (`Reza-Nadimi/vlm-dental-traces`) and untracked from Git
+  to preserve repository size. Workflows synchronize traces via `scripts/sync_traces_hf.py --download`.
+  With trace generation 100% complete, the active training bottleneck moves to
+  **Stage 1 Supervised Fine-Tuning (SFT)** in `VLM_Dental_Colab_SFT.ipynb` and
+  **Stage 2 GRPO RL** in `VLM_Dental_Colab_GRPO.ipynb`.
 - **Tunisia dataset loader — Phase 1 done, Phase 2 blocked on one
   verification step.** See "Datasets" below for full detail; short version:
   image discovery + VIA parsing + bbox geometry work today, FDI-position
@@ -399,12 +412,16 @@ The only dataset with a fully working loader end-to-end, feeding both
 diagnosis trace-gen and `locate_tooth`'s current (DENTEX-only) training
 data. `dental_agent/data/dentex.py`.
 
-### Tufts Panoramic Dataset (Integrated for Grounding)
+### Tufts Panoramic Dataset (Integrated for Grounding & Diagnosis Traces)
 `dental_agent/data/tufts.py`. Full dataset integrated and live:
 - **1,000 Radiograph Images** and **25,184 tooth bounding box annotations** parsed via `load_tufts_tooth_boxes`.
 - All images, bounding boxes, annotations, and polygon segmentations (`Segmentation/teeth_polygon.json`, 271 MB) uploaded to Hugging Face Hub dataset repository `Reza-Nadimi/tufts-train-images`.
 - Active in `scripts/prepare_yolo_dataset.py` via `DATASET_LOADERS["tufts"]`.
 - Co-trained with DENTEX in Multi-Dataset YOLO 5-fold cross-validation, achieving **86.95% mAP50**.
+- **Full 4-Disease Pathology Expansion & Negative Controls (Completed):** Expert annotations (`expert.json`) parsed across all 1,000 images:
+  - 280 abnormal images with tooth-associated pathology (984 total findings covering `Periapical`, `Non-Odontogenic`, `Pericoronal`, and `Inter-Radicular` lesions; 60 non-tooth cyst/lesion scans excluded).
+  - 660 normal negative control images (`abnormality: None`).
+  - Both interactive with-tools (`train_cot_traces_tufts_all.jsonl`, 17.71 avg tool calls, 11.68 avg turns) and no-tools baseline (`train_cot_traces_tufts_all_no_tools.jsonl`, 1.0 turns) cohorts are 100% verified and hosted on Hugging Face Hub (`Reza-Nadimi/vlm-dental-traces`).
 
 ### Tunisia — Panoramic Dental Xray Dataset (in progress — Phase 1 done)
 `dental_agent/data/tunisia_panoramic.py`. CC BY 4.0, **no registration
@@ -476,10 +493,8 @@ See "Datasets" above. This is a ~30-second file inspection, not an
 engineering task — the engineering (loader, bundler, slicer) is already
 done and waiting on it.
 
-### Scale Trace Generation (the real bottleneck — see "Currently In Progress")
-Run `run_trace_gen.py` at real volume on Colab/Kaggle to replace the 108
-pre-rewrite legacy traces with real, post-rewrite ones. Nothing else in
-Phase 3/4/5 can meaningfully proceed without this.
+### Scale Trace Generation — COMPLETED (3,694 Verified Traces)
+Trace generation has successfully run at full volume across all target cohorts, producing **3,694 100% verified traces** across DENTEX (pathology + healthy), Tufts overlap (pathology + healthy), and Tufts 4-disease full cohort (pathology with-tools and no-tools). All 22 canonical trace files are synchronized to Hugging Face Hub (`Reza-Nadimi/vlm-dental-traces`) and untracked from Git. With this prerequisite complete, Phase 3 SFT and Phase 5 GRPO are fully unblocked.
 
 ### Dataset Expansion Beyond Tunisia
 Once Tunisia's loader is fully unblocked: DNS and TL-pano remain

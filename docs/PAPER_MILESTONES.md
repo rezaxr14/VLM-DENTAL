@@ -14,6 +14,17 @@ Future SFT, GRPO, and Trace Generation findings should also be appended here.
 | **Multi-Dataset Total (DENTEX + Tufts)** | **2,339 images** | **Mixed** (70% dense, 30% sparse) | **46,808 boxes** | Primary multi-dataset CV training pool |
 | **Held-Out Test Set (`validation_triple.json`)** | **46 images** | **Sparse** (~3.9 diseased teeth/image) | **182 targets** | Target-filtered benchmark evaluation |
 
+### Diagnostic & Synthetic CoT Reasoning Corpora
+
+| Corpus / Split | Image Count | Modality / Format | Ground Truth Findings | Purpose |
+|---|---|---|---|---|
+| **DENTEX Pathology** | 678 images | With Tools (678) & No-Tools (678) | 1,732 findings (4 classes) | Primary Stage 1 SFT & Stage 2 GRPO training |
+| **DENTEX Normal (Healthy)** | 27 images | With Tools (27) & No-Tools (27) | 0 findings (Negative Controls) | False positive suppression & full arch scanning |
+| **Tufts Overlap Pathology** | 202 images | With Tools (202) & No-Tools (202) | 202 findings (Periapical) | Cross-dataset pathology grounding & SFT |
+| **Tufts Normal (Healthy)** | 660 images | With Tools (660) & No-Tools (660) | 0 findings (Negative Controls) | Out-of-domain negative control generalization |
+| **Tufts All-Diseases Pathology** | 280 images | With Tools (280) & No-Tools (280) | 984 findings (4 native classes) | Multi-disease pathology generalization |
+| **Total Verified Traces** | **1,847 images** | **3,694 Total Traces** (10 cohorts) | Complete Verified Ground Truth | Canonical SFT / GRPO Suite (Hosted on HF Hub) |
+
 ## 2. In-Fold Cross-Validation Benchmark (Target-Filtered CV Splits)
 
 *Evaluates predictions specifically on the ground-truth target teeth present in each in-fold validation split using 1-to-1 greedy bipartite nominal matching (`conf >= 0.25`) and true continuous 10-threshold COCO PR interpolation (`conf >= 0.001`, IoU `0.50:0.95`).*
@@ -59,7 +70,7 @@ Future SFT, GRPO, and Trace Generation findings should also be appended here.
 
 ## 4. Chain-of-Thought (CoT) Synthetic Traces & Autonomous Verifier Benchmark
 
-*Methodology: Measures synthetic clinical reasoning trace generation under real dynamic tool execution (LangGraph agent loop) and strict multi-modal verification via frontier LLM verifiers (MiniMax M3 / Gemini 3.5 Flash Lite). Evaluates first-pass compliance, automated repair recovery yield, multi-turn reasoning depth, and multi-finding clinical completeness across 3,134 verified traces.*
+*Methodology: Measures synthetic clinical reasoning trace generation under real dynamic tool execution (LangGraph agent loop) and strict multi-modal verification via frontier LLM verifiers (MiniMax M3 / Gemini 3.5 Flash Lite). Evaluates first-pass compliance, automated repair recovery yield, multi-turn reasoning depth, and multi-finding clinical completeness across 3,694 verified traces.*
 
 ### Comprehensive Dataset Verification & Historical Repair Audit
 
@@ -73,7 +84,16 @@ Future SFT, GRPO, and Trace Generation findings should also be appended here.
 | **TUFTS Overlap Pathology** | No-Tools (Baseline 3) | 202 | 199 | 3 | 3 | **202** | 98.51% | **100.0%** | `train_cot_traces_tufts_no_tools.jsonl` (Git `27b2e47`, `298d9a0`) |
 | **TUFTS Normal (Healthy)** | With Tools | 660 | 594 | 66 | 66 | **660** | 90.00% | **100.0%** | `train_cot_traces_healthy_tufts.jsonl` (Git `60f450b`) |
 | **TUFTS Normal (Healthy)** | No-Tools | 660 | 660 | 0 | 0 | **660** | 100.0% | **100.0%** | `train_cot_traces_healthy_tufts_no_tools.jsonl` (Git `1a32c32`) |
-| **TOTALS ACROSS PROJECT** | **Combined Corpus** | **3,134** | **3,042** | **92** | **92** | **3,134** | **97.06%** | **100.0%** | Canonical Unified SFT / RL Training Corpus |
+| **TUFTS All-Diseases Pathology** | With Tools (Main Policy) | 280 | 280 | 0 | 0 | **280** | 100.0% | **100.0%** | `train_cot_traces_tufts_all.jsonl` (HF Hub) |
+| **TUFTS All-Diseases Pathology** | No-Tools (Baseline 3) | 280 | 280 | 0 | 0 | **280** | 100.0% | **100.0%** | `train_cot_traces_tufts_all_no_tools.jsonl` (HF Hub) |
+| **TOTALS ACROSS PROJECT** | **Combined Corpus** | **3,694** | **3,602** | **92** | **92** | **3,694** | **97.51%** | **100.0%** | Canonical Unified SFT / RL Training Corpus |
+
+### Verifier Error Detection & Rejection Taxonomy (92 Flaws Caught)
+During first-pass evaluation, the independent frontier verifier caught **92 problematic traces** across three distinct failure modes:
+1. **False-Positive Pathology on Normal Scans (66 rejections, 71.7%)**: Generator hallucinated caries or periapical radiolucencies on disease-free Tufts scans (`abnormality: None`). Caught and rejected by the verifier; repaired to systematic negative surveys (`final_answer: []`).
+2. **Ground-Truth Contradictions & FDI Errors (15 rejections, 16.3%)**: Single-turn baseline generator asserted mismatched pathology classes (e.g. diagnosing Caries for an Impacted Tooth) or swapped tooth quadrants. Caught and rejected; repaired via targeted re-prompting.
+3. **Uncorrected Spatial Drift (11 rejections, 12.0%)**: Interactive agent received an off-center bounding box but diagnosed without issuing corrective `nudge_crop` adjustments. Caught and rejected; repaired with spatial realignment.
+*All 92 rejected traces achieved a 100.0% repair-and-promotion yield into the final canonical training corpus.*
 
 ### Hybrid Composition of the Canonical Training Corpus
 The canonical training files used by downstream Stage 1 SFT (`VLM_Dental_Colab_SFT.ipynb`) and Stage 2 GRPO (`VLM_Dental_Colab_GRPO.ipynb`) are unified hybrid corpora containing **880 pathology traces**:
@@ -83,7 +103,7 @@ The canonical training files used by downstream Stage 1 SFT (`VLM_Dental_Colab_S
 
 ### Quantitative Quality & Tool Analytics (With-Tools Corpus)
 - **Multi-Turn Reasoning Depth**:
-  - Pathology with tools: Mean **12.85 turns**, Median **11.0 turns**, Range **4 to 35 turns**.
+  - Pathology with tools: Mean **12.85 turns** on DENTEX, **11.68 turns** on Tufts All-Diseases (averaging 17.71 tool calls per trace, range 4 to 35 turns).
   - Healthy negative controls with tools: Mean **13.09 turns**, Median **12.0 turns**, Range **5 to 25 turns** (demonstrating systematic full-mouth quadrant surveying before confirming absence of disease).
   - Single-turn baseline (no-tools): Exactly **1.0 turn** committing directly to direct visual diagnosis.
 - **Tool Utilization Frequency**:
@@ -110,7 +130,8 @@ The canonical training files used by downstream Stage 1 SFT (`VLM_Dental_Colab_S
     - 6 images: `Periapical` + `Pericoronal`
     - 2 images: `Non-Odontogenic` + `Pericoronal`
   - In the 202 DENTEX-overlap dataset, 16 images had their non-periapical findings omitted due to taxonomy restriction.
-  - The newly implemented `TUFTS_ALL_DISEASES` feature (`--tufts-all-diseases`) loads all **280 abnormal images** with tooth-associated pathology across the native 4-disease taxonomy (`Periapical`, `Non-Odontogenic`, `Pericoronal`, `Inter-Radicular`), generating multi-finding reasoning chains covering every lesion on the radiograph.
+  - The newly implemented `TUFTS_ALL_DISEASES` feature (`--tufts-all-diseases`) loads all **280 abnormal images** with tooth-associated pathology across the native 4-disease taxonomy (`Periapical`, `Non-Odontogenic`, `Pericoronal`, `Inter-Radicular`), generating multi-finding reasoning chains covering every lesion on the radiograph (total **984 findings**, 100% verified across both with-tools and no-tools cohorts).
   - **Exclusion Rationale for 60 Zero-Overlap Images**: Out of the 340 abnormal images, exactly 60 images depict pathology entirely disconnected from any tooth structure (e.g. maxillary sinus mucoceles or mandibular ramus radiolucencies). These scans are excluded because agent diagnostic actions (`locate_tooth`, `contralateral_compare`, `fdi_label`) fundamentally require an anchoring tooth position and FDI quadrant coordinates.
+  - **Hugging Face Hub Synchronization & Git Untracking**: All 22 canonical completed trace files (~170 MB) are hosted on Hugging Face Hub (`Reza-Nadimi/vlm-dental-traces`) and untracked from git to preserve repository size. Workflows synchronize traces via `python scripts/sync_traces_hf.py --download`.
 
 

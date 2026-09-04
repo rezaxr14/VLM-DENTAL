@@ -69,9 +69,6 @@ data/traces/*.bak
 !data/evaluations/
 !data/evaluations/*
 
-# Retain multi-Colab git-sync for active Tufts all-diseases generation until complete:
-!data/traces/train_cot_traces_unverified_tufts_all*.jsonl
-!data/traces/train_cot_traces_tufts_all*.jsonl
 
 # API keys & secrets
 .env
