@@ -208,6 +208,11 @@ class APISessionPool:
 
         print(f"Loading native Transformers model '{model_name}' (device_map='auto', 4bit={load_4bit})...", flush=True)
         model, processor = load_model(cfg, device_map="auto")
+        if hasattr(model, "hf_device_map"):
+            devices_used = set(model.hf_device_map.values())
+            print(f"Model sharded across devices: {devices_used}", flush=True)
+            if "cpu" in devices_used or "disk" in devices_used:
+                print("⚠️ WARNING: Part of model was placed on CPU/disk! Inference will be slow.", flush=True)
         model.eval()
         self._transformers_pipelines[model_name] = (model, processor)
         return model, processor
@@ -501,6 +506,7 @@ def _call_llm_once(
 
         elif provider in ("transformers", "local_hf"):
             import torch
+            import time
             model_obj, processor = _POOL.get_transformers_pipeline(model)
             prefix = provider.upper()
             max_dim_str = os.environ.get(f"{prefix}_IMAGE_MAX_DIM")
@@ -541,6 +547,7 @@ def _call_llm_once(
                 messages.append({"role": "user", "content": user_parts})
 
             # Process input using qwen_vl_utils if available or native AutoProcessor
+            t_pre_0 = time.time()
             prompt_tokens_count = 0
             inputs = None
             try:
@@ -580,14 +587,41 @@ def _call_llm_once(
 
             inputs = {k: v.to(target_device) if hasattr(v, "to") else v for k, v in inputs.items()}
             prompt_tokens_count = inputs.get("input_ids", torch.empty((1, 0))).shape[-1]
+            pre_elapsed = time.time() - t_pre_0
 
+            # Collect explicit EOS terminators so generation stops as soon as JSON finishes
+            eos_token_ids: list[int] = []
+            if hasattr(processor, "tokenizer") and processor.tokenizer is not None:
+                tok = processor.tokenizer
+                if tok.eos_token_id is not None:
+                    if isinstance(tok.eos_token_id, list):
+                        eos_token_ids.extend(tok.eos_token_id)
+                    else:
+                        eos_token_ids.append(tok.eos_token_id)
+                for stop_tok in ("<|im_end|>", "<|endoftext|>"):
+                    tid = tok.convert_tokens_to_ids(stop_tok)
+                    if tid is not None and isinstance(tid, int) and tid not in eos_token_ids:
+                        eos_token_ids.append(tid)
+
+            print(f"  • Preprocessing complete ({pre_elapsed:.1f}s, {prompt_tokens_count} prompt tokens). Generating response (max_tokens={max_tokens})...", flush=True)
+
+            from transformers import TextStreamer
+            streamer = TextStreamer(processor.tokenizer, skip_prompt=True)
+
+            t_gen_0 = time.time()
             with torch.inference_mode():
                 gen_kwargs: dict[str, Any] = {
                     "max_new_tokens": max_tokens,
                     "do_sample": (temperature > 0.0),
+                    "streamer": streamer,
                 }
+                if eos_token_ids:
+                    gen_kwargs["eos_token_id"] = eos_token_ids
+                if hasattr(processor, "tokenizer") and processor.tokenizer is not None and processor.tokenizer.pad_token_id is not None:
+                    gen_kwargs["pad_token_id"] = processor.tokenizer.pad_token_id
                 if temperature > 0.0:
                     gen_kwargs["temperature"] = temperature
+
                 generated_ids = model_obj.generate(**inputs, **gen_kwargs)
                 in_len = inputs["input_ids"].shape[1]
                 generated_ids_trimmed = [out_ids[in_len:] for out_ids in generated_ids]
@@ -597,10 +631,14 @@ def _call_llm_once(
                     clean_up_tokenization_spaces=False
                 )[0].strip()
 
+            gen_elapsed = time.time() - t_gen_0
+            comp_tokens = len(generated_ids_trimmed[0])
+            speed = comp_tokens / max(gen_elapsed, 0.001)
+            print(f"\n  • Generation complete: {comp_tokens} tokens in {gen_elapsed:.1f}s ({speed:.1f} tok/s)\n", flush=True)
+
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
-            comp_tokens = len(generated_ids_trimmed[0])
             usage_dict = {
                 "prompt_tokens": int(prompt_tokens_count),
                 "completion_tokens": int(comp_tokens),
