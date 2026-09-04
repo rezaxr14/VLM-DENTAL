@@ -597,6 +597,9 @@ def _call_llm_once(
                     clean_up_tokenization_spaces=False
                 )[0].strip()
 
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
             comp_tokens = len(generated_ids_trimmed[0])
             usage_dict = {
                 "prompt_tokens": int(prompt_tokens_count),

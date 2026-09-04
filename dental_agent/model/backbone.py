@@ -67,13 +67,26 @@ def load_model(
         if processor.tokenizer.pad_token_id is None:
             processor.tokenizer.pad_token = processor.tokenizer.eos_token
 
+    if torch.cuda.is_available():
+        # On Turing sm_75 (Tesla T4) and above, enable PyTorch native SDPA Memory-Efficient Attention
+        # (Cutlass backend) to eliminate the O(N^2) dense attention allocation on high-resolution images.
+        if hasattr(torch.backends.cuda, "enable_mem_efficient_sdp"):
+            torch.backends.cuda.enable_mem_efficient_sdp(True)
+        major_cap = torch.cuda.get_device_capability()[0]
+        if major_cap < 8 and hasattr(torch.backends.cuda, "enable_flash_sdp"):
+            torch.backends.cuda.enable_flash_sdp(False)
+
     model_kwargs: dict[str, Any] = {
         "device_map": device_map if torch.cuda.is_available() else None,
         "trust_remote_code": True,
     }
-    if bnb_config is not None:
-        model_kwargs["quantization_config"] = bnb_config
-    elif not torch.cuda.is_available():
+    if torch.cuda.is_available():
+        model_kwargs["attn_implementation"] = "sdpa"
+        if bnb_config is not None:
+            model_kwargs["quantization_config"] = bnb_config
+        else:
+            model_kwargs["torch_dtype"] = torch.float16
+    else:
         model_kwargs["torch_dtype"] = torch.float32
 
     try:

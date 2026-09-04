@@ -213,6 +213,7 @@ def _is_rate_limit_or_fatal_error(e: Exception) -> bool:
 
 
 def run_zero_shot_evaluation(args: argparse.Namespace) -> None:
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
     load_env()
     cfg = load_config(args.config)
 
