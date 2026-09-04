@@ -203,7 +203,7 @@ def print_banner(
     import os
     if mode == "generate":
         prov = active_provider or os.environ.get("GENERATOR_PROVIDER", "local")
-        mod = active_model or os.environ.get("GENERATOR_MODEL", "QuantTrio/Qwen3.5-9B-AWQ")
+        mod = active_model or os.environ.get("GENERATOR_MODEL", "Qwen/Qwen3.5-9B")
         if prov == "local":
             print(f"* Generator          : LOCAL vLLM ({mod}) — no rate limit", flush=True)
         else:
@@ -215,7 +215,7 @@ def print_banner(
         print(f"* Output             : {out_file}", flush=True)
     else:
         prov = active_provider or os.environ.get("VERIFIER_PROVIDER", "local")
-        mod = active_model or os.environ.get("VERIFIER_MODEL", "QuantTrio/Qwen3.5-9B-AWQ")
+        mod = active_model or os.environ.get("VERIFIER_MODEL", "Qwen/Qwen3.5-9B")
         if prov == "local":
             print(f"* Verifier           : LOCAL vLLM ({mod}) — no rate limit", flush=True)
         else:
@@ -716,6 +716,7 @@ def run_clean(args: argparse.Namespace, cfg: Any) -> None:
         dataset_name=dataset_name,
         no_tools=args.no_tools,
         healthy_only=healthy,
+        tufts_all_diseases=getattr(args, "tufts_all_diseases", False),
         explicit_output=args.output or getattr(args, "output_path", None),
     )
     

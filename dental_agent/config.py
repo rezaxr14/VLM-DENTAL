@@ -107,7 +107,7 @@ class APIConfig:
     """LLM API settings for trace generation & verification (§5.2)."""
 
     generator_provider: str = "local"
-    generator_model: str = "QuantTrio/Qwen3.5-9B-AWQ"
+    generator_model: str = "Qwen/Qwen3.5-9B"
     verifier_provider: str = "auto_verifier"
     verifier_model: str = "auto_model"
     gemini_rpm_limit: int = 5

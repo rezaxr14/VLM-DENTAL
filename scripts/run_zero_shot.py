@@ -9,7 +9,7 @@ domain fine-tuning and without tool access.
 Usage:
     python scripts/run_zero_shot.py --provider gemini --model gemini-3.5-flash-lite
     python scripts/run_zero_shot.py --provider nvidia_nim --model meta/muse-glimmer-30b
-    python scripts/run_zero_shot.py --provider local --model QuantTrio/Qwen3.5-9B-AWQ
+    python scripts/run_zero_shot.py --provider local --model Qwen/Qwen3.5-9B
 
 Parallel workers (horizontal slicing with git sync):
     python scripts/run_zero_shot.py --provider gemini --total-slices 4 --slice-index 1 --git-sync-every 5
@@ -167,7 +167,7 @@ def resolve_provider_and_model(args: argparse.Namespace) -> tuple[str, str]:
                 "nvidia_nim": "meta/llama-3.2-11b-vision-instruct",
                 "groq": "qwen/qwen3.6-27b",
                 "openrouter": "google/gemma-4-31b-it:free",
-                "local": "QuantTrio/Qwen3.5-9B-AWQ",
+                "local": "Qwen/Qwen3.5-9B",
                 "openai": "gpt-4o",
                 "anthropic": "claude-3-7-sonnet-20250219",
             }

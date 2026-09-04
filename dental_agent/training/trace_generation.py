@@ -68,14 +68,21 @@ def _is_valid_key(val: str | None) -> bool:
 # When GENERATOR_PROVIDER is an external API (not 'local'), the GeneratorPool
 # handles rate limiting via 'auto_generator' routing.
 # ---------------------------------------------------------------------------
+GENERATOR_PROVIDER: str = os.environ.get("GENERATOR_PROVIDER", "local")
+GENERATOR_MODEL: str = os.environ.get("GENERATOR_MODEL", "Qwen/Qwen3.5-9B")
+VERIFIER_PROVIDER: str = os.environ.get("VERIFIER_PROVIDER", "local")
+VERIFIER_MODEL: str = os.environ.get("VERIFIER_MODEL", "Qwen/Qwen3.5-9B")
+
+
 def _resolve_generator() -> tuple[str, str]:
     """Pick (provider, model) for the generator.
     
     Dynamically checks os.environ so CLI overrides and updated .env variables
     take immediate effect without being frozen at module-import time.
+    Strict Precedence: CLI overrides (via os.environ or function args) > .env > defaults.
     """
-    prov = os.environ.get("GENERATOR_PROVIDER", "local")
-    mod = os.environ.get("GENERATOR_MODEL", "QuantTrio/Qwen3.5-9B-AWQ")
+    prov = os.environ.get("GENERATOR_PROVIDER") or GENERATOR_PROVIDER or "local"
+    mod = os.environ.get("GENERATOR_MODEL") or GENERATOR_MODEL or "Qwen/Qwen3.5-9B"
     return prov, mod
 
 
@@ -85,9 +92,12 @@ def _resolve_generator() -> tuple[str, str]:
 # ---------------------------------------------------------------------------
 
 def _resolve_verifier() -> tuple[str, str]:
-    """Pick (provider, model) for the verifier dynamically from os.environ."""
-    prov = os.environ.get("VERIFIER_PROVIDER", "local")
-    mod = os.environ.get("VERIFIER_MODEL", "QuantTrio/Qwen3.5-9B-AWQ")
+    """Pick (provider, model) for the verifier dynamically from os.environ.
+    
+    Strict Precedence: CLI overrides > .env variables > defaults.
+    """
+    prov = os.environ.get("VERIFIER_PROVIDER") or VERIFIER_PROVIDER or "local"
+    mod = os.environ.get("VERIFIER_MODEL") or VERIFIER_MODEL or "Qwen/Qwen3.5-9B"
     return prov, mod
 
 
@@ -1159,7 +1169,9 @@ def repair_pending(
                 record = json.loads(line)
                 img_id = int(record.get("image_id", -1))
                 rec_dataset = record.get("dataset", "dentex")
-                if (rec_dataset, img_id) not in verified_ids:
+                status = record.get("status", "")
+                traj = record.get("trajectory")
+                if (rec_dataset, img_id) not in verified_ids and status != "generation_failed" and bool(traj):
                     needs_repair.append(record)
             except Exception:
                 pass
@@ -1377,7 +1389,8 @@ def run_aim1_batch(
         for idx, image_id in enumerate(todo):
             result = None
             try:
-                if GENERATOR_PROVIDER == "local":
+                active_gen_prov, _ = _resolve_generator()
+                if active_gen_prov == "local":
                     health_retries = 0
                     while not verify_local_server_health(timeout=5.0):
                         health_retries += 1
