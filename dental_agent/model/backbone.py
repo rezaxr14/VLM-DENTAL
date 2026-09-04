@@ -53,7 +53,16 @@ def load_model(
             bnb_4bit_use_double_quant=model_cfg.bnb_double_quant,
         )
 
-    processor = AutoProcessor.from_pretrained(model_cfg.name, trust_remote_code=True)
+    try:
+        processor = AutoProcessor.from_pretrained(model_cfg.name, trust_remote_code=True)
+    except Exception as e:
+        if "does not recognize this architecture" in str(e) or "qwen3_5" in str(e):
+            raise RuntimeError(
+                f"Your installed Transformers version is too old to load '{model_cfg.name}' (architecture 'qwen3_5'). "
+                f"Please run `pip install --upgrade transformers>=5.0.0` and restart the session. Original error: {e}"
+            ) from e
+        raise
+
     if hasattr(processor, "tokenizer") and processor.tokenizer is not None:
         if processor.tokenizer.pad_token_id is None:
             processor.tokenizer.pad_token = processor.tokenizer.eos_token
@@ -67,7 +76,15 @@ def load_model(
     elif not torch.cuda.is_available():
         model_kwargs["torch_dtype"] = torch.float32
 
-    model = ModelClass.from_pretrained(model_cfg.name, **model_kwargs)
+    try:
+        model = ModelClass.from_pretrained(model_cfg.name, **model_kwargs)
+    except Exception as e:
+        if "does not recognize this architecture" in str(e) or "qwen3_5" in str(e):
+            raise RuntimeError(
+                f"Your installed Transformers version is too old to load '{model_cfg.name}' (architecture 'qwen3_5'). "
+                f"Please run `pip install --upgrade transformers>=5.0.0` and restart the session. Original error: {e}"
+            ) from e
+        raise
     return model, processor
 
 
