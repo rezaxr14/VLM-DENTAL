@@ -164,6 +164,7 @@ class APISessionPool:
 
     def __init__(self) -> None:
         self._compat_clients: dict[str, Any] = {}
+        self._transformers_pipelines: dict[str, tuple[Any, Any]] = {}
 
     def get_openai_compatible(self, provider: str) -> Any:
         if provider in self._compat_clients:
@@ -192,6 +193,24 @@ class APISessionPool:
         client = OpenAI(base_url=base_url, api_key=api_key)
         self._compat_clients[provider] = client
         return client
+
+    def get_transformers_pipeline(self, model_name: str) -> tuple[Any, Any]:
+        """Lazily load and memoize in-process PyTorch model and processor."""
+        if model_name in self._transformers_pipelines:
+            return self._transformers_pipelines[model_name]
+
+        import torch
+        from dental_agent.model.backbone import load_model
+        from dental_agent.config import ModelConfig
+
+        load_4bit = os.environ.get("TRANSFORMERS_LOAD_IN_4BIT", "false").lower() == "true"
+        cfg = ModelConfig(name=model_name, load_in_4bit=load_4bit)
+
+        print(f"Loading native Transformers model '{model_name}' (device_map='auto', 4bit={load_4bit})...", flush=True)
+        model, processor = load_model(cfg, device_map="auto")
+        model.eval()
+        self._transformers_pipelines[model_name] = (model, processor)
+        return model, processor
 
 _POOL = APISessionPool()
 
@@ -479,6 +498,114 @@ def _call_llm_once(
                 if kwargs.get("return_metadata", False):
                     return content, {"finish_reason": finish_reason, "usage": usage_dict}
                 return content
+
+        elif provider in ("transformers", "local_hf"):
+            import torch
+            model_obj, processor = _POOL.get_transformers_pipeline(model)
+            prefix = provider.upper()
+            max_dim_str = os.environ.get(f"{prefix}_IMAGE_MAX_DIM")
+            max_dim = int(max_dim_str) if max_dim_str is not None else 0
+
+            scaled_img = None
+            if image is not None:
+                scaled_img = image.copy()
+                if max_dim > 0:
+                    scaled_img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
+
+            messages: list[dict[str, Any]] = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+
+            if isinstance(user_content, list):
+                for msg in user_content:
+                    role = msg["role"]
+                    payload = msg["content"]
+                    if isinstance(payload, str):
+                        messages.append({"role": role, "content": payload})
+                    elif isinstance(payload, list):
+                        parts: list[dict[str, Any]] = []
+                        for item in payload:
+                            if item["type"] == "text":
+                                parts.append({"type": "text", "text": item["text"]})
+                            elif item["type"] == "image":
+                                img_copy = item["image"].copy()
+                                if max_dim > 0:
+                                    img_copy.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
+                                parts.append({"type": "image", "image": img_copy})
+                        messages.append({"role": role, "content": parts})
+            else:
+                user_parts: list[dict[str, Any]] = []
+                if scaled_img is not None:
+                    user_parts.append({"type": "image", "image": scaled_img})
+                user_parts.append({"type": "text", "text": user_content})
+                messages.append({"role": "user", "content": user_parts})
+
+            # Process input using qwen_vl_utils if available or native AutoProcessor
+            prompt_tokens_count = 0
+            inputs = None
+            try:
+                from qwen_vl_utils import process_vision_info
+                text_prompt = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+                vision_res = process_vision_info(messages)
+                image_inputs = vision_res[0] if isinstance(vision_res, (tuple, list)) and len(vision_res) > 0 else None
+                video_inputs = vision_res[1] if isinstance(vision_res, (tuple, list)) and len(vision_res) > 1 else None
+                proc_kwargs: dict[str, Any] = {
+                    "text": [text_prompt],
+                    "padding": True,
+                    "return_tensors": "pt",
+                }
+                if image_inputs is not None:
+                    proc_kwargs["images"] = image_inputs
+                if video_inputs is not None:
+                    proc_kwargs["videos"] = video_inputs
+                inputs = processor(**proc_kwargs)
+            except Exception:
+                if hasattr(processor, "apply_chat_template"):
+                    text_prompt = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+                else:
+                    text_prompt = f"{system_prompt}\n\n{user_content}" if system_prompt else str(user_content)
+                img_arg = [scaled_img] if scaled_img is not None else None
+                try:
+                    inputs = processor(text=[text_prompt], images=img_arg, padding=True, return_tensors="pt")
+                except Exception:
+                    inputs = processor(text=[text_prompt], padding=True, return_tensors="pt")
+
+            # Move inputs to model device (first parameter device or cuda)
+            target_device = getattr(model_obj, "device", None)
+            if target_device is None or str(target_device) == "meta":
+                try:
+                    target_device = next(model_obj.parameters()).device
+                except Exception:
+                    target_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+            inputs = {k: v.to(target_device) if hasattr(v, "to") else v for k, v in inputs.items()}
+            prompt_tokens_count = inputs.get("input_ids", torch.empty((1, 0))).shape[-1]
+
+            with torch.inference_mode():
+                gen_kwargs: dict[str, Any] = {
+                    "max_new_tokens": max_tokens,
+                    "do_sample": (temperature > 0.0),
+                }
+                if temperature > 0.0:
+                    gen_kwargs["temperature"] = temperature
+                generated_ids = model_obj.generate(**inputs, **gen_kwargs)
+                in_len = inputs["input_ids"].shape[1]
+                generated_ids_trimmed = [out_ids[in_len:] for out_ids in generated_ids]
+                full_text = processor.batch_decode(
+                    generated_ids_trimmed,
+                    skip_special_tokens=True,
+                    clean_up_tokenization_spaces=False
+                )[0].strip()
+
+            comp_tokens = len(generated_ids_trimmed[0])
+            usage_dict = {
+                "prompt_tokens": int(prompt_tokens_count),
+                "completion_tokens": int(comp_tokens),
+                "total_tokens": int(prompt_tokens_count + comp_tokens),
+            }
+            if kwargs.get("return_metadata", False):
+                return full_text, {"finish_reason": "stop", "usage": usage_dict}
+            return full_text
 
         else:
             raise ValueError(f"Unknown provider '{provider}'")

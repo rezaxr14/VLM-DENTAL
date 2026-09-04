@@ -453,6 +453,19 @@ def test_cli_parser_max_tokens_and_dims():
     assert args.image_max_dim == 640
 
 
+def test_cli_parser_transformers_provider():
+    """Test CLI argument parsing and model resolution for transformers provider."""
+    from scripts.run_zero_shot import build_parser, resolve_provider_and_model
+
+    parser = build_parser()
+    args = parser.parse_args(["--provider", "transformers"])
+    assert args.provider == "transformers"
+    provider, model = resolve_provider_and_model(args)
+    assert provider == "transformers"
+    assert model == "Qwen/Qwen3.5-9B"
+
+
+
 
 
 

@@ -168,6 +168,8 @@ def resolve_provider_and_model(args: argparse.Namespace) -> tuple[str, str]:
                 "groq": "qwen/qwen3.6-27b",
                 "openrouter": "google/gemma-4-31b-it:free",
                 "local": "Qwen/Qwen3.5-9B",
+                "transformers": "Qwen/Qwen3.5-9B",
+                "local_hf": "Qwen/Qwen3.5-9B",
                 "openai": "gpt-4o",
                 "anthropic": "claude-3-7-sonnet-20250219",
             }
@@ -192,7 +194,7 @@ def print_banner(provider: str, model: str, completed_count: int, total_images: 
 # ---------------------------------------------------------------------------
 
 KNOWN_PROVIDERS: set[str] = {
-    "gemini", "nvidia_nim", "groq", "openrouter", "local", "openai", "anthropic"
+    "gemini", "nvidia_nim", "groq", "openrouter", "local", "transformers", "local_hf", "openai", "anthropic"
 }
 
 
@@ -464,6 +466,8 @@ def _run_zero_shot_for_target(
                 default_max_tokens = {
                     "GROQ": 4096,
                     "LOCAL": 16384,
+                    "TRANSFORMERS": 16384,
+                    "LOCAL_HF": 16384,
                     "NVIDIA": 16384,
                     "GEMINI": 16384,
                     "OPENROUTER": 16384,
@@ -702,7 +706,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", "-c", default=None, help="Path to config YAML")
     parser.add_argument("--dataset", default="dentex", help="Dataset name ('dentex' or 'tufts')")
     parser.add_argument("--split", default="test", help="Dataset split ('test', 'validation', 'train')")
-    parser.add_argument("--provider", default=None, help="Provider ('gemini', 'nvidia_nim', 'groq', 'openrouter', 'local', 'openai', 'anthropic')")
+    parser.add_argument("--provider", default=None, help="Provider ('gemini', 'nvidia_nim', 'groq', 'openrouter', 'transformers', 'local', 'openai', 'anthropic')")
     parser.add_argument("--model", default=None, help="Model name / checkpoint identifier or comma-separated list")
     parser.add_argument("--suite", choices=["option7", "benchmark", "all"], default=None, help="Run pre-configured multi-model benchmark suite (7 NVIDIA NIM + 3 OpenRouter models)")
     
