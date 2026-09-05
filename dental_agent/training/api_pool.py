@@ -607,6 +607,7 @@ def _call_llm_once(
 
             from transformers import TextStreamer
             streamer = TextStreamer(processor.tokenizer, skip_prompt=True)
+            rep_penalty = float(os.environ.get("TRANSFORMERS_REPETITION_PENALTY", "1.05"))
 
             t_gen_0 = time.time()
             with torch.inference_mode():
@@ -615,6 +616,8 @@ def _call_llm_once(
                     "do_sample": (temperature > 0.0),
                     "streamer": streamer,
                 }
+                if rep_penalty != 1.0:
+                    gen_kwargs["repetition_penalty"] = rep_penalty
                 if eos_token_ids:
                     gen_kwargs["eos_token_id"] = eos_token_ids
                 if hasattr(processor, "tokenizer") and processor.tokenizer is not None and processor.tokenizer.pad_token_id is not None:
