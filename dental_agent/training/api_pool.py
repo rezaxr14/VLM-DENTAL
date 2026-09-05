@@ -607,7 +607,7 @@ def _call_llm_once(
 
             from transformers import TextStreamer
             streamer = TextStreamer(processor.tokenizer, skip_prompt=True)
-            rep_penalty = float(os.environ.get("TRANSFORMERS_REPETITION_PENALTY", "1.05"))
+            rep_penalty = float(kwargs.get("repetition_penalty") or os.environ.get("TRANSFORMERS_REPETITION_PENALTY", "1.10"))
 
             t_gen_0 = time.time()
             with torch.inference_mode():

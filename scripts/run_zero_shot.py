@@ -214,6 +214,8 @@ def _is_rate_limit_or_fatal_error(e: Exception) -> bool:
 
 def run_zero_shot_evaluation(args: argparse.Namespace) -> None:
     os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+    if getattr(args, "repetition_penalty", None) is not None:
+        os.environ["TRANSFORMERS_REPETITION_PENALTY"] = str(args.repetition_penalty)
     load_env()
     cfg = load_config(args.config)
 
@@ -487,6 +489,7 @@ def _run_zero_shot_for_target(
                 temperature=args.temperature,
                 max_tokens=tokens_to_use,
                 return_metadata=True,
+                repetition_penalty=getattr(args, "repetition_penalty", None),
             )
 
             if isinstance(resp_out, tuple):
@@ -727,6 +730,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", default=None, help="Explicit output file path override")
     parser.add_argument("--image-max-dim", type=int, default=None, help="Max image dimension (0 = full resolution). Falls back to .env then provider defaults if omitted.")
     parser.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature")
+    parser.add_argument("--repetition-penalty", type=float, default=None, help="Repetition penalty for local/transformers generation (e.g. 1.10 to prevent reasoning loops)")
     parser.add_argument("--max-tokens", type=int, default=None, help="Max tokens for VLM response (reasoning thought + findings JSON). Falls back to .env then provider defaults if omitted.")
     
     # Flags

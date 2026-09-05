@@ -47,3 +47,8 @@ All agents must adhere to the modular rules in `.agents/rules/`:
 8. **[Visual Verification Discipline](visual_verification_discipline.md)**:
    - Zero-hallucination image checking: before claiming an image contains generated visual elements (bounding boxes, charts, etc.), the agent MUST visually verify the image itself using the `view_file` tool.
    - Never assume an image was rendered correctly just because the code executed without errors.
+
+9. **[Token Constraints & Hyperparameter Invariants](token_and_hyperparameter_invariants.md)**:
+   - Zero tampering with user token limits or budgets (`LOCAL_MAX_TOKENS`, `max_tokens`, 16384 headroom).
+   - Never lower, clamp, or alter user-specified token headroom or dependency versions (`transformers>=5.0.0`).
+
