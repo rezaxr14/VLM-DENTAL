@@ -1,132 +1,106 @@
 {
   "dentex_test_gemini_gemini-3.1-flash-lite": {
     "format_adherence": 1.0,
-    "fdi_localization_accuracy": 0.5869565217391305,
-    "pathology_macro_f1": 0.32608695652173914,
-    "exact_match_accuracy": 0.32608695652173914,
+    "fdi_localization_accuracy": 0.48,
+    "pathology_macro_f1": 0.32,
+    "exact_match_accuracy": 0.32,
     "exact_match_ci_95": [
-      0.1956521739130435,
-      0.45652173913043476
+      0.2,
+      0.44
     ],
-    "ece": 0.6289129995781442,
+    "ece": 0.630999983549118,
     "mean_tool_calls": 0.0,
-    "total_samples": 46.0
+    "total_samples": 50.0
   },
   "dentex_test_gemini_gemini-3.5-flash-lite": {
     "format_adherence": 1.0,
-    "fdi_localization_accuracy": 0.5652173913043478,
-    "pathology_macro_f1": 0.391304347826087,
-    "exact_match_accuracy": 0.391304347826087,
+    "fdi_localization_accuracy": 0.54,
+    "pathology_macro_f1": 0.32,
+    "exact_match_accuracy": 0.32,
     "exact_match_ci_95": [
-      0.2608695652173913,
-      0.5222826086956517
+      0.18,
+      0.46
     ],
-    "ece": 0.5315218075462009,
+    "ece": 0.5958000099658967,
     "mean_tool_calls": 0.0,
-    "total_samples": 46.0
+    "total_samples": 50.0
   },
   "dentex_test_gemini_gemini-3.5-flash": {
     "format_adherence": 1.0,
-    "fdi_localization_accuracy": 0.5869565217391305,
-    "pathology_macro_f1": 0.2826086956521739,
-    "exact_match_accuracy": 0.2826086956521739,
+    "fdi_localization_accuracy": 0.62,
+    "pathology_macro_f1": 0.36,
+    "exact_match_accuracy": 0.36,
     "exact_match_ci_95": [
-      0.15217391304347827,
-      0.41304347826086957
+      0.22,
+      0.5
     ],
-    "ece": 0.6391111373901368,
+    "ece": 0.560400059223175,
     "mean_tool_calls": 0.0,
-    "total_samples": 46.0
-  },
-  "dentex_test_groq_qwen--qwen3.6-27b": {
-    "format_adherence": 0.9772727272727273,
-    "fdi_localization_accuracy": 0.6363636363636364,
-    "pathology_macro_f1": 0.4090909090909091,
-    "exact_match_accuracy": 0.4090909090909091,
-    "exact_match_ci_95": [
-      0.2727272727272727,
-      0.5681818181818182
-    ],
-    "ece": 0.0,
-    "mean_tool_calls": 0.0,
-    "total_samples": 44.0
+    "total_samples": 50.0
   },
   "dentex_test_nvidia_nim_meta--llama-3.2-11b-vision-instruct": {
     "format_adherence": 1.0,
-    "fdi_localization_accuracy": 0.32608695652173914,
-    "pathology_macro_f1": 0.13043478260869565,
-    "exact_match_accuracy": 0.13043478260869565,
+    "fdi_localization_accuracy": 0.26,
+    "pathology_macro_f1": 0.04,
+    "exact_match_accuracy": 0.04,
     "exact_match_ci_95": [
-      0.043478260869565216,
-      0.21739130434782608
+      0.0,
+      0.1
     ],
-    "ece": 0.5608695933352346,
+    "ece": 0.6780000028014184,
     "mean_tool_calls": 0.0,
-    "total_samples": 46.0
+    "total_samples": 50.0
   },
   "dentex_test_nvidia_nim_meta--llama-3.2-90b-vision-instruct": {
     "format_adherence": 1.0,
     "fdi_localization_accuracy": 0.45652173913043476,
-    "pathology_macro_f1": 0.2608695652173913,
-    "exact_match_accuracy": 0.2608695652173913,
+    "pathology_macro_f1": 0.3695652173913043,
+    "exact_match_accuracy": 0.3695652173913043,
     "exact_match_ci_95": [
-      0.15217391304347827,
-      0.391304347826087
+      0.2391304347826087,
+      0.5217391304347826
     ],
-    "ece": 0.48695650761542114,
+    "ece": 0.39478255354839825,
     "mean_tool_calls": 0.0,
     "total_samples": 46.0
   },
   "dentex_test_nvidia_nim_moonshotai--kimi-k3": {
     "format_adherence": 1.0,
-    "fdi_localization_accuracy": 0.6521739130434783,
-    "pathology_macro_f1": 0.30434782608695654,
-    "exact_match_accuracy": 0.30434782608695654,
+    "fdi_localization_accuracy": 0.64,
+    "pathology_macro_f1": 0.46,
+    "exact_match_accuracy": 0.46,
     "exact_match_ci_95": [
-      0.17391304347826086,
-      0.45652173913043476
+      0.32,
+      0.6
     ],
-    "ece": 0.38847822080487787,
+    "ece": 0.21379998028278352,
     "mean_tool_calls": 0.0,
-    "total_samples": 46.0
-  },
-  "dentex_test_openrouter_google--gemma-4-31b-it-free": {
-    "format_adherence": 1.0,
-    "fdi_localization_accuracy": 1.0,
-    "pathology_macro_f1": 1.0,
-    "exact_match_accuracy": 1.0,
-    "exact_match_ci_95": [
-      1.0,
-      1.0
-    ],
-    "ece": 0.0,
-    "mean_tool_calls": 0.0,
-    "total_samples": 1.0
+    "total_samples": 50.0
   },
   "dentex_test_openrouter_minimax--minimax-m3-free": {
     "format_adherence": 1.0,
-    "fdi_localization_accuracy": 0.6521739130434783,
-    "pathology_macro_f1": 0.43478260869565216,
-    "exact_match_accuracy": 0.43478260869565216,
+    "fdi_localization_accuracy": 0.62,
+    "pathology_macro_f1": 0.32,
+    "exact_match_accuracy": 0.32,
     "exact_match_ci_95": [
-      0.2826086956521739,
-      0.5869565217391305
+      0.2,
+      0.44
     ],
-    "ece": 0.3828260846759962,
+    "ece": 0.4932000064849853,
     "mean_tool_calls": 0.0,
-    "total_samples": 46.0
+    "total_samples": 50.0
   },
-  "dentex_test_openrouter_nvidia--nemotron-3-nano-omni-30b-a3b-reasoning-free": {
-    "format_adherence": 0.8666666666666667,
-    "fdi_localization_accuracy": 0.4666666666666667,
-    "pathology_macro_f1": 0.3333333333333333,
-    "exact_match_accuracy": 0.26666666666666666,
+  "dentex_test_transformers_Qwen--Qwen3.5-9B": {
+    "format_adherence": 1.0,
+    "fdi_localization_accuracy": 0.5306122448979592,
+    "pathology_macro_f1": 0.30612244897959184,
+    "exact_match_accuracy": 0.30612244897959184,
     "exact_match_ci_95": [
-      0.06666666666666667,
-      0.5333333333333333
+      0.1836734693877551,
+      0.42857142857142855
     ],
-    "ece": 0.0,
+    "ece": 0.5999999379002771,
     "mean_tool_calls": 0.0,
-    "total_samples": 15.0
+    "total_samples": 49.0
   }
 }
