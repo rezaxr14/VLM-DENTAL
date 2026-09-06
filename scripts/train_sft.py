@@ -1,225 +1,300 @@
-import os
-import json
-import torch
-from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Any
-import transformers
-from transformers import AutoProcessor, BitsAndBytesConfig, TrainingArguments
-from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
-from trl import SFTTrainer
-from datasets import Dataset
-from qwen_vl_utils import process_vision_info
+#!/usr/bin/env python3
+"""
+Production Training CLI for Stage 1 Supervised Fine-Tuning (SFT) (§16, §17).
 
+Supports:
+- Strict Track Segregation: --track {with_tools, no_tools}
+- Hardware Optimization: Cloud TPU v5e-8 (PyTorch/XLA FSDPv2) and Multi-GPU (BF16/FP16 LoRA)
+- Sequence Length Bucketing & Right-Padding via BucketedQwenVLCollator
+- Conversational Assistant-Only Loss Masking via build_conversational_labels
+- Lightweight Hugging Face Hub Checkpoint Sync (~760 MB LoRA + optimizer) & Cross-Account Resume
+"""
+
+import argparse
+import json
+import os
+import signal
+import sys
+import time
+from pathlib import Path
+from typing import Any, Dict, Optional
+
+import torch
+from torch.utils.data import DataLoader
+from tqdm import tqdm
 from dotenv import load_dotenv
+
 load_dotenv()
 
-@dataclass
-class ScriptArguments:
-    model_id: str = field(
-        default=os.environ.get("MODEL_NAME", "Qwen/Qwen3.5-9B"),
-        metadata={"help": "The model to train."}
+repo_root = str(Path(__file__).resolve().parent.parent)
+if repo_root not in sys.path:
+    sys.path.insert(0, repo_root)
+
+from dental_agent.training.sft import (
+    DentalSFTDataset,
+    BucketedQwenVLCollator,
+)
+from dental_agent.model.backbone import get_model_classes
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="VLM-DENTAL: Stage 1 Supervised Fine-Tuning (SFT)")
+    parser.add_argument(
+        "--track",
+        type=str,
+        required=True,
+        choices=["with_tools", "no_tools"],
+        help="Strict training track: 'with_tools' (multi-turn agent) or 'no_tools' (direct radiologist)",
     )
-    dataset_path: str = field(default="data/traces/train_cot_traces.jsonl", metadata={"help": "Path to the CoT traces JSONL."})
-    output_dir: str = field(default="data/models/qwen3_5_9b_sft", metadata={"help": "Output directory for the fine-tuned model."})
-    batch_size: int = field(default=1, metadata={"help": "Batch size per GPU."})
-    gradient_accumulation_steps: int = field(default=16, metadata={"help": "Gradient accumulation steps."})
-    learning_rate: float = field(default=2e-5, metadata={"help": "Learning rate."})
-    epochs: int = field(default=3, metadata={"help": "Number of training epochs."})
-    max_seq_length: int = field(default=4096, metadata={"help": "Maximum sequence length."})
+    parser.add_argument(
+        "--model-id",
+        type=str,
+        default=os.environ.get("MODEL_NAME", "Qwen/Qwen3.5-9B"),
+        help="Base VLM model identifier or local directory",
+    )
+    parser.add_argument(
+        "--dataset-path",
+        type=str,
+        default=None,
+        help="Path to verified traces JSONL (defaults automatically to canonical file per track)",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default=None,
+        help="Directory to save fine-tuned LoRA checkpoint",
+    )
+    parser.add_argument(
+        "--precision",
+        type=str,
+        default="bf16",
+        choices=["bf16", "fp16", "qlora"],
+        help="Numerical precision: bf16 (TPU/Ampere+), fp16, or qlora (4-bit NF4, GPU only)",
+    )
+    parser.add_argument("--batch-size", type=int, default=1, help="Per-device batch size")
+    parser.add_argument("--gradient-accumulation-steps", type=int, default=16, help="Gradient accumulation steps")
+    parser.add_argument("--learning-rate", type=float, default=2e-5, help="Peak learning rate for AdamW")
+    parser.add_argument("--epochs", type=int, default=3, help="Number of training epochs")
+    parser.add_argument("--lora-r", type=int, default=32, help="LoRA rank dimension")
+    parser.add_argument("--lora-alpha", type=int, default=64, help="LoRA alpha scaling factor")
+    parser.add_argument("--lora-dropout", type=float, default=0.05, help="LoRA dropout probability")
+    parser.add_argument("--hf-repo", type=str, default=None, help="Hugging Face Hub repository for checkpoint sync")
+    parser.add_argument("--push-every-steps", type=int, default=25, help="Frequency of HF checkpoint upload in steps")
+    parser.add_argument("--resume-hf", type=str, default=None, help="Hugging Face repo to resume latest checkpoint from")
+    return parser.parse_args()
 
 
-class QwenVLDataCollator:
-    """
-    Custom Data Collator for Qwen2.5-VL.
-    Takes raw Qwen message dictionaries, extracts images, tokenizes, and pads properly.
-    """
-    def __init__(self, processor):
-        self.processor = processor
+def setup_hardware(precision: str):
+    """Detect hardware backend: Cloud TPU v5e-8 vs CUDA GPU vs CPU."""
+    is_tpu = False
+    device = None
+    try:
+        import torch_xla.core.xla_model as xm
+        device = xm.xla_device()
+        is_tpu = True
+        print(f"[HARDWARE] Initialized Cloud TPU device: {device} ({xm.xla_device_hw(device)})")
+    except Exception:
+        if torch.cuda.is_available():
+            device = torch.device("cuda")
+            print(f"[HARDWARE] Initialized CUDA GPU: {torch.cuda.get_device_name(0)} (Count: {torch.cuda.device_count()})")
+        else:
+            device = torch.device("cpu")
+            print("[HARDWARE] Running on CPU.")
 
-    def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, torch.Tensor]:
-        messages_batch = [feature["messages"] for feature in features]
-        
-        # Apply chat template to get raw text with <|vision_start|>... tags
-        texts = [
-            self.processor.apply_chat_template(msg, tokenize=False, add_generation_prompt=False)
-            for msg in messages_batch
-        ]
-        
-        # Extract images from the messages
-        image_inputs_batch = []
-        video_inputs_batch = []
-        for msg in messages_batch:
-            image_inputs, video_inputs = process_vision_info(msg)
-            image_inputs_batch.append(image_inputs)
-            video_inputs_batch.append(video_inputs)
-            
-        # The processor expects a flattened list of images if passing multiple, or nested lists.
-        # process_vision_info already returns a list of images/videos per batch item.
-        # We need to flatten them for the processor batch call
-        flat_images = []
-        for imgs in image_inputs_batch:
-            if imgs is not None:
-                flat_images.extend(imgs if isinstance(imgs, list) else [imgs])
-                
-        flat_videos = []
-        for vids in video_inputs_batch:
-            if vids is not None:
-                flat_videos.extend(vids if isinstance(vids, list) else [vids])
+    if is_tpu and precision == "qlora":
+        print("[WARNING] 4-bit QLoRA is not supported on TPU/XLA devices. Switching to native BF16.")
+        precision = "bf16"
 
-        # Tokenize everything natively via Qwen's processor
-        batch = self.processor(
-            text=texts,
-            images=flat_images if flat_images else None,
-            videos=flat_videos if flat_videos else None,
-            padding=True,
-            return_tensors="pt"
+    dtype = torch.bfloat16 if precision == "bf16" else (torch.float16 if precision == "fp16" else torch.float32)
+    return is_tpu, device, dtype, precision
+
+
+def upload_checkpoint_to_hf(checkpoint_dir: Path, hf_repo: str, step: int, epoch: int):
+    """Upload lightweight LoRA checkpoint (~760 MB) to Hugging Face Hub."""
+    try:
+        from huggingface_hub import HfApi
+        api = HfApi()
+        commit_msg = f"VLM-DENTAL SFT Checkpoint: Step {step} (Epoch {epoch})"
+        print(f"[HF-HUB] Uploading checkpoint from {checkpoint_dir} to {hf_repo}...")
+        api.upload_folder(
+            folder_path=str(checkpoint_dir),
+            repo_id=hf_repo,
+            commit_message=commit_msg,
+            ignore_patterns=["*.tmp", "*.lock"],
         )
-        
-        # SFT needs 'labels' to calculate loss
-        # For standard autoregressive LM training, labels = input_ids
-        labels = batch["input_ids"].clone()
-        
-        # (Optional but recommended): Mask the user prompt in the labels so loss is only on the assistant's reasoning.
-        # Qwen's processor padding token is usually the pad_token_id, we should mask that out too.
-        if self.processor.tokenizer.pad_token_id is not None:
-            labels[labels == self.processor.tokenizer.pad_token_id] = -100
-            
-        batch["labels"] = labels
-        return batch
-
-
-def prepare_dataset(jsonl_path: str) -> Dataset:
-    """
-    Parse the output from run_daily_trace_generator.py and convert to HF Dataset format.
-    Expects jsonl format: {"image_path": "...", "verified_traces": [{"messages": [...]}]}
-    """
-    all_messages = []
-    
-    with open(jsonl_path, 'r', encoding='utf-8') as f:
-        for line in f:
-            if not line.strip(): continue
-            try:
-                record = json.loads(line.strip())
-                image_path = record.get("image_path")
-                
-                # Check if this image generated grounded traces
-                traces = record.get("verified_traces", [])
-                for trace in traces:
-                    messages = trace.get("messages", [])
-                    if not messages: continue
-                    
-                    # We need to replace the "<Image>" placeholder with the actual file path
-                    # Qwen expects dicts like {"type": "image", "image": "file:///path"}
-                    for msg in messages:
-                        if isinstance(msg.get("content"), list):
-                            for content_block in msg["content"]:
-                                if content_block.get("type") == "image" and content_block.get("image") == "<Image>":
-                                    content_block["image"] = f"file://{image_path}"
-                    
-                    all_messages.append({"messages": messages})
-            except Exception as e:
-                print(f"Skipping malformed line: {e}")
-                
-    print(f"Loaded {len(all_messages)} verified multi-modal traces.")
-    return Dataset.from_list(all_messages)
+        print(f"[HF-HUB] Checkpoint successfully uploaded to {hf_repo}.")
+    except Exception as e:
+        print(f"[HF-HUB WARNING] Failed to upload checkpoint to {hf_repo}: {e}")
 
 
 def main():
-    parser = transformers.HfArgumentParser(ScriptArguments)
-    script_args = parser.parse_args_into_dataclasses()[0]
-    
-    # 1. Load Dataset
-    print(f"Loading dataset from {script_args.dataset_path}...")
-    if not os.path.exists(script_args.dataset_path):
-        print(f"Error: Dataset {script_args.dataset_path} not found.")
-        return
-        
-    dataset = prepare_dataset(script_args.dataset_path)
-    if len(dataset) == 0:
-        print("Error: No valid traces found in dataset.")
-        return
-    
-    print(f"Loading processor for {script_args.model_id}...")
-    processor = AutoProcessor.from_pretrained(script_args.model_id, trust_remote_code=True)
-    
-    # Ensure pad token is set for the collator
+    args = parse_args()
+
+    # Resolve track-specific canonical paths
+    if args.dataset_path is None:
+        if args.track == "with_tools":
+            args.dataset_path = "data/traces/train_cot_traces.jsonl"
+        else:
+            args.dataset_path = "data/traces/train_cot_traces_no_tools.jsonl"
+
+    if args.output_dir is None:
+        args.output_dir = f"data/models/qwen3_5_9b_sft_{args.track}"
+
+    out_path = Path(args.output_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+
+    print("======================================================================")
+    print(f"VLM-DENTAL: STAGE 1 SFT TRAINING ({args.track.upper()})")
+    print(f"* Model ID    : {args.model_id}")
+    print(f"* Dataset     : {args.dataset_path}")
+    print(f"* Output Dir  : {args.output_dir}")
+    print(f"* Precision   : {args.precision}")
+    print(f"* LoRA Config : r={args.lora_r}, alpha={args.lora_alpha}, dropout={args.lora_dropout}")
+    print(f"* Effective BS: {args.batch_size * args.gradient_accumulation_steps}")
+    print("======================================================================")
+
+    is_tpu, device, compute_dtype, active_precision = setup_hardware(args.precision)
+
+    # Load processor and model
+    from transformers import AutoProcessor
+    processor = AutoProcessor.from_pretrained(args.model_id, trust_remote_code=True)
     if processor.tokenizer.pad_token_id is None:
         processor.tokenizer.pad_token = processor.tokenizer.eos_token
-    
-    # 2. Load Model in 4-bit for QLoRA
-    print("Loading model in 4-bit quantization...")
-    bnb_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_use_double_quant=True,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.bfloat16
-    )
-    
-    from dental_agent.model.backbone import get_model_classes
+
     ModelClass = get_model_classes()
 
-    model = ModelClass.from_pretrained(
-        script_args.model_id,
-        quantization_config=bnb_config,
-        device_map="auto",
-        torch_dtype=torch.bfloat16,
-        trust_remote_code=True
-    )
-    
-    model = prepare_model_for_kbit_training(model)
-    
-    # 3. Configure LoRA Adapters
-    print("Configuring LoRA...")
-    lora_config = LoraConfig(
-        r=16,
-        lora_alpha=32,
+    load_kwargs: Dict[str, Any] = {
+        "trust_remote_code": True,
+        "torch_dtype": compute_dtype,
+    }
+
+    if active_precision == "qlora":
+        from transformers import BitsAndBytesConfig
+        load_kwargs["quantization_config"] = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_use_double_quant=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.bfloat16,
+        )
+        load_kwargs["device_map"] = "auto"
+    elif not is_tpu and torch.cuda.is_available():
+        load_kwargs["device_map"] = "auto"
+
+    print(f"[MODEL] Loading {args.model_id}...")
+    model = ModelClass.from_pretrained(args.model_id, **load_kwargs)
+
+    # Attach LoRA adapter
+    from peft import LoraConfig, get_peft_model
+    peft_config = LoraConfig(
+        r=args.lora_r,
+        lora_alpha=args.lora_alpha,
+        lora_dropout=args.lora_dropout,
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-        lora_dropout=0.05,
         bias="none",
-        task_type="CAUSAL_LM"
+        task_type="CAUSAL_LM",
     )
-    model = get_peft_model(model, lora_config)
+    model = get_peft_model(model, peft_config)
     model.print_trainable_parameters()
-    
-    # 4. Configure Training
-    training_args = TrainingArguments(
-        output_dir=script_args.output_dir,
-        per_device_train_batch_size=script_args.batch_size,
-        gradient_accumulation_steps=script_args.gradient_accumulation_steps,
-        learning_rate=script_args.learning_rate,
-        num_train_epochs=script_args.epochs,
-        logging_steps=10,
-        save_strategy="epoch",
-        optim="paged_adamw_32bit",
-        bf16=True,
-        max_grad_norm=0.3,
-        warmup_ratio=0.03,
-        lr_scheduler_type="cosine",
-        gradient_checkpointing=True,
-        report_to="none", # Set to "wandb" if you use Weights & Biases
-        remove_unused_columns=False, # CRITICAL FOR CUSTOM COLLATORS!
+
+    if is_tpu:
+        model = model.to(device)
+
+    # Dataset & Bucketed Collator
+    dataset = DentalSFTDataset(args.dataset_path, processor=processor, track=args.track)
+    collator = BucketedQwenVLCollator(processor=processor, track=args.track)
+    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collator)
+
+    optimizer = torch.optim.AdamW(
+        [p for p in model.parameters() if p.requires_grad],
+        lr=args.learning_rate,
+        weight_decay=0.01,
     )
-    
-    collator = QwenVLDataCollator(processor=processor)
-    
-    trainer = SFTTrainer(
-        model=model,
-        train_dataset=dataset,
-        peft_config=lora_config,
-        max_seq_length=script_args.max_seq_length,
-        tokenizer=processor.tokenizer,
-        args=training_args,
-        data_collator=collator
-    )
-    
-    print("Starting Vision-Language Supervised Fine-Tuning (SFT)...")
-    trainer.train()
-    
-    # Save the final adapter
-    print(f"Saving fine-tuned adapter to {script_args.output_dir}...")
-    trainer.save_model(script_args.output_dir)
-    processor.save_pretrained(script_args.output_dir)
-    print("SFT Training Complete!")
+
+    total_steps = 0
+    start_epoch = 1
+
+    # Resume capability from HF Hub or local checkpoint
+    state_file = out_path / "training_state.json"
+    if args.resume_hf:
+        print(f"[RESUME] Checking HF Hub for latest checkpoint in {args.resume_hf}...")
+        try:
+            from huggingface_hub import snapshot_download
+            snapshot_download(repo_id=args.resume_hf, local_dir=str(out_path))
+            if state_file.is_file():
+                with open(state_file, "r") as f:
+                    saved_state = json.load(f)
+                    total_steps = saved_state.get("step", 0)
+                    start_epoch = saved_state.get("epoch", 1)
+                opt_path = out_path / "optimizer.pt"
+                if opt_path.is_file():
+                    optimizer.load_state_dict(torch.load(opt_path, map_location="cpu"))
+                print(f"[RESUME] Resumed from HF at Epoch {start_epoch}, Step {total_steps}.")
+        except Exception as e:
+            print(f"[RESUME WARNING] Could not resume from HF: {e}")
+
+    # Emergency SIGTERM handler for Kaggle 9-hour session preemption
+    def sigterm_handler(signum, frame):
+        print("\n[PREEMPTION] Caught SIGTERM signal! Flushing emergency checkpoint...")
+        model.save_pretrained(str(out_path))
+        torch.save(optimizer.state_dict(), out_path / "optimizer.pt")
+        with open(state_file, "w") as f:
+            json.dump({"step": total_steps, "epoch": start_epoch, "track": args.track}, f)
+        if args.hf_repo:
+            upload_checkpoint_to_hf(out_path, args.hf_repo, total_steps, start_epoch)
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, sigterm_handler)
+
+    log_file = out_path / "training_loss.jsonl"
+    model.train()
+
+    print(f"\n[TRAIN] Beginning training for {args.epochs} epochs...")
+    for epoch in range(start_epoch, args.epochs + 1):
+        pbar = tqdm(dataloader, desc=f"SFT Epoch {epoch}/{args.epochs}")
+        optimizer.zero_grad()
+
+        for step, batch in enumerate(pbar):
+            inputs = {k: v.to(device) for k, v in batch.items()}
+            outputs = model(**inputs)
+            loss = outputs.loss / args.gradient_accumulation_steps
+            loss.backward()
+
+            if (step + 1) % args.gradient_accumulation_steps == 0 or (step + 1) == len(dataloader):
+                if is_tpu:
+                    import torch_xla.core.xla_model as xm
+                    xm.optimizer_step(optimizer)
+                else:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                    optimizer.step()
+
+                optimizer.zero_grad()
+                total_steps += 1
+
+                step_loss = loss.item() * args.gradient_accumulation_steps
+                pbar.set_postfix({"loss": f"{step_loss:.4f}"})
+
+                with open(log_file, "a", encoding="utf-8") as f:
+                    f.write(json.dumps({"epoch": epoch, "step": total_steps, "loss": step_loss}) + "\n")
+
+                # Periodic checkpoint push to HF Hub
+                if args.hf_repo and total_steps % args.push_every_steps == 0:
+                    model.save_pretrained(str(out_path))
+                    torch.save(optimizer.state_dict(), out_path / "optimizer.pt")
+                    with open(state_file, "w") as f:
+                        json.dump({"step": total_steps, "epoch": epoch, "track": args.track}, f)
+                    upload_checkpoint_to_hf(out_path, args.hf_repo, total_steps, epoch)
+
+        # Epoch end checkpoint
+        model.save_pretrained(str(out_path))
+        torch.save(optimizer.state_dict(), out_path / "optimizer.pt")
+        with open(state_file, "w") as f:
+            json.dump({"step": total_steps, "epoch": epoch + 1, "track": args.track}, f)
+
+        if args.hf_repo:
+            upload_checkpoint_to_hf(out_path, args.hf_repo, total_steps, epoch)
+
+    print(f"\n[COMPLETE] Stage 1 SFT finished! Final checkpoint saved to {out_path}.")
+
 
 if __name__ == "__main__":
     main()

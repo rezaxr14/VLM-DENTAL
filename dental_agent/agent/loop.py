@@ -95,9 +95,18 @@ def run_agent(
     # produces a valid response, not the real budget -- the real budget is
     # enforced by tool_call_count below, and once it's hit the model is told
     # to answer instead of silently having further calls dropped.
+    pkv = None
+    cache_state = None
+
     for turn_idx in range(max_tool_calls + 15):
-        reply, prompt_len, gen_ids = generate_agent_reply(
-            model, processor, messages, return_ids=True
+        reply, prompt_len, gen_ids, pkv, cache_state = generate_agent_reply(
+            model,
+            processor,
+            messages,
+            return_ids=True,
+            past_key_values=pkv,
+            cache_state=cache_state,
+            return_cache=True,
         )
         assistant_token_spans.append({"prompt_len": prompt_len, "token_ids": gen_ids})
         parsed = parse_agent_json(reply)
@@ -232,6 +241,10 @@ def run_agent(
         assistant_token_spans=assistant_token_spans,
         messages=messages,
     )
+
+    del pkv, cache_state
+    import gc
+    gc.collect()
 
     if verbose:
         print(f"[Agent] image_id={image_id} complete: tool_calls={tool_call_count}, final={final_answer}")
