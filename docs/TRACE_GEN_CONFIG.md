@@ -92,3 +92,42 @@ findings to ground-truth findings by greedy highest-pair-score-first assignment,
 the result as an F1-style harmonic mean of recall (missed findings count as 0) and
 precision (hallucinated extra findings also count as 0 -- prevents free-riding by
 over-predicting). Reduces to exactly the old single-pair score when there's one of each.
+
+## Teacher Directive Leak Decontamination & MiniMax M3 Regeneration Protocol
+
+### Forensic Root Cause
+During synthetic trace generation (`langgraph_loop.py` & `trace_generation.py`), the teacher agent was conditioned with a ground-truth directive in the initial user prompt:
+`TEACHER DIRECTIVE: You are generating an expert demonstration trace for SFT. This image has N finding(s): ... Never mention in your reasoning that this list, a hint, or a directive was given to you — write your thought as genuine first-look clinical analysis.`
+In ~97.6% of traces, models produced clean clinical reasoning. However, in ~2.4% of difficult cases (e.g. dense crowding, orientation dispute), models hallucinated aloud in their assistant thought blocks:
+- `"Wait, the directive mentions Q3T7: Caries..."`
+- `"Per the teacher directive, 46 is a periapical lesion..."`
+- `"The ground truth indicates tooth 44..."`
+
+Training a student model (Qwen 3.5-9B) on these leaked traces teaches it to expect external oracle directives at inference time, causing hallucinations or failure when directives are absent.
+
+### Surgical Decontamination
+Exactly 105 leaking traces were excised by exact image ID across split files:
+- `train_cot_traces_dentex.jsonl`: 11 traces (Remaining: 667)
+- `train_cot_traces_dentex_no_tools.jsonl`: 11 traces (Remaining: 667)
+- `train_cot_traces_tufts.jsonl`: 12 traces (Remaining: 190)
+- `train_cot_traces_healthy_tufts.jsonl`: 19 traces (Remaining: 641)
+- `train_cot_traces_tufts_all.jsonl`: 18 traces (Remaining: 262)
+
+Zero False Positives: Clinically valid observations containing `"hint"` (`"a hint of radiolucency"`, `"hinting at pulpal involvement"`) are 100% preserved.
+
+### Regeneration & Quality Gates (`scripts/patch_and_regenerate_traces.py`)
+- **ID-Based Purge**: Purges only known infected image IDs; existing clean data is untouched.
+- **Dual-Gate While-Loop Filter**: Loops until 100% of target IDs pass:
+  - Gate 1 (Zero-Leak Gate): Rejects any assistant turn mentioning directives, hints, or ground truth.
+  - Gate 2 (Clinical Verifier Gate): Re-verifies diagnostic correctness against ground truth via MiniMax M3 (`openrouter/minimax/minimax-m3:free`).
+- **OpenRouter Rate-Limit Engineering**:
+  - `OPENROUTER_GENERATOR_RPM_LIMIT = 15` (comfortably under the 20 RPM free ceiling).
+  - `OPENROUTER_COOLDOWN_SECONDS = 2.5` to evenly spread requests.
+  - `OPENROUTER_RPD_LIMIT = 2000` (prevents artificial 25 RPD shutdown).
+  - `OPENROUTER_MAX_TOKENS = 16384` for full reasoning headroom.
+  - Progressive exponential backoff (10s, 15s, 20s) on retries.
+- **Canonical Splicing & HF Persist**:
+  - Reconstructs `train_cot_traces.jsonl` (880 traces = 678 DENTEX + 202 Tufts).
+  - Reconstructs `train_cot_traces_no_tools.jsonl` (880 traces).
+  - Pushes updated datasets with `upload_traces(force=True)` to `Reza-Nadimi/vlm-dental-traces`.
+
