@@ -95,6 +95,12 @@ During first-pass evaluation, the independent frontier verifier caught **92 prob
 3. **Uncorrected Spatial Drift (11 rejections, 12.0%)**: Interactive agent received an off-center bounding box but diagnosed without issuing corrective `nudge_crop` adjustments. Caught and rejected; repaired with spatial realignment.
 *All 92 rejected traces achieved a 100.0% repair-and-promotion yield into the final canonical training corpus.*
 
+### Zero-Leak Decontamination & Exact 1:1 Parity Resolution (Aim 1 Complete)
+- **Directive Leak Decontamination**: Automated regex scanning across all generated reasoning text identified 105 traces where generator models echoed internal system cues (e.g., *"directive"*, *"ground truth"*). All 105 cases were decontaminated and re-verified through a dual-gate validation pipeline (`scripts/patch_and_regenerate_traces.py`). Gate 1 audits confirm **0 directive leaks** across the entire 880-trace canonical corpus.
+- **DENTEX 10-Case Parity Resolution**: An audit of DENTEX traces identified a 10-image disparity between with-tools (668 traces) and no-tools (678 traces) due to historical API timeouts on complex multi-finding cases (`[13, 28, 182, 243, 564, 594, 676, 679, 682, 695]`). Using Google Gemini 3.5 Flash Lite (`gemini-3.5-flash-lite`) on Google Colab with an expanded tool budget (up to 70 tool calls) and conservative rate pacing (15.0s delay), all 10 cases were synthesized with rich multi-turn tool interaction (`locate_tooth`, `window_level`, `enhance_contrast`, `zoom_crop`, and `nudge_crop` self-correction).
+- **Exact 100% Corpus Parity**: Both DENTEX cohorts now stand at exactly **678 verified traces**. Combined with the 202 Tufts overlap traces, canonical files `train_cot_traces.jsonl` and `train_cot_traces_no_tools.jsonl` now share exact **880-trace parity (1:1 alignment)**.
+- **Hugging Face Hub Persistence**: All canonical files are synchronized and remotely hosted on Hugging Face Hub (`Reza-Nadimi/vlm-dental-traces`), establishing a reproducible, frozen data foundation for Stage 1 SFT and Stage 2 GRPO.
+
 ### Hybrid Composition of the Canonical Training Corpus
 The canonical training files used by downstream Stage 1 SFT (`VLM_Dental_Colab_SFT.ipynb`) and Stage 2 GRPO (`VLM_Dental_Colab_GRPO.ipynb`) are unified hybrid corpora containing **880 pathology traces**:
 - **Lines 1 to 678 (678 traces)**: DENTEX pathology cohort (Images 1 to 705).

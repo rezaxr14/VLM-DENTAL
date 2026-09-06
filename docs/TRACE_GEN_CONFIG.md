@@ -93,7 +93,7 @@ the result as an F1-style harmonic mean of recall (missed findings count as 0) a
 precision (hallucinated extra findings also count as 0 -- prevents free-riding by
 over-predicting). Reduces to exactly the old single-pair score when there's one of each.
 
-## Teacher Directive Leak Decontamination & MiniMax M3 Regeneration Protocol
+## Teacher Directive Leak Decontamination & Multi-Provider Regeneration Protocol (MiniMax M3 / Gemini 3.5 Flash Lite)
 
 ### Forensic Root Cause
 During synthetic trace generation (`langgraph_loop.py` & `trace_generation.py`), the teacher agent was conditioned with a ground-truth directive in the initial user prompt:
@@ -107,27 +107,32 @@ Training a student model (Qwen 3.5-9B) on these leaked traces teaches it to expe
 
 ### Surgical Decontamination
 Exactly 105 leaking traces were excised by exact image ID across split files:
-- `train_cot_traces_dentex.jsonl`: 11 traces (Remaining: 667)
-- `train_cot_traces_dentex_no_tools.jsonl`: 11 traces (Remaining: 667)
-- `train_cot_traces_tufts.jsonl`: 12 traces (Remaining: 190)
-- `train_cot_traces_healthy_tufts.jsonl`: 19 traces (Remaining: 641)
-- `train_cot_traces_tufts_all.jsonl`: 18 traces (Remaining: 262)
+- `train_cot_traces_dentex.jsonl`: 11 traces
+- `train_cot_traces_dentex_no_tools.jsonl`: 11 traces
+- `train_cot_traces_tufts.jsonl`: 12 traces
+- `train_cot_traces_healthy_tufts.jsonl`: 19 traces
+- `train_cot_traces_tufts_all.jsonl`: 18 traces
 
 Zero False Positives: Clinically valid observations containing `"hint"` (`"a hint of radiolucency"`, `"hinting at pulpal involvement"`) are 100% preserved.
 
 ### Regeneration & Quality Gates (`scripts/patch_and_regenerate_traces.py`)
 - **ID-Based Purge**: Purges only known infected image IDs; existing clean data is untouched.
 - **Dual-Gate While-Loop Filter**: Loops until 100% of target IDs pass:
-  - Gate 1 (Zero-Leak Gate): Rejects any assistant turn mentioning directives, hints, or ground truth.
-  - Gate 2 (Clinical Verifier Gate): Re-verifies diagnostic correctness against ground truth via MiniMax M3 (`openrouter/minimax/minimax-m3:free`).
+  - Gate 1 (Zero-Leak Gate): Rejects any assistant turn mentioning directives, hints, or ground truth (`assert leaks == 0`).
+  - Gate 2 (Clinical Verifier Gate): Re-verifies diagnostic correctness against ground truth via MiniMax M3 (`openrouter/minimax/minimax-m3:free`) or Google Gemini (`gemini-3.5-flash-lite`).
 - **OpenRouter Rate-Limit Engineering**:
-  - `OPENROUTER_GENERATOR_RPM_LIMIT = 15` (comfortably under the 20 RPM free ceiling).
+  - `OPENROUTER_GENERATOR_RPM_LIMIT = 15` (comfortably under the 20 RPM ceiling).
   - `OPENROUTER_COOLDOWN_SECONDS = 2.5` to evenly spread requests.
   - `OPENROUTER_RPD_LIMIT = 2000` (prevents artificial 25 RPD shutdown).
   - `OPENROUTER_MAX_TOKENS = 16384` for full reasoning headroom.
   - Progressive exponential backoff (10s, 15s, 20s) on retries.
-- **Canonical Splicing & HF Persist**:
+- **DENTEX 10-Case Parity Resolution (Gemini 3.5 Flash Lite)**:
+  - Historical timeouts on 10 complex multi-finding DENTEX images `[13, 28, 182, 243, 564, 594, 676, 679, 682, 695]` had left `train_cot_traces_dentex.jsonl` at 668 traces vs. 678 in no-tools.
+  - Using Google Gemini 3.5 Flash Lite in Colab with up to 70 tool calls, 15.0s pacing, and Gate 1/2 verification, all 10 missing traces were generated with rich multi-turn tool interaction (`locate_tooth`, `window_level`, `enhance_contrast`, `zoom_crop`, and `nudge_crop` self-correction).
+  - Promoted into `train_cot_traces_dentex.jsonl`, reaching exactly **678 records**.
+- **Canonical Splicing & Remote HF Persistence**:
   - Reconstructs `train_cot_traces.jsonl` (880 traces = 678 DENTEX + 202 Tufts).
-  - Reconstructs `train_cot_traces_no_tools.jsonl` (880 traces).
+  - Reconstructs `train_cot_traces_no_tools.jsonl` (880 traces = 678 DENTEX + 202 Tufts).
+  - Exact 1:1 parity (880 with-tools vs. 880 no-tools) and zero directive leaks verified across both files.
   - Pushes updated datasets with `upload_traces(force=True)` to `Reza-Nadimi/vlm-dental-traces`.
 

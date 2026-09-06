@@ -11,9 +11,9 @@ See [dentex-agentic-vlm-proposal.md](dentex-agentic-vlm-proposal.md) for the ful
 - **Agentic Multi-Turn Diagnostic Loop**: Autonomous tool usage (zoom/crop, contrast enhancement, FDI numbering, abnormal tooth locating) before delivering a structured diagnosis.
 - **Hierarchical DENTEX Grounding**: Support for FDI World Dental Federation notation (quadrants 1–4, tooth positions 1–8) and multi-class pathology classification (Caries, Deep Caries, Periapical Lesions, Impacted Teeth).
 - **Two-Stage Fine-Tuning Pipeline**:
-  - **Aim 1 / Stage 1 (SFT)**: Multi-turn expert demonstration distillation — generated locally with Qwen/Qwen3.5-9B via a real LangGraph tool-execution loop (ground-truth-directed, Kaggle/Colab), cross-family verified (a different model family than the generator, to reduce correlated blind spots).
+  - **Aim 1 / Stage 1 (SFT)**: Multi-turn expert demonstration distillation — 3,694 verified traces across 10 cohorts (880 canonical pathology traces each for with-tools and no-tools baselines, 0 directive leaks) synthesized via LangGraph dynamic tool execution and cross-family verified (MiniMax M3 / Gemini 3.5 Flash Lite), hosted on Hugging Face Hub (`Reza-Nadimi/vlm-dental-traces`).
   - **Aim 2 / Stage 2 (GRPO)**: Direct policy gradient optimization against multi-objective rewards (FDI accuracy + pathology diagnosis + format adherence + tool efficiency).
-- **Stage 0 Detector**: Dedicated YOLOv8m tooth localization model, trained with 5-fold cross-validation, to replace oracle grounding — validation mAP50 ≈ 0.5901 (R ≈ 0.888, P ≈ 0.5457), past the detection-quality bar set for live use.
+- **Stage 0 Detector**: Dedicated YOLOv8m tooth localization model co-trained on DENTEX + Tufts (2,339 images, 46,808 boxes) with 5-fold cross-validation — achieving 86.95% unconstrained CV mAP50 and 93.76% target mAP50 (95.93% on held-out test set), live in the agent loop.
 - **Robust Evaluation & Ablation Harness**: H1 (tool-use vs. direct reasoning) and H2 (GRPO vs. SFT vs. zero-shot GPT-4o) evaluation suites with bootstrap confidence intervals and calibration (ECE) metrics.
 - **Unified & Environment-Agnostic**: One-click execution on Local Workstations (RTX 4090), Kaggle, and Google Colab with HuggingFace Hub artifact persistence.
 

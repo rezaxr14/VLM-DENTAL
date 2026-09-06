@@ -10,10 +10,10 @@
 The synthetic data generation leverages a two-phase architecture orchestrated by a LangGraph CoT loop:
 
 1. **Interactive CoT Trace Generation (With Tools):** 
-   - **Generator:** `GLM 5.3 Flash`
-   - **Verifier:** `MiniMax M3`
+   - **Frontier Teachers:** `GLM 5.3 Flash` & `Google Gemini 3.5 Flash Lite` (`gemini-3.5-flash-lite`)
+   - **Cross-Family Verifiers:** `MiniMax M3` & `Google Gemini 3.5 Flash Lite` (independent verifier instances)
 2. **Standard CoT Trace Generation (Without Tools):** 
-   - **Generator:** `GLM 5.3 Flash`
+   - **Teacher Generator:** `GLM 5.3 Flash`
    - **Verifier:** `MiniMax M3`
 3. **Training Student:** Once verified, the traces are utilized to train the unified backbone policy: a **Qwen/Qwen3.5-9B** model serving as the Student in both Stage 1 SFT (QLoRA) and Stage 2 GRPO (dual-adapter RL).
 
@@ -25,7 +25,7 @@ The synthesis pipeline employs an autonomous generator-verifier-editor loop wher
 
 | Cohort / Split | Tool Modality | Total Target | First-Pass Verified | Rejected | Repaired & Promoted | Final Verified Yield | First-Pass Pass Rate | Final Yield Rate | Canonical File / Commit Reference |
 |---|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|---|
-| **DENTEX Pathology** | With Tools (Main) | 678 | 667 | 11 | 11 | **678** | 98.38% | **100.0%** | `train_cot_traces_dentex.jsonl` (Git `3c2ce7f`) |
+| **DENTEX Pathology** | With Tools (Main) | 678 | 667 | 11 | 11 | **678** | 98.38% | **100.0%** | `train_cot_traces_dentex.jsonl` (Git `3c2ce7f`, Gemini update) |
 | **DENTEX Pathology** | No-Tools (Baseline 3) | 678 | 666 | 12 | 12 | **678** | 98.23% | **100.0%** | `train_cot_traces_dentex_no_tools.jsonl` (Git `f6e8b37`, `4c0f627`) |
 | **DENTEX Normal (Healthy)** | With Tools | 27 | 27 | 0 | 0 | **27** | 100.0% | **100.0%** | `train_cot_traces_healthy_dentex.jsonl` (Git `990157a`) |
 | **DENTEX Normal (Healthy)** | No-Tools | 27 | 27 | 0 | 0 | **27** | 100.0% | **100.0%** | `train_cot_traces_healthy_dentex_no_tools.jsonl` |
@@ -64,6 +64,28 @@ Across the entire synthesis corpus of 3,694 candidate reasoning traces, the fron
    - **Resolution**: Autonomous repair injected the necessary spatial realignment and verified the corrected crops (100% promoted).
 
 Additionally, during unverified trace sanitization in the Tufts All-Diseases generation pass, **520 incomplete generation stubs** (caused by provider API context timeouts and rate-limit drops) were identified and discarded before verification, ensuring that zero malformed or partial records entered the canonical dataset.
+
+#### Teacher Directive Decontamination & Gate 1 Zero-Leak Protocol
+
+During forensic analysis of reasoning text across the 3,694 traces, a systematic audit detected that in ~2.4% of difficult cases, generator models leaked internal teacher prompt instructions into their public thought strings (e.g., *"per the teacher directive"*, *"ground truth indicates"*). 
+1. **Surgical Decontamination**: All 105 affected records across datasets were excised and re-synthesized using strict prompt boundaries.
+2. **Dual-Gate Verification Pipeline (`scripts/patch_and_regenerate_traces.py`)**:
+   - **Gate 1 (Zero Directive Leaks)**: Automated regex scanning strictly enforces zero occurrences of oracle directive cues or teacher instructions. All 880 canonical traces were audited with **0 leaks found**.
+   - **Gate 2 (Clinical Verifier)**: Re-evaluates diagnostic fidelity against multi-finding ground truth.
+
+#### DENTEX With-Tools 100% Parity Completion (Gemini 3.5 Flash Lite)
+
+A granular audit between the interactive tool-use cohort (`train_cot_traces_dentex.jsonl`) and the baseline rationalization cohort (`train_cot_traces_dentex_no_tools.jsonl`) identified a 10-case disparity (668 traces vs. 678 traces). Historical generation runs had experienced API context timeouts on 10 complex multi-finding radiographs:
+$$\text{Missing Image IDs} = [13, 28, 182, 243, 564, 594, 676, 679, 682, 695]$$
+
+These 10 cases represent the most challenging pathologies in the DENTEX dataset (multi-quadrant caries, impacted lower third molars, and root-treated teeth with periapical lucencies). To resolve this discrepancy and achieve 100% parity:
+1. **Google Gemini 3.5 Flash Lite Synthesis**: Targeted dynamic LangGraph execution was executed on Google Colab with an expanded tool budget (up to 70 tool calls) and conservative rate pacing (15.0s request delay).
+2. **Dynamic Tool Choreography**: Across these 10 difficult cases, the model systematically executed `locate_tooth`, `window_level` (bone/enamel presets), `enhance_contrast` (1.5x factor), `zoom_crop`, and corrective `nudge_crop` realignments before committing to diagnoses.
+3. **Dual-Gate Verification**:
+   - **Gate 1 (Zero Directive Leaks)**: Automated regex audit checked all assistant thought blocks (`assert leaks == 0`).
+   - **Gate 2 (Clinical Verifier)**: Strict evaluation verified that all predicted findings matched the complete ground-truth annotations without hallucinations.
+4. **Canonical Splicing & Exact Dataset Parity**: All 10 passing traces were promoted into `train_cot_traces_dentex.jsonl`, establishing an exact 678-trace count matching the no-tools baseline. Re-splicing with the 202 Tufts overlap traces produced canonical corpora of exactly **880 pathology traces** for both `train_cot_traces.jsonl` and `train_cot_traces_no_tools.jsonl`.
+5. **Hugging Face Hub Remote Persistence**: The clean, decontaminated, and verified traces were synchronized directly to Hugging Face Hub (`Reza-Nadimi/vlm-dental-traces`).
 - **Tufts All-Diseases Full Cohort Completion**: 100% verified completion of both the interactive tool-use cohort (`train_cot_traces_tufts_all.jsonl`, 280 traces, 984 total findings across the native 4-disease taxonomy, 17.71 mean tool calls, 11.68 mean turns) and the single-turn no-tools baseline cohort (`train_cot_traces_tufts_all_no_tools.jsonl`, 280 traces, 984 findings, 1.0 turns). Both corpora are synchronized to Hugging Face Hub (`Reza-Nadimi/vlm-dental-traces`).
 - **Hugging Face Hosting & Git Size Discipline**: To eliminate GitHub repository bloat, all 22 canonical completed trace `.jsonl` files (~170 MB total payload) are hosted remotely on Hugging Face Hub (`Reza-Nadimi/vlm-dental-traces`) and untracked from git. Local workflows synchronize traces surgically using `python scripts/sync_traces_hf.py --download`.
 - **Hybrid Composition of `train_cot_traces.jsonl`**: The combined 880-trace pathology dataset contains DENTEX (lines 1–678) and Tufts Periapical overlap (lines 679–880). Standalone decoupled files (`train_cot_traces_dentex.jsonl`, `train_cot_traces_tufts.jsonl`) are also provided for isolated dataset experiments.

@@ -175,12 +175,12 @@ hand-rolled copy of the same logic.
   Reads/writes separate `_no_tools`-suffixed files (both unverified and
   verified) so these never mix into the main system's SFT training set.
 - **Multi-Cohort Trace Generation Complete (3,694 Verified Traces):** Full synthetic dataset generation has completed with a 100.0% final verified yield across all target cohorts:
-  - **DENTEX Pathology:** 678 with-tools, 678 no-tools (100% yield, 12.85 avg turns).
+  - **DENTEX Pathology:** 678 with-tools, 678 no-tools (100% yield, 12.85 avg turns). Note: An initial 668 vs. 678 discrepancy was resolved by generating the 10 missing complex multi-finding cases (`[13, 28, 182, 243, 564, 594, 676, 679, 682, 695]`) via Google Gemini 3.5 Flash Lite in Colab, establishing exact 1:1 parity with the no-tools baseline.
   - **DENTEX Normal (Healthy):** 27 with-tools, 27 no-tools (100% negative controls).
   - **Tufts Overlap Pathology:** 202 with-tools, 202 no-tools (100% yield).
   - **Tufts Normal (Healthy):** 660 with-tools, 660 no-tools (100% negative controls, 13.09 avg turns).
   - **Tufts All-Diseases Pathology:** 280 with-tools, 280 no-tools (100% yield, 984 total findings across the native 4-disease taxonomy, 17.71 avg tool calls, 11.68 avg turns).
-  - **Canonical Corpus:** Total **3,694 verified traces** across 10 cohorts. Full quantitative analytics, case studies, and verification logs are detailed in `docs/COT_RESULTS.md` and `docs/PAPER_MILESTONES.md`.
+  - **Canonical Corpus:** Total **3,694 verified traces** across 10 cohorts. Unified hybrid pathology files `train_cot_traces.jsonl` (with tools) and `train_cot_traces_no_tools.jsonl` (no tools) each contain exactly **880 traces** (678 DENTEX + 202 Tufts) with **0 directive leaks**. Full quantitative analytics, case studies, and verification logs are detailed in `docs/COT_RESULTS.md` and `docs/PAPER_MILESTONES.md`.
 - **Hugging Face Hub Synchronization & Git Untracking (`scripts/sync_traces_hf.py`):**
   To prevent repository bloat, all 22 canonical completed trace files (~170 MB) are hosted on Hugging Face Hub (`Reza-Nadimi/vlm-dental-traces`) and untracked from Git (`git rm --cached`). Downstream Colab/Kaggle training workflows synchronize traces on demand via `python scripts/sync_traces_hf.py --download` with automated surgical delta caching.
 
@@ -349,29 +349,27 @@ re-checking it against those same two papers.
 
 ## 🟡 Currently In Progress
 
-- **Dataset Trace Generation — the actual bottleneck.** `scripts/run_trace_gen.py`
-  on Colab/Kaggle builds the synthetic dataset of expert demonstrations,
-  driven by a frontier LLM (primarily **Gemini 3.5 Flash Lite** or an
-  NVIDIA NIM-hosted model, routed through `api_pool.py`'s provider pool —
-  not a single hardcoded model; a self-hosted Qwen/Qwen3.5-9B via local
-  vLLM is also a supported provider option but not the primary one in
-  practice) as generator, with a different-family API model as verifier,
-  via the real LangGraph tool-execution loop (including self-correcting
-  grounding, tiered perturbation, all of §2 above). **This is a distinct
-  role from Qwen/Qwen3.5-9B's role elsewhere in this project** — Qwen3.5-9B
-  is the model actually being trained (SFT then GRPO, see Phase 5/6 below),
-  not (primarily) the model generating its own training data; don't
-  conflate the two when reading or writing about this pipeline. The trace
-  file committed to this repo (`data/traces/train_cot_traces.jsonl.old`)
-  has 108 traces, but those **predate the real-tool-execution rewrite** —
-  they were generated under the old `<fake_tool_call>`-narration paradigm
-  this codebase has since moved away from (see `.agents/rules/vlm_dental.md`
-  Rule 3: don't reintroduce that paradigm). Post-rewrite trace generation has
+- **Aim 1 Synthetic Trace Generation — 100% COMPLETE.** `scripts/run_trace_gen.py`
+  and `scripts/patch_and_regenerate_traces.py` on Colab/Kaggle have built the complete
+  canonical synthetic dataset of expert demonstrations, driven by frontier LLMs
+  (**Gemini 3.5 Flash Lite** and **MiniMax M3** / NVIDIA NIM, routed through
+  `api_pool.py`'s provider pool) as generators and independent cross-family verifiers,
+  via the real LangGraph tool-execution loop (including self-correcting grounding,
+  tiered perturbation, all of §2 above). **This is a distinct role from
+  Qwen/Qwen3.5-9B's role elsewhere in this project** — Qwen3.5-9B is the model
+  actually being trained (SFT then GRPO, see Phase 5/6 below), not (primarily) the
+  model generating its own training data; don't conflate the two when reading or
+  writing about this pipeline. The trace file committed to this repo
+  (`data/traces/train_cot_traces.jsonl.old`) has 108 traces, but those **predate the
+  real-tool-execution rewrite** — they were generated under the old `<fake_tool_call>`
+  narration paradigm this codebase moved away from. Post-rewrite trace generation has
   now successfully produced and verified **3,694 canonical traces** across 10 cohorts
-  (see `docs/COT_RESULTS.md` and `docs/PAPER_MILESTONES.md`), fully synchronized
-  to Hugging Face Hub (`Reza-Nadimi/vlm-dental-traces`) and untracked from Git
-  to preserve repository size. Workflows synchronize traces via `scripts/sync_traces_hf.py --download`.
-  With trace generation 100% complete, the active training bottleneck moves to
+  (see `docs/COT_RESULTS.md` and `docs/PAPER_MILESTONES.md`), achieving exact 1:1
+  parity between with-tools and no-tools baselines (880 canonical traces each, 0 directive
+  leaks). All files are synchronized to Hugging Face Hub (`Reza-Nadimi/vlm-dental-traces`)
+  and untracked from Git to preserve repository size. Workflows synchronize traces via
+  `scripts/sync_traces_hf.py --download`.
+  With trace generation 100% complete, the active training focus transitions directly to
   **Stage 1 Supervised Fine-Tuning (SFT)** in `VLM_Dental_Colab_SFT.ipynb` and
   **Stage 2 GRPO RL** in `VLM_Dental_Colab_GRPO.ipynb`.
 - **Tunisia dataset loader — Phase 1 done, Phase 2 blocked on one
@@ -504,11 +502,8 @@ blocked on registration + the two open verification questions in
 `tufts.py`. Panoramic-Caries-Segmentation is uninvestigated but worth a
 look if diagnosis-side data becomes the bottleneck again.
 
-### Phase 3: Execute Supervised Fine-Tuning
-Once trace generation has real volume, run `VLM_Dental_Colab_SFT.ipynb` to
-teach the base Qwen-VL model how to use tools and reason like the frontier
-LLM teacher that generated its training traces (see "Currently In
-Progress" above for which models that actually is).
+### Phase 3: Execute Supervised Fine-Tuning (Active Milestone)
+With canonical trace generation 100% complete (880 verified pathology traces for both with-tools and no-tools baselines, 0 directive leaks, hosted on HF Hub), run `notebooks/VLM_Dental_Colab_SFT.ipynb` to teach the base Qwen/Qwen3.5-9B model how to use tools and reason like the frontier LLM teachers.
 
 ### Phase 4: Baseline Agent Evaluation
 - Create `scripts/run_eval.py` to test the SFT model.

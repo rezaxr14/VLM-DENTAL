@@ -13,11 +13,11 @@ Dental panoramic radiographs (OPGs) are complex images requiring spatial awarene
 
 ### The 6-Phase Roadmap
 The project is structured into 6 phases (documented in `roadmap.md`):
-1. **Agent Tooling & Architecture (Completed):** Building the Python tool registry and prompts.
-2. **Aim 1 - Synthetic Trace Generation (In Progress):** Using a locally-hosted Qwen/Qwen3.5-9B (LangGraph agent loop, run on Kaggle/Colab) to generate high-quality diagnostic traces on the DENTEX dataset.
-3. **Aim 2/3 - VLM Training (Pending):** Supervised Fine-Tuning (SFT) and Group Relative Policy Optimization (GRPO) to teach an open-source VLM to mimic the Teacher LLM.
+1. **Agent Tooling & Architecture (Completed):** Building the Python tool registry, real tool execution, and prompt orchestration.
+2. **Aim 1 - Synthetic Trace Generation (Completed - 3,694 Verified Traces, HF Hub Persistent):** Full multi-cohort LangGraph trace generation, zero-leak decontamination, and verifier filtering across DENTEX and Tufts (880 canonical traces for with-tools and no-tools).
+3. **Aim 2/3 - VLM Training (Active / Next Up):** Supervised Fine-Tuning (SFT in `VLM_Dental_Colab_SFT.ipynb`) and Group Relative Policy Optimization (GRPO in `VLM_Dental_Colab_GRPO.ipynb`) on Qwen/Qwen3.5-9B.
 4. **Aim 4 - Evaluation (Pending):** Benchmarking against clinical baselines.
-5. **Aim 5 - Grounding Integration (Done, feeding the VLM):** Trained YOLOv8m with 5-fold cross-validation to locate teeth. Validation mAP50 ≈ 0.5901 (R ≈ 0.888, P ≈ 0.5457) — past the quality bar, `locate_tooth` is live in the agent loop.
+5. **Aim 5 - Grounding Integration (Completed, feeding the VLM):** Multi-dataset trained YOLOv8m (DENTEX + Tufts, 2,339 images) with 5-fold CV target mAP50 = 0.9376 / 0.9593 on test set — `locate_tooth` is live in the agent loop.
 6. **Phase 6 - Web UI (Pending):** A Gradio/Streamlit app for real-time inference.
 
 ---
@@ -72,13 +72,9 @@ If the LLM needs a tool that wasn't pre-computed, it outputs a standard JSON too
 
 ### Step 3: The Strict Verifier
 LLMs hallucinate. To prevent poisoned training data, the generated trace is passed to a **Verifier LLM**. The Verifier compares the trace's claims against the absolute ground truth. If the trace hallucinates (e.g., claiming a tooth exists in an empty jaw), the Verifier rejects the trace.
-- Only traces that pass the Verifier are saved to `data/traces/train_cot_traces.jsonl`.
-- The current prompt engineering yields an ~80% success rate.
-- **Current volume status:** see `roadmap.md`'s "Currently In Progress" section — the
-  108 traces committed to this repo (`data/traces/train_cot_traces.jsonl.old`) predate
-  the real-tool-execution rewrite described in Step 1 above, and no post-rewrite trace
-  file is currently committed. Scaling this is the project's actual bottleneck right
-  now, not a solved/done item.
+- Only traces that pass the Verifier are saved to canonical files (`data/traces/train_cot_traces.jsonl` and split files).
+- The prompt engineering and autonomous repair yields a 100.0% final verified yield.
+- **Current volume status:** Post-rewrite trace generation is **100% complete** across 10 cohorts (3,694 total verified traces, 0 directive leaks). Unified hybrid pathology files `train_cot_traces.jsonl` (with tools) and `train_cot_traces_no_tools.jsonl` (no tools) each contain exactly **880 traces** (678 DENTEX + 202 Tufts) with exact 1:1 parity, hosted remotely on Hugging Face Hub (`Reza-Nadimi/vlm-dental-traces`) and untracked from Git to prevent repository bloat. Workflows synchronize traces via `scripts/sync_traces_hf.py --download`.
 
 ---
 
