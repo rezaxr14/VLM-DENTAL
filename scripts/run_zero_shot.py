@@ -84,7 +84,8 @@ DEFAULT_OUTPUT_DIR = "data/evaluations"
 
 def load_completed_ids(output_path: Path, retry_empty: bool = True) -> set[int]:
     """Read existing output file and extract processed image IDs for resume.
-    If retry_empty is True, excludes records where predictions are empty or format failed.
+    If retry_empty is True, excludes records where predictions are empty or format failed,
+    UNLESS ground_truth is also empty (clinically verified normal radiograph).
     Truncated records (finish_reason='length') are ALWAYS excluded regardless of retry_empty,
     because a cut-off response is definitionally incomplete and must be re-evaluated."""
     completed: set[int] = set()
@@ -104,10 +105,24 @@ def load_completed_ids(output_path: Path, retry_empty: bool = True) -> set[int]:
                     if record.get("finish_reason") == "length":
                         continue
                     if retry_empty:
-                        preds = record.get("predictions", [])
-                        format_ok = record.get("format_ok", False)
-                        if not preds or not format_ok:
-                            continue  # Treat as incomplete so it gets re-evaluated
+                        format_ok = bool(record.get("format_ok", False))
+                        if not format_ok:
+                            continue
+                        gts = record.get("ground_truth")
+                        preds = record.get("predictions")
+                        # For diseased images (gts is non-empty list), empty predictions indicate failure
+                        if isinstance(gts, list) and len(gts) > 0:
+                            if not isinstance(preds, list) or len(preds) == 0:
+                                continue
+                        # For healthy images (gts is empty list), preds can legitimately be an empty list.
+                        # However, preds must be an actual list object.
+                        elif isinstance(gts, list) and len(gts) == 0:
+                            if not isinstance(preds, list):
+                                continue
+                        else:
+                            # Fallback if ground_truth is missing/malformed: require predictions
+                            if not preds:
+                                continue
                     completed.add(img_id)
             except Exception:
                 pass
@@ -302,8 +317,9 @@ def _run_zero_shot_for_target(
             data_dir=cfg.data_dir, split_name=split_name
         )
 
-    annotated_ids = set(annots_df["image_id"].unique())
-    eligible_imgs = imgs_df[imgs_df["id"].isin(annotated_ids)]
+    # Evaluate across ALL images in the split cohort (e.g. all 50 images in validation split:
+    # 46 pathological images with 182 targets + 4 clinically normal images with 0 targets).
+    eligible_imgs = imgs_df.copy()
 
     # 2. Horizontal Slicing
     if args.total_slices > 1:
@@ -422,25 +438,22 @@ def _run_zero_shot_for_target(
             # this used to call dentex_row_to_fdi unconditionally, which would have silently
             # double-incremented every quadrant/tooth_position on the tufts branch above.
             anns = annots_df[annots_df["image_id"] == image_id]
-            if anns.empty:
-                print(f"  [WARN] No annotations for image {image_id}. Skipping.")
-                continue
-
             gt_findings = []
-            for _, ann_row in anns.iterrows():
-                q, pos = row_to_fdi(ann_row)
-                d_id = ann_row.get("category_id_3")
-                try:
-                    d_id_int = int(d_id)
-                except (ValueError, TypeError):
-                    d_id_int = None
-                d_raw = cat_lookup.get(d_id, cat_lookup.get(d_id_int, DENTEX_DEFAULT_DIAGNOSES.get(d_id_int, "Caries")))
-                gt_findings.append({
-                    "quadrant": q,
-                    "tooth_position": pos,
-                    "diagnosis": normalize_dental_diagnosis(d_raw),
-                    "raw_diagnosis": str(d_raw),
-                })
+            if not anns.empty:
+                for _, ann_row in anns.iterrows():
+                    q, pos = row_to_fdi(ann_row)
+                    d_id = ann_row.get("category_id_3")
+                    try:
+                        d_id_int = int(d_id)
+                    except (ValueError, TypeError):
+                        d_id_int = None
+                    d_raw = cat_lookup.get(d_id, cat_lookup.get(d_id_int, DENTEX_DEFAULT_DIAGNOSES.get(d_id_int, "Caries")))
+                    gt_findings.append({
+                        "quadrant": q,
+                        "tooth_position": pos,
+                        "diagnosis": normalize_dental_diagnosis(d_raw),
+                        "raw_diagnosis": str(d_raw),
+                    })
 
             prefix = provider.upper().replace('_NIM', '')
 
@@ -513,16 +526,23 @@ def _run_zero_shot_for_target(
             format_ok = bool(parsed_raw is not None and (len(pred_findings) > 0 or isinstance(parsed_raw, (dict, list))))
             
             # Clinical summary indicators
-            fdi_ok = match_res["fdi_tp"] > 0
-            exact_match = match_res["exact_tp"] > 0
-            all_exact_match = (match_res["exact_fn"] == 0 and match_res["exact_fp"] == 0)
+            if len(gt_findings) == 0:
+                # Clinically normal radiograph (0 ground-truth disease findings)
+                is_correct_normal = bool(len(pred_findings) == 0 and format_ok)
+                fdi_ok = is_correct_normal
+                exact_match = is_correct_normal
+                all_exact_match = is_correct_normal
+            else:
+                fdi_ok = bool(match_res["fdi_tp"] > 0)
+                exact_match = bool(match_res["exact_tp"] > 0)
+                all_exact_match = bool(match_res["exact_fn"] == 0 and match_res["exact_fp"] == 0)
 
             primary_matched = match_res["matched_pairs"][0]["pred"] if match_res["matched_pairs"] else (pred_findings[0] if pred_findings else None)
-            confidence = primary_matched.get("confidence") if primary_matched else None
+            confidence = primary_matched.get("confidence") if primary_matched else (1.0 if (len(gt_findings) == 0 and len(pred_findings) == 0) else None)
 
             # Formatted console display
-            gt_str = ", ".join(f"FDI {g['quadrant']}{g['tooth_position']} ({g['diagnosis']})" for g in gt_findings)
-            pred_str = ", ".join(f"FDI {p['quadrant']}{p['tooth_position']} ({p['diagnosis']})" for p in pred_findings) if pred_findings else "None"
+            gt_str = ", ".join(f"FDI {g['quadrant']}{g['tooth_position']} ({g['diagnosis']})" for g in gt_findings) if len(gt_findings) > 0 else "None (Clinically Normal Radiograph)"
+            pred_str = ", ".join(f"FDI {p['quadrant']}{p['tooth_position']} ({p['diagnosis']})" for p in pred_findings) if len(pred_findings) > 0 else "None (No Abnormalities Reported)"
             
             print(f"  GT ({len(gt_findings)}): {gt_str}")
             print(f"  Pred ({len(pred_findings)}): {pred_str}")
@@ -534,12 +554,22 @@ def _run_zero_shot_for_target(
                     print(f"  ℹ️  [NO ABNORMALITIES REPORTED] Model output {len(raw_reply.split())} words (finish='{finish_reason}'). Preview: {preview}")
                 else:
                     print(f"  ⚠️  [EMPTY API RESPONSE] Provider returned 0 content tokens (finish='{finish_reason}')")
-            print(
-                f"  Score: FDI Match: {match_res['fdi_tp']}/{len(gt_findings)} (P: {match_res['fdi_precision']:.2f}, R: {match_res['fdi_recall']:.2f}, F1: {match_res['fdi_f1']:.2f}) | "
-                f"Exact Match: {match_res['exact_tp']}/{len(gt_findings)} (P: {match_res['exact_precision']:.2f}, R: {match_res['exact_recall']:.2f}, F1: {match_res['exact_f1']:.2f}) | "
-                f"Closeness: {match_res['closeness_score']:.2f} (Spatial: {match_res['spatial_proximity']:.2f}, Diag: {match_res['diagnostic_similarity']:.2f})",
-                flush=True,
-            )
+            
+            if len(gt_findings) == 0:
+                status_str = "CORRECT NORMAL (Specificity 100%)" if len(pred_findings) == 0 else f"FALSE POSITIVE ({len(pred_findings)} hallucinated findings)"
+                print(
+                    f"  Score: Normal Scan Evaluation -> {status_str} | "
+                    f"Exact Match: {exact_match} | "
+                    f"Closeness: {match_res['closeness_score']:.2f}",
+                    flush=True,
+                )
+            else:
+                print(
+                    f"  Score: FDI Match: {match_res['fdi_tp']}/{len(gt_findings)} (P: {match_res['fdi_precision']:.2f}, R: {match_res['fdi_recall']:.2f}, F1: {match_res['fdi_f1']:.2f}) | "
+                    f"Exact Match: {match_res['exact_tp']}/{len(gt_findings)} (P: {match_res['exact_precision']:.2f}, R: {match_res['exact_recall']:.2f}, F1: {match_res['exact_f1']:.2f}) | "
+                    f"Closeness: {match_res['closeness_score']:.2f} (Spatial: {match_res['spatial_proximity']:.2f}, Diag: {match_res['diagnostic_similarity']:.2f})",
+                    flush=True,
+                )
 
             record = to_jsonable({
                 "image_id": image_id,

@@ -11,7 +11,7 @@ The training and evaluation sets for the YOLOv8m tooth grounding model (`locate_
 | **DENTEX Combined Pool (`combine_enumeration_splits=True`)** | **1,339 images** | **Mixed** (47% dense, 53% sparse) | **21,624 boxes** | DENTEX 5-fold CV training pool |
 | **Tufts Dental Database** | **1,000 images** | **Dense** (32 teeth/image) | **25,184 boxes** | Out-of-domain full-arch generalization |
 | **Multi-Dataset Total (DENTEX + Tufts)** | **2,339 images** | **Mixed** (70% dense, 30% sparse) | **46,808 boxes** | Primary multi-dataset CV training pool |
-| **Held-Out Test Set (`validation_triple.json`)** | **46 images** | **Sparse** (~3.9 diseased teeth/image) | **182 targets** | Official DENTEX validation split |
+| **Held-Out Test Set (`validation_triple.json`)** | **50 images** | **Mixed** (46 pathological, 4 healthy normal) | **182 targets** | Official DENTEX validation split (46 pathological with 182 targets + 4 healthy normal negative controls) |
 
 ---
 
@@ -39,9 +39,9 @@ The training and evaluation sets for the YOLOv8m tooth grounding model (`locate_
 | DENTEX+Tufts (CV Fold 4) | 0.8814 | 0.5169 | 0.9432 | 0.6431 | 0.5046 | 0.5311 |
 | **DENTEX+Tufts (5-Fold Mean)** | **0.9376** | **0.5756** | **0.9680** | **0.7721** | **0.6289** | **0.6439** |
 
-## 3. Table 2: Held-Out Official DENTEX Test Set Benchmark (`validation_triple.json` - 46 Images, 182 Targets)
+## 3. Table 2: Held-Out Official DENTEX Test Set Benchmark (`validation_triple.json` - 50 Images Total, 46 Pathological with 182 Targets)
 
-*Evaluates all 10 trained YOLO models on the official held-out DENTEX challenge validation split (46 images, 182 target boxes) using exact 1-to-1 greedy target matching. This verified offline evaluation tests true target localization.*
+*Evaluates all 10 trained YOLO models on the official held-out DENTEX challenge validation split (50 images total, 46 pathological images with 182 target boxes + 4 normal images with 0 targets) using exact 1-to-1 greedy target matching. This verified offline evaluation tests true target localization.*
 
 | Model | Target mAP50 | Target mAP50-95 | Precision | Recall@50 | Mean IoU |
 |-------|-------|----------|-----------|-----------|----------|

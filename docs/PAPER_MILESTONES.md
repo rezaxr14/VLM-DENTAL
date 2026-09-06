@@ -12,7 +12,7 @@ Future SFT, GRPO, and Trace Generation findings should also be appended here.
 | **DENTEX Combined Pool (`combine_enumeration_splits=True`)** | **1,339 images** | **Mixed** (47% dense, 53% sparse) | **21,624 boxes** | DENTEX 5-fold CV training pool |
 | **Tufts Dental Database** | **1,000 images** | **Dense** (32 teeth/image) | **25,184 boxes** | Out-of-domain full-arch generalization |
 | **Multi-Dataset Total (DENTEX + Tufts)** | **2,339 images** | **Mixed** (70% dense, 30% sparse) | **46,808 boxes** | Primary multi-dataset CV training pool |
-| **Held-Out Test Set (`validation_triple.json`)** | **46 images** | **Sparse** (~3.9 diseased teeth/image) | **182 targets** | Target-filtered benchmark evaluation |
+| **Held-Out Test Set (`validation_triple.json`)** | **50 images** | **Mixed** (46 pathological, 4 healthy normal) | **182 targets** | Full held-out benchmark evaluation (46 diseased with 182 targets + 4 healthy normal negative controls) |
 
 ### Diagnostic & Synthetic CoT Reasoning Corpora
 
@@ -51,9 +51,9 @@ Future SFT, GRPO, and Trace Generation findings should also be appended here.
 
 ---
 
-## 3. Held-Out Target Grounding Benchmark (Official Test Set - 46 Images, 182 Targets)
+## 3. Held-Out Target Grounding Benchmark (Official Test Set - 50 Images Total, 46 Pathological with 182 Targets)
 
-*Methodology: Evaluates model detections specifically on annotated target teeth using greedy 1-to-1 bipartite matching and continuous 101-point COCO PR interpolation down to `conf=0.001` to eliminate whole-mouth false positive distortion.*
+*Methodology: Evaluates model detections on the official DENTEX test set (`validation_triple.json`: 50 images total, 46 pathological images with 182 target boxes + 4 normal images with 0 targets). Detections on target teeth are evaluated using greedy 1-to-1 bipartite matching and continuous 101-point COCO PR interpolation down to `conf=0.001`.*
 
 | Model Architecture (5-Fold Mean) | Target mAP50 | Target mAP50-95 | Precision | Recall@0.50 | Mean IoU |
 |---|---|---|---|---|---|
