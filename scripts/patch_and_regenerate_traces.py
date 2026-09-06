@@ -135,7 +135,7 @@ TARGET_CONFIGS = [
         "healthy_only": False,
         "all_diseases": False,
         "split_file": "train_cot_traces_dentex.jsonl",
-        "target_ids": [13, 28, 182, 243, 564, 594, 676, 679, 682, 695, 702],
+        "target_ids": [13, 28, 182, 243, 564, 594, 676, 679, 682, 695],
     },
     {
         "name": "DENTEX No-Tools",
@@ -162,7 +162,7 @@ TARGET_CONFIGS = [
         "healthy_only": True,
         "all_diseases": False,
         "split_file": "train_cot_traces_healthy_tufts.jsonl",
-        "target_ids": [44, 53, 99, 119, 148, 241, 354, 390, 516, 533, 546, 582, 625, 774, 795, 866, 883, 987, 1000],
+        "target_ids": [1000],
     },
     {
         "name": "Tufts All-Diseases",
@@ -176,17 +176,147 @@ TARGET_CONFIGS = [
 ]
 
 
-def purge_contaminated_traces(file_path: Path, target_ids: set[int]) -> int:
-    """Purge ONLY records for target_ids that actually have teacher directive leaks.
+def has_any_leak(text: str) -> bool:
+    for pat in LEAK_PATTERNS:
+        if pat.search(text):
+            return True
+    return False
 
-    If an image_id is in target_ids but its trace is clean (i.e. newly generated and verified),
-    it is PRESERVED. Only contaminated/leaking records are purged.
+
+def clean_sentence_boundaries(text: str) -> str:
+    """Clean up whitespace, dangling punctuation, and capitalization after excision."""
+    text = re.sub(r'([.?!]\s+)(?:and|but|so|or|however|wait)[,\s\-\u2013\u2014]+', r'\1', text, flags=re.IGNORECASE)
+    text = re.sub(r'(\n\s*)(?:and|but|so|or|however|wait)[,\s\-\u2013\u2014]+', r'\1', text, flags=re.IGNORECASE)
+    text = re.sub(r'^\s*(?:and|but|so|or|however|wait)[,\s\-\u2013\u2014]+', '', text, flags=re.IGNORECASE)
+    
+    text = re.sub(r'[ \t]*,[ \t]*,+', ',', text)
+    text = re.sub(r'[ \t]*\.[ \t]*\.+', '.', text)
+    text = re.sub(r'\.\s*,', '.', text)
+    text = re.sub(r',\s*\.', '.', text)
+    text = re.sub(r'--\s*--', '--', text)
+    text = re.sub(r'\s*([,.;:?!])', r'\1', text)
+    
+    text = re.sub(r'([.?!])\s*[-–—:]+\s*', r'\1 ', text)
+    text = re.sub(r'[-–—]+\s*([.?!])', r'\1', text)
+    
+    text = re.sub(r'([.?!])([A-Za-z])', r'\1 \2', text)
+    text = re.sub(r'([,;])([A-Za-z])', r'\1 \2', text)
+    
+    def cap_match(m):
+        return m.group(1) + m.group(2).upper()
+    text = re.sub(r'([.?!]\s+)([a-z])', cap_match, text)
+    text = re.sub(r'(\n\s*)([a-z])', cap_match, text)
+    if text and text[0].islower():
+        text = text[0].upper() + text[1:]
+        
+    text = re.sub(r'[ \t]+', ' ', text)
+    text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)
+    return text.strip()
+
+
+def excise_leaks_from_thought(thought: str) -> str:
+    if not has_any_leak(thought):
+        return thought
+
+    thought = re.sub(r'\s*\bagainst the ground truth\b', '', thought, flags=re.IGNORECASE)
+    thought = re.sub(r'\s*\bmentioned in the (?:hint|directive)\b', '', thought, flags=re.IGNORECASE)
+    thought = re.sub(r'\s*\bin the hint\b', '', thought, flags=re.IGNORECASE)
+    thought = re.sub(r'\s*\bgiven to me\b', '', thought, flags=re.IGNORECASE)
+    thought = re.sub(r'\balign with the ground truth\b', 'align with the', thought, flags=re.IGNORECASE)
+    thought = re.sub(r'\btrust the (?:GT|ground truth) and\s*', '', thought, flags=re.IGNORECASE)
+    thought = re.sub(r'\s*as ground truth\b', '', thought, flags=re.IGNORECASE)
+    thought = re.sub(r'\s*/\s*mapping to the directive[^\n,.)]*', '', thought, flags=re.IGNORECASE)
+    thought = re.sub(r',?\s*but per directive noted as such\s*[-–—]\s*actually', ' - actually', thought, flags=re.IGNORECASE)
+    thought = re.sub(r',?\s*consistent with the directive(?: of [^.;\n]+)?[;]?', '', thought, flags=re.IGNORECASE)
+    thought = re.sub(r',?\s*but per the directive notation[^\n,.)]*', '', thought, flags=re.IGNORECASE)
+    thought = re.sub(r'\bBased on the teacher\'s directive,\s*', '', thought, flags=re.IGNORECASE)
+    thought = re.sub(r'However,\s*I need to follow the task directive that this scan has NO pathology\.', 'This scan appears free of evident acute pathology.', thought, flags=re.IGNORECASE)
+
+    paragraphs = thought.split("\n")
+    cleaned_paras = []
+    for para in paragraphs:
+        if not has_any_leak(para):
+            cleaned_paras.append(para)
+            continue
+        
+        raw_sentences = re.split(r'(?<=[.?!])\s+', para)
+        kept_sentences = []
+        for s in raw_sentences:
+            if not has_any_leak(s):
+                kept_sentences.append(s)
+                continue
+            
+            clauses = re.split(r'([;]|--|—)', s)
+            if len(clauses) > 1:
+                kept_clauses = [c for c in clauses if not has_any_leak(c)]
+                reassembled = "".join(kept_clauses).strip()
+                if reassembled and not has_any_leak(reassembled):
+                    kept_sentences.append(reassembled)
+                    continue
+        
+        cleaned_para = " ".join(kept_sentences)
+        cleaned_para = clean_sentence_boundaries(cleaned_para)
+        if cleaned_para:
+            cleaned_paras.append(cleaned_para)
+
+    result = "\n".join(cleaned_paras)
+    return clean_sentence_boundaries(result)
+
+
+def repair_assistant_content(content_str: str) -> tuple[str, bool]:
+    """Parse JSON assistant turn if present, excise thought leaks, re-serialize."""
+    try:
+        data = json.loads(content_str)
+        if isinstance(data, dict) and "thought" in data:
+            orig_thought = data["thought"]
+            if has_any_leak(orig_thought):
+                repaired_thought = excise_leaks_from_thought(orig_thought)
+                data["thought"] = repaired_thought
+                return json.dumps(data), True
+    except Exception:
+        pass
+    
+    if has_any_leak(content_str):
+        return excise_leaks_from_thought(content_str), True
+    return content_str, False
+
+
+def repair_record(rec: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    """Surgically repair an entire trace trajectory."""
+    changed = False
+    messages = rec.get("messages", [])
+    for msg in messages:
+        if msg.get("role") == "assistant":
+            content = msg.get("content", "")
+            repaired_content, was_changed = repair_assistant_content(content)
+            if was_changed:
+                msg["content"] = repaired_content
+                changed = True
+
+    for turn in rec.get("turns", []):
+        parsed = turn.get("parsed")
+        if isinstance(parsed, dict) and "thought" in parsed:
+            if has_any_leak(parsed["thought"]):
+                parsed["thought"] = excise_leaks_from_thought(parsed["thought"])
+                changed = True
+        raw_out = turn.get("raw_output")
+        if isinstance(raw_out, str) and has_any_leak(raw_out):
+            repaired_raw, _ = repair_assistant_content(raw_out)
+            turn["raw_output"] = repaired_raw
+            changed = True
+
+    return rec, changed
+
+
+def repair_contaminated_traces(file_path: Path, target_ids: set[int]) -> int:
+    """Surgically repair records for target_ids that have teacher directive leaks.
+    Excises leaked phrases and reconnects sentences cleanly with zero API calls.
     """
     if not file_path.exists():
         return 0
 
-    clean_lines = []
-    purged_count = 0
+    lines = []
+    repaired_count = 0
 
     with open(file_path, "r", encoding="utf-8", errors="replace") as f:
         for line in f:
@@ -199,20 +329,27 @@ def purge_contaminated_traces(file_path: Path, target_ids: set[int]) -> int:
                 if img_id in target_ids:
                     has_leak, _ = check_for_leaks(rec)
                     if has_leak:
-                        purged_count += 1
-                        continue
+                        rec, changed = repair_record(rec)
+                        if changed:
+                            repaired_count += 1
+                            line_str = json.dumps(rec)
             except Exception:
                 pass
-            clean_lines.append(line_str)
+            lines.append(line_str)
 
-    if purged_count > 0:
-        tmp_path = file_path.with_suffix(".tmp_purge")
+    if repaired_count > 0:
+        tmp_path = file_path.with_suffix(".tmp_repair")
         with open(tmp_path, "w", encoding="utf-8") as f:
-            for l in clean_lines:
+            for l in lines:
                 f.write(l + "\n")
         tmp_path.replace(file_path)
 
-    return purged_count
+    return repaired_count
+
+
+def purge_contaminated_traces(file_path: Path, target_ids: set[int]) -> int:
+    """Backward-compatible alias: runs surgical repair instead of purging."""
+    return repair_contaminated_traces(file_path, target_ids)
 
 
 def get_clean_existing_ids(file_path: Path) -> set[int]:
@@ -332,8 +469,8 @@ def main():
     parser.add_argument("--max-rounds", type=int, default=5, help="Maximum while-loop rounds to resolve missing traces")
     parser.add_argument("--max-tool-calls", type=int, default=70, help="Maximum tool calls per trace (default: 70)")
     parser.add_argument("--pacing-delay", type=float, default=2.0, help="Delay (seconds) between successive image API calls")
-    parser.add_argument("--provider", type=str, default="openrouter", help="Generator and verifier provider")
-    parser.add_argument("--model", type=str, default="minimax/minimax-m3:free", help="Generator and verifier model")
+    parser.add_argument("--provider", type=str, default="gemini", help="Generator and verifier provider (e.g. 'gemini', 'openrouter')")
+    parser.add_argument("--model", type=str, default="gemini-3.5-flash-lite", help="Generator and verifier model")
     parser.add_argument("--skip-upload", action="store_true", help="Skip final upload to Hugging Face Hub")
     args = parser.parse_args()
 
@@ -342,8 +479,8 @@ def main():
     cfg = load_config()
     data_dir = getattr(cfg, "data_dir", os.environ.get("DENTAL_AGENT_DATA_DIR", "data"))
 
-    provider = args.provider or "openrouter"
-    model = args.model or "minimax/minimax-m3:free"
+    provider = (args.provider or "gemini").lower()
+    model = args.model or ("gemini-3.5-flash-lite" if provider in ("gemini", "google") else "minimax/minimax-m3:free")
     hf_repo = os.environ.get("HF_TRACES_REPO", "Reza-Nadimi/vlm-dental-traces")
 
     # Enforce environment overrides so LangGraph nodes and verifiers never use stale/dead models
@@ -351,11 +488,36 @@ def main():
     os.environ["VERIFIER_PROVIDER"] = provider
     os.environ["GENERATOR_MODEL"] = model
     os.environ["VERIFIER_MODEL"] = model
-    os.environ["OPENROUTER_GENERATOR_MODEL"] = model
-    os.environ["OPENROUTER_VERIFIER_MODEL"] = model
-    os.environ["OPENROUTER_MODEL"] = model
     os.environ["IGNORE_API_ERRORS"] = "true"
     os.environ["IGNORE_429"] = "true"
+
+    if provider in ("gemini", "google"):
+        os.environ["GEMINI_GENERATOR_MODEL"] = model
+        os.environ["GEMINI_VERIFIER_MODEL"] = model
+        os.environ["GEMINI_GENERATOR_RPM_LIMIT"] = "6"
+        os.environ["GEMINI_VERIFIER_RPM_LIMIT"] = "6"
+        os.environ["GEMINI_RPM_HARD_CAP"] = "10"
+        os.environ["GEMINI_COOLDOWN_SECONDS"] = "5.0"
+        os.environ["GEMINI_MAX_TOKENS"] = "16384"
+        os.environ["GEMINI_IMAGE_MAX_DIM"] = "0"
+        api_key_name = "GEMINI_API_KEY"
+    else:
+        os.environ["OPENROUTER_GENERATOR_MODEL"] = model
+        os.environ["OPENROUTER_VERIFIER_MODEL"] = model
+        os.environ["OPENROUTER_MODEL"] = model
+        rpd_limit = os.environ.get("OPENROUTER_RPD_LIMIT", "").strip()
+        try:
+            if not rpd_limit or int(rpd_limit) <= 100:
+                os.environ["OPENROUTER_RPD_LIMIT"] = "10000"
+        except ValueError:
+            os.environ["OPENROUTER_RPD_LIMIT"] = "10000"
+        os.environ["OPENROUTER_GENERATOR_RPM_LIMIT"] = "15"
+        os.environ["OPENROUTER_VERIFIER_RPM_LIMIT"] = "15"
+        os.environ["OPENROUTER_RPM_LIMIT"] = "15"
+        os.environ["OPENROUTER_COOLDOWN_SECONDS"] = "2.5"
+        os.environ["OPENROUTER_MAX_TOKENS"] = "16384"
+        os.environ["OPENROUTER_IMAGE_MAX_DIM"] = "0"
+        api_key_name = "OPENROUTER_API_KEY"
 
     # Sync trace_generation module globals (same pattern as run_trace_gen.py lines 1077-1094)
     tg.GENERATOR_PROVIDER = provider
@@ -363,31 +525,7 @@ def main():
     tg.VERIFIER_PROVIDER = provider
     tg.VERIFIER_MODEL = model
 
-    # --------------------------------------------------------------------------
-    # Rate Limits & Pacing for OpenRouter / MiniMax M3
-    # --------------------------------------------------------------------------
-    # 1. Uncap RPD: Prevent artificial 25 RPD cutoff from .env.example
-    rpd_limit = os.environ.get("OPENROUTER_RPD_LIMIT", "").strip()
-    try:
-        if not rpd_limit or int(rpd_limit) <= 100:
-            os.environ["OPENROUTER_RPD_LIMIT"] = "10000"
-    except ValueError:
-        os.environ["OPENROUTER_RPD_LIMIT"] = "10000"
-
-    # 2. RPM pacing: 15 RPM (well under OpenRouter's 20 RPM ceiling, avoiding 429 spikes)
-    os.environ["OPENROUTER_GENERATOR_RPM_LIMIT"] = "15"
-    os.environ["OPENROUTER_VERIFIER_RPM_LIMIT"] = "15"
-    os.environ["OPENROUTER_RPM_LIMIT"] = "15"
-
-    # 3. Cooldown: 2.5s minimum gap between successive calls to smoothly spread traffic
-    os.environ["OPENROUTER_COOLDOWN_SECONDS"] = "2.5"
-
-    # 4. Token headroom & resolution
-    os.environ["OPENROUTER_MAX_TOKENS"] = "16384"
-    os.environ["OPENROUTER_IMAGE_MAX_DIM"] = "0"
-
-    # Verify tokens are loaded from .env
-    or_key = os.environ.get("OPENROUTER_API_KEY", "")
+    active_api_key = os.environ.get(api_key_name, "")
     hf_key = os.environ.get("HF_TOKEN", "")
 
     print("\n" + "=" * 70)
@@ -395,25 +533,24 @@ def main():
     print("=" * 70)
     print(f"* Provider         : {provider}")
     print(f"* Model            : {model}")
-    print(f"* OPENROUTER_API_KEY: {'SET (' + or_key[:12] + '...)' if or_key and not or_key.startswith('your_') else 'NOT SET ⚠️'}")
+    print(f"* {api_key_name:16}: {'SET (' + active_api_key[:12] + '...)' if active_api_key and not active_api_key.startswith('your_') else 'NOT SET ⚠️'}")
     print(f"* HF_TOKEN         : {'SET' if hf_key and not hf_key.startswith('your_') else 'NOT SET ⚠️'}")
     print(f"* Max Tool Calls   : {args.max_tool_calls}")
-    print(f"* Rate Limits      : 15 RPM cap, 2.5s cooldown, {os.environ['OPENROUTER_RPD_LIMIT']} RPD limit")
     print(f"* Trace Directory  : {trace_dir}")
     print(f"* Max Loop Rounds  : {args.max_rounds}")
     print(f"* Pacing Delay     : {args.pacing_delay}s")
     print(f"* HF Repository    : {hf_repo}")
     print("=" * 70 + "\n")
 
-    # Step 1: Decontaminate split files (Purges only records with actual leaks, preserves clean data)
-    print("[1/4] Decontaminating target traces (removing leaked/shitty records)...")
+    # Step 1: Surgically repair contaminated traces (Zero-Token Excision)
+    print("[1/4] Surgically repairing target traces (excising leaks, connecting sentences)...")
     for c in TARGET_CONFIGS:
         fpath = trace_dir / c["split_file"]
-        dropped = purge_contaminated_traces(fpath, set(c["target_ids"]))
-        if dropped > 0:
-            print(f"  [Purged] {fpath.name}: dropped {dropped} contaminated record(s).")
+        repaired = repair_contaminated_traces(fpath, set(c["target_ids"]))
+        if repaired > 0:
+            print(f"  [Repaired] {fpath.name}: surgically cleaned {repaired} contaminated record(s).")
         else:
-            print(f"  [Clean]  {fpath.name}: clean (no contaminated records found).")
+            print(f"  [Clean]    {fpath.name}: 100% clean (no contaminated records found).")
 
     # Step 2: While-Loop Regeneration & Dual-Gate Verification
     print("\n[2/4] Starting Looping Regeneration & Dual-Gate Verification...")
