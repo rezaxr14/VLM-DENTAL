@@ -80,10 +80,11 @@ $$D_{KL}(\pi_\theta \parallel \pi_{\text{ref}}) = \frac{\pi_{\text{ref}}}{\pi_\t
 ---
 
 ## 6. Multi-Account Kaggle Checkpoint & Resume Log
+*Checkpoints are continuously consolidated in the unified models repository `Reza-Nadimi/vlm-dental-models` under `grpo/`.*
 
-| Checkpoint Name | Account ID | Step | Group Size ($K$) | Cumulative Reward | Hugging Face Upload URI |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| `grpo_k4_step25` | Account 1 | 25 | 4 | TBD | `Reza-Nadimi/vlm-dental-checkpoints` |
-| `grpo_k4_step50` | Account 1 | 50 | 4 | TBD | `Reza-Nadimi/vlm-dental-checkpoints` |
-| `grpo_k4_step75` | Account 2 (Resumed) | 75 | 4 | TBD | `Reza-Nadimi/vlm-dental-checkpoints` |
-| `grpo_k4_final` | Account 2 | 100 | 4 | TBD | `Reza-Nadimi/vlm-dental-checkpoints` |
+| Checkpoint Identifier | Account ID | Step | Group Size ($K$) | SFT Reference Stage | Cumulative Reward | Hugging Face Subfolder (`Reza-Nadimi/vlm-dental-models`) |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| `qwen3_5_9b_grpo_tools_k4_step25` | Account 1 | 25 | 4 | `dentex_alone` | TBD | `grpo/qwen3_5_9b_grpo_with_tools_k4_dentex_alone/grpo-with_tools-step-25` |
+| `qwen3_5_9b_grpo_tools_k4_step50` | Account 1 | 50 | 4 | `dentex_alone` | TBD | `grpo/qwen3_5_9b_grpo_with_tools_k4_dentex_alone/grpo-with_tools-step-50` |
+| `qwen3_5_9b_grpo_tools_k4_step75` | Account 2 (Resumed) | 75 | 4 | `dentex_alone` | TBD | `grpo/qwen3_5_9b_grpo_with_tools_k4_dentex_alone/grpo-with_tools-step-75` |
+| `qwen3_5_9b_grpo_tools_k4_final` | Account 2 | 100 | 4 | `dentex_alone` | TBD | `grpo/qwen3_5_9b_grpo_with_tools_k4_dentex_alone/grpo-with_tools-final` |

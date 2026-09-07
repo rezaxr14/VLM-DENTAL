@@ -23,7 +23,7 @@ from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 
 from dental_agent.config import ProjectConfig, TrainingConfig
-from dental_agent.model.backbone import load_model, apply_lora
+from dental_agent.model.backbone import load_model, apply_lora, safe_process_vision_info
 from dental_agent.model.checkpoints import save_checkpoint
 
 
@@ -54,8 +54,14 @@ def resolve_image_path(sample: dict[str, Any], data_dir: str | Path = "data") ->
         base / "images" / "tufts" / f"{str_id}.png",
         base / "images" / "healthy_tufts" / f"{str_id}.png",
         base / "dentex" / "train_images" / f"{str_id}.png",
+        base / "dentex" / f"{str_id}.png",
+        base / "train_images" / f"{str_id}.png",
         base / "tufts" / "Radiographs" / f"{str_id}.jpg",
         base / "tufts" / "Radiographs" / f"{str_id}.png",
+        base / "tufts" / "radiographs" / f"{str_id}.jpg",
+        base / "tufts" / "radiographs" / f"{str_id}.png",
+        base / "Radiographs" / f"{str_id}.jpg",
+        base / "Radiographs" / f"{str_id}.png",
     ]
 
     for cand in candidates:
@@ -233,7 +239,7 @@ class DentalSFTDataset(Dataset):
 
     def __init__(
         self,
-        data_path: str | Path,
+        data_path: str | Path | list[str | Path],
         processor: Any,
         track: str = "with_tools",
         data_dir: str | Path = "data",
@@ -243,14 +249,15 @@ class DentalSFTDataset(Dataset):
         self.data_dir = data_dir
         self.records: list[dict[str, Any]] = []
 
-        data_path = Path(data_path)
-        if not data_path.is_file():
-            raise FileNotFoundError(f"SFT trace file not found: {data_path}")
-
-        with open(data_path, "r", encoding="utf-8") as f:
-            for line in f:
-                if line.strip():
-                    self.records.append(json.loads(line))
+        paths = [data_path] if isinstance(data_path, (str, Path)) else list(data_path)
+        for p in paths:
+            p_obj = Path(p)
+            if not p_obj.is_file():
+                raise FileNotFoundError(f"SFT trace file not found: {p_obj}")
+            with open(p_obj, "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.strip():
+                        self.records.append(json.loads(line))
 
     def __len__(self) -> int:
         return len(self.records)
@@ -263,12 +270,6 @@ class DentalSFTDataset(Dataset):
             base_image = Image.new("RGB", (512, 512), color=(128, 128, 128))
         else:
             base_image = Image.open(image_path).convert("RGB")
-
-        try:
-            from qwen_vl_utils import process_vision_info
-        except ImportError:
-            def process_vision_info(msgs):
-                return None, None
 
         raw_messages = rec.get("messages", [])
         if not raw_messages:
@@ -320,7 +321,7 @@ class DentalSFTDataset(Dataset):
         text = self.processor.apply_chat_template(
             sanitized_messages, tokenize=False, add_generation_prompt=False
         )
-        image_inputs, video_inputs = process_vision_info(sanitized_messages)
+        image_inputs, video_inputs = safe_process_vision_info(sanitized_messages)
 
         enc = self.processor(
             text=[text],
@@ -421,12 +422,6 @@ def build_sft_example(
     system_prompt: str | None = None,
 ) -> dict[str, torch.Tensor]:
     """Legacy helper: build one training example with prompt masking."""
-    try:
-        from qwen_vl_utils import process_vision_info
-    except ImportError:
-        def process_vision_info(msgs):
-            return None, None
-
     prompt_messages = [
         {"role": "system", "content": system_prompt or "You are an expert dental AI."},
         {"role": "user", "content": [
@@ -437,7 +432,7 @@ def build_sft_example(
     prompt_text = processor.apply_chat_template(prompt_messages, tokenize=False, add_generation_prompt=True)
     full_text = prompt_text + target_trace_text + (getattr(processor.tokenizer, "eos_token", None) or "<|im_end|>")
 
-    image_inputs, video_inputs = process_vision_info(prompt_messages)
+    image_inputs, video_inputs = safe_process_vision_info(prompt_messages)
     prompt_enc = processor(text=[prompt_text], images=image_inputs, videos=video_inputs, return_tensors="pt")
     full_enc = processor(text=[full_text], images=image_inputs, videos=video_inputs, return_tensors="pt")
 

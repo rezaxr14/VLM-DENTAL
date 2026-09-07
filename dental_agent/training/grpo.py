@@ -26,7 +26,7 @@ from PIL import Image
 from tqdm import tqdm
 
 from dental_agent.config import ProjectConfig, TrainingConfig
-from dental_agent.model.backbone import load_model, apply_lora
+from dental_agent.model.backbone import load_model, apply_lora, safe_process_vision_info
 from dental_agent.model.checkpoints import save_checkpoint
 from dental_agent.agent.loop import run_agent, run_agent_no_tools, AgentTrajectory
 from dental_agent.agent.prompts import NO_TOOLS_SYSTEM_PROMPT, build_agent_system_prompt
@@ -130,15 +130,9 @@ def build_full_trajectory_labels(
     processor: Any,
 ) -> dict[str, torch.Tensor]:
     """Re-tokenize finished trajectory and unmask exclusively the assistant generated spans."""
-    try:
-        from qwen_vl_utils import process_vision_info
-    except ImportError:
-        def process_vision_info(msgs):
-            return None, None
-
     messages = trajectory.get("messages", [])
     text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
-    image_inputs, video_inputs = process_vision_info(messages)
+    image_inputs, video_inputs = safe_process_vision_info(messages)
     full_enc = processor(text=[text], images=image_inputs, videos=video_inputs, return_tensors="pt")
 
     labels = torch.full_like(full_enc["input_ids"], -100)
@@ -186,12 +180,6 @@ def collect_grpo_group_batched_no_tools(
     temperature: float = 0.7,
 ) -> tuple[list[dict], list[float], list[torch.Tensor], list[torch.Tensor]]:
     """Sample K candidate trajectories simultaneously in ONE batched forward pass (Track B)."""
-    try:
-        from qwen_vl_utils import process_vision_info
-    except ImportError:
-        def process_vision_info(msgs):
-            return None, None
-
     row = images_df[images_df["id"] == image_id].iloc[0]
     base_image = Image.open(row["local_path"]).convert("RGB")
 
@@ -211,7 +199,7 @@ def collect_grpo_group_batched_no_tools(
     ]
 
     text = processor.apply_chat_template(prompt_messages, tokenize=False, add_generation_prompt=True)
-    image_inputs, video_inputs = process_vision_info(prompt_messages)
+    image_inputs, video_inputs = safe_process_vision_info(prompt_messages)
 
     single_enc = processor(
         text=[text],
@@ -475,12 +463,36 @@ def log_grpo_step(
         f.write(json.dumps(to_jsonable(record)) + "\n")
     return record
 
+def upload_checkpoint_to_hf(
+    checkpoint_dir: str | Path,
+    hf_repo: str,
+    step: int,
+    path_in_repo: str | None = None,
+) -> None:
+    """Upload lightweight LoRA checkpoint (~760 MB) to Hugging Face Hub under structured subfolder."""
+    try:
+        from huggingface_hub import HfApi
+        api = HfApi()
+        target_path = path_in_repo or f"grpo/{Path(checkpoint_dir).name}"
+        commit_msg = f"VLM-DENTAL GRPO Checkpoint: {Path(checkpoint_dir).name} (Step {step})"
+        print(f"[HF-HUB] Uploading GRPO checkpoint from {checkpoint_dir} to {hf_repo} ({target_path})...")
+        api.upload_folder(
+            folder_path=str(checkpoint_dir),
+            repo_id=hf_repo,
+            path_in_repo=target_path,
+            commit_message=commit_msg,
+            ignore_patterns=["*.tmp", "*.lock"],
+        )
+        print(f"[HF-HUB] GRPO checkpoint successfully uploaded to {hf_repo} under {target_path}.")
+    except Exception as e:
+        print(f"[HF-HUB WARNING] Failed to upload checkpoint to {hf_repo}: {e}")
+
 
 def plot_grpo_training_curve(
     log_path: str | Path = "data/grpo_training_log.jsonl",
     save_path: str | Path | None = None,
 ) -> pd.DataFrame | None:
-    """Reward-vs-training-step curve for publications and reporting."""
+    """Publication-ready dual-axis training curve showing Mean Reward (left) and KL Divergence (right)."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -496,13 +508,24 @@ def plot_grpo_training_curve(
     df = pd.DataFrame(records)
     df["step"] = range(1, len(df) + 1)
 
-    plt.figure(figsize=(8, 4))
-    plt.plot(df["step"], df["mean_reward"], marker="o", color="#2ca02c")
-    plt.xlabel("grpo_step() call number")
-    plt.ylabel("mean reward")
-    plt.title("GRPO Training Progress")
-    plt.grid(alpha=0.3)
-    plt.tight_layout()
+    fig, ax1 = plt.subplots(figsize=(10, 5))
+
+    color_reward = "#2ca02c"
+    ax1.set_xlabel("GRPO Rollout Step", fontsize=11)
+    ax1.set_ylabel("Composite Reward", color=color_reward, fontsize=11)
+    ax1.plot(df["step"], df["mean_reward"], color=color_reward, lw=2.0, marker="o", markersize=4, label="Mean Reward")
+    ax1.tick_params(axis="y", labelcolor=color_reward)
+    ax1.grid(True, alpha=0.3)
+
+    if "kl_divergence" in df.columns:
+        ax2 = ax1.twinx()
+        color_kl = "#d62728"
+        ax2.set_ylabel("KL Divergence (Reference vs Policy)", color=color_kl, fontsize=11)
+        ax2.plot(df["step"], df["kl_divergence"], color=color_kl, lw=1.8, linestyle="--", label="KL Divergence")
+        ax2.tick_params(axis="y", labelcolor=color_kl)
+
+    plt.title("VLM-DENTAL Stage 2 GRPO Convergence: Dual-Axis Dynamics", fontsize=12, fontweight="bold")
+    fig.tight_layout()
 
     if save_path:
         plt.savefig(save_path, dpi=150)
@@ -534,6 +557,7 @@ def train_grpo(
     track: str = "with_tools",
     hf_repo: str | None = None,
     push_every_steps: int = 25,
+    path_in_repo_prefix: str | None = None,
 ) -> str:
     """Execute Stage 2 GRPO policy optimization with dual-adapter reference and group advantage normalization."""
     from peft import PeftModel, LoraConfig
@@ -573,6 +597,8 @@ def train_grpo(
     total_steps = len(valid_images)
     current_baseline = 0.0
 
+    repo_prefix = path_in_repo_prefix or f"grpo/{Path(checkpoint_dir).name}"
+
     for step, (_, img_row) in enumerate(valid_images.iterrows(), start=1):
         img_id = img_row["id"]
         img_annots = annots_df[annots_df["image_id"] == img_id]
@@ -605,22 +631,37 @@ def train_grpo(
         log_grpo_step(stats, extra={"step": step, "image_id": int(img_id)})
         print(f"[GRPO Step {step}/{total_steps}] mean_reward={stats['mean_reward']:.3f} kl={stats['kl_divergence']:.4f}")
 
-        if step % 50 == 0 or step == total_steps:
-            save_checkpoint(
+        if step % push_every_steps == 0 or step == total_steps:
+            step_tag = f"grpo-{track}-step-{step}"
+            ckpt_path = save_checkpoint(
                 model=model,
                 processor=processor,
-                tag=f"grpo-{track}-step-{step}",
+                tag=step_tag,
                 checkpoint_dir=checkpoint_dir,
                 extra_metadata={"step": step, "mean_reward": stats["mean_reward"], "track": track},
             )
+            if hf_repo:
+                upload_checkpoint_to_hf(
+                    checkpoint_dir=ckpt_path,
+                    hf_repo=hf_repo,
+                    step=step,
+                    path_in_repo=f"{repo_prefix}/{step_tag}",
+                )
 
+    final_tag = f"grpo-{track}-final"
     final_path = save_checkpoint(
         model=model,
         processor=processor,
-        tag=f"grpo-{track}-final",
+        tag=final_tag,
         checkpoint_dir=checkpoint_dir,
         extra_metadata={"track": track, "group_size": G},
     )
+    if hf_repo:
+        upload_checkpoint_to_hf(
+            checkpoint_dir=final_path,
+            hf_repo=hf_repo,
+            step=total_steps,
+            path_in_repo=f"{repo_prefix}/{final_tag}",
+        )
     print(f"Stage 2 GRPO complete. Checkpoint saved to: {final_path}")
     return final_path
-

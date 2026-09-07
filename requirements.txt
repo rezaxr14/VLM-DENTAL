@@ -9,7 +9,6 @@ datasets==5.0.1
 trl==1.10.0
 huggingface-hub==1.26.1
 qwen-vl-utils==0.0.14
-vllm==0.5.4
 
 # Data Processing & Vision
 Pillow==12.3.0

@@ -106,10 +106,16 @@ $$R_{\text{Track B}} = 0.45 R_{\text{FDI}} + 0.45 R_{\text{Diag}} + 0.10 R_{\tex
 
 ## 8. TPU v5e-8 Execution & Multi-Account Kaggle Continuity
 
-1. **8-Way FSDP Mesh**: Shards the 9B model base weights (~2.3 GB per chip), leaving ~12.95 GB HBM free per chip.
-2. **Hugging Face Hub Checkpoint Sync**: Checkpoints store only the trainable LoRA adapter + optimizer states (~760 MB), uploaded in <15 seconds to `--hf-repo Reza-Nadimi/vlm-dental-checkpoints`.
+1. **8-Way FSDP Mesh**: Shards the 9B model base weights (~2.3 GB per chip), leaving ~12.95 GB HBM free per chip across the 128 GB total HBM on Google Cloud TPU v5e-8.
+2. **Unified Models Repository Checkpoint Sync**: Checkpoints store lightweight LoRA adapter + optimizer states (~760 MB), uploaded to `--hf-repo Reza-Nadimi/vlm-dental-models` under structured subfolders:
+   - SFT References: `sft/qwen3_5_9b_sft_{track}_{sft_stage}/`
+   - GRPO Checkpoints: `grpo/qwen3_5_9b_grpo_{track}_k{group_size}_{sft_stage}/`
 3. **Kaggle 9h Timeout & Preemption Handling**: Python `SIGTERM` handler automatically captures session termination and uploads the latest checkpoint to HF Hub.
-4. **Seamless Resume**:
+4. **Curriculum-Aware Execution & Seamless Resume**:
    ```bash
-   python scripts/run_grpo.py --track with_tools --group-size 4 --resume-hf Reza-Nadimi/vlm-dental-checkpoints
+   # Launch Stage 2 GRPO with Stage 1a SFT reference
+   python scripts/run_grpo.py --track with_tools --sft-stage dentex_alone --group-size 4 --hf-repo Reza-Nadimi/vlm-dental-models
+
+   # Resume from latest checkpoint across Kaggle accounts
+   python scripts/run_grpo.py --track with_tools --sft-stage dentex_alone --group-size 4 --resume-hf Reza-Nadimi/vlm-dental-models
    ```

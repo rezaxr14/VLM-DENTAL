@@ -7,6 +7,8 @@ from __future__ import annotations
 from typing import Any, Tuple, Optional
 from PIL import Image
 
+from dental_agent.model.backbone import safe_process_vision_info
+
 
 def probe_vision_tokens(
     processor: Any,
@@ -14,12 +16,6 @@ def probe_vision_tokens(
     prompt_text: str = "Analyze this X-ray.",
 ) -> int:
     """Measure how many tokens a single image consumes under Qwen3-VL's patch merger."""
-    try:
-        from qwen_vl_utils import process_vision_info
-    except ImportError:
-        def process_vision_info(msgs):
-            return None, None
-
     messages = [
         {
             "role": "user",
@@ -30,7 +26,7 @@ def probe_vision_tokens(
         }
     ]
     text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    image_inputs, video_inputs = process_vision_info(messages)
+    image_inputs, video_inputs = safe_process_vision_info(messages)
     inputs = processor(
         text=[text],
         images=image_inputs,
@@ -69,11 +65,6 @@ def generate_agent_reply(
         If True, returns updated (past_key_values, cache_state) alongside reply and IDs.
     """
     import torch
-    try:
-        from qwen_vl_utils import process_vision_info
-    except ImportError:
-        def process_vision_info(msgs):
-            return None, None
 
     # Determine if we can attempt delta KV-cache generation
     attempt_cache_reuse = (
@@ -152,7 +143,7 @@ def generate_agent_reply(
 
     # Standard full prefill (Turn 1 or cache fallback)
     text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    image_inputs, video_inputs = process_vision_info(messages)
+    image_inputs, video_inputs = safe_process_vision_info(messages)
 
     inputs = processor(
         text=[text],

@@ -39,6 +39,13 @@ def parse_args():
         help="Training track: 'with_tools' or 'no_tools'",
     )
     parser.add_argument(
+        "--sft-stage",
+        type=str,
+        default="dentex_alone",
+        choices=["dentex_alone", "dentex_tufts_overlap", "multicohort_all"],
+        help="Curriculum SFT reference stage: 'dentex_alone', 'dentex_tufts_overlap', or 'multicohort_all'",
+    )
+    parser.add_argument(
         "--k-values",
         nargs="+",
         type=int,
@@ -48,7 +55,12 @@ def parse_args():
     parser.add_argument("--epochs", "-e", type=int, default=1, help="Optimization epochs per batch")
     parser.add_argument("--lr", type=float, default=5e-6, help="Policy gradient learning rate")
     parser.add_argument("--output-dir", type=str, default="data/eval_results", help="Directory for sweep summary logs")
-    parser.add_argument("--hf-repo", type=str, default=None, help="Hugging Face Hub repo for checkpoint sync")
+    parser.add_argument(
+        "--hf-repo",
+        type=str,
+        default=os.environ.get("HF_ARTIFACT_REPO", "Reza-Nadimi/vlm-dental-models"),
+        help="Hugging Face Hub repo for checkpoint sync (default: Reza-Nadimi/vlm-dental-models)",
+    )
     return parser.parse_args()
 
 
@@ -63,7 +75,9 @@ def main():
     print("======================================================================")
     print("VLM-DENTAL: GRPO K-SWEEP ORCHESTRATOR")
     print(f"* Track        : {args.track}")
+    print(f"* SFT Stage    : {args.sft_stage}")
     print(f"* K Values     : {args.k_values}")
+    print(f"* HF Repo Sync : {args.hf_repo}")
     print(f"* Sweep Log    : {sweep_log}")
     print("======================================================================")
 
@@ -72,11 +86,28 @@ def main():
 
     results_table = []
 
+    # Resolve SFT reference adapter directory
+    sft_dir = f"data/models/qwen3_5_9b_sft_{args.track}_{args.sft_stage}"
+    if not os.path.exists(sft_dir) and args.hf_repo:
+        try:
+            from huggingface_hub import snapshot_download
+            path_in_repo = f"sft/qwen3_5_9b_sft_{args.track}_{args.sft_stage}"
+            print(f"[SWEEP] Fetching reference SFT adapter from {args.hf_repo}/{path_in_repo}...")
+            snapshot_download(
+                repo_id=args.hf_repo,
+                allow_patterns=[f"{path_in_repo}/*"],
+                local_dir="data/models",
+            )
+            sft_dir = f"data/models/{path_in_repo}"
+        except Exception as e:
+            print(f"[SWEEP WARNING] Could not download SFT reference from {args.hf_repo}: {e}")
+
     for k in args.k_values:
         print(f"\n>>> Starting GRPO Experiment for Group Size K={k} <<<")
         start_time = time.time()
-        sft_dir = f"data/models/qwen3_5_9b_sft_{args.track}"
-        ckpt_dir = f"data/models/grpo_k_{k}_{args.track}"
+        target_name = f"qwen3_5_9b_grpo_{args.track}_k{k}_{args.sft_stage}"
+        ckpt_dir = f"data/models/{target_name}"
+        path_in_repo_prefix = f"grpo/{target_name}"
 
         final_ckpt = train_grpo(
             images_df=images_df,
@@ -90,6 +121,7 @@ def main():
             learning_rate=args.lr,
             track=args.track,
             hf_repo=args.hf_repo,
+            path_in_repo_prefix=path_in_repo_prefix,
         )
 
         elapsed = time.time() - start_time
@@ -98,6 +130,7 @@ def main():
         k_result = {
             "group_size": k,
             "track": args.track,
+            "sft_stage": args.sft_stage,
             "elapsed_seconds": round(elapsed, 2),
             "checkpoint": str(final_ckpt),
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),

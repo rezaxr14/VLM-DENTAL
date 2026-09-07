@@ -175,3 +175,24 @@ def estimate_grpo_memory(
         "cuda_overhead_gb": round(cuda_overhead_gb, 2),
         "total_estimated_vram_gb": round(total_gb, 2),
     }
+
+
+def safe_process_vision_info(messages: list[dict[str, Any]]) -> Tuple[Any, Any]:
+    """Safely call qwen_vl_utils.process_vision_info handling both 2-tuple and 3-tuple returns.
+
+    In newer versions of qwen_vl_utils, process_vision_info returns:
+    tuple[list[Image] | None, list[Tensor | list[Image]] | None, dict[str, Any] | None].
+    Direct unpacking into 2 values causes Pyrefly / runtime bad-unpacking errors.
+    This helper guarantees a clean (image_inputs, video_inputs) 2-tuple return.
+    """
+    try:
+        from qwen_vl_utils import process_vision_info
+        vision_res = process_vision_info(messages)
+        if isinstance(vision_res, (tuple, list)):
+            image_inputs = vision_res[0] if len(vision_res) > 0 else None
+            video_inputs = vision_res[1] if len(vision_res) > 1 else None
+            return image_inputs, video_inputs
+        return None, None
+    except Exception:
+        return None, None
+
