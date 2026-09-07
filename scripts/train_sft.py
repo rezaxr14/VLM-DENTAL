@@ -191,6 +191,29 @@ def resolve_stage_traces(stage: str, track: str, data_dir: str | Path) -> List[s
     return resolved
 
 
+def get_xla_world_size(is_tpu: bool = False) -> int:
+    """Retrieve world size across modern torch_xla.runtime, legacy xrt, or distributed."""
+    if is_tpu:
+        try:
+            import torch_xla.runtime as xr
+            return xr.world_size()
+        except Exception:
+            pass
+        try:
+            import torch_xla.core.xla_model as xm
+            if hasattr(xm, "xrt_world_size"):
+                return xm.xrt_world_size()
+        except Exception:
+            pass
+    try:
+        import torch.distributed as dist
+        if dist.is_initialized():
+            return dist.get_world_size()
+    except Exception:
+        pass
+    return 1
+
+
 def setup_hardware(precision: str, rank: int = 0):
     """Detect hardware backend: Cloud TPU v5e-8 vs CUDA GPU vs CPU."""
     is_tpu = False
@@ -200,7 +223,7 @@ def setup_hardware(precision: str, rank: int = 0):
         device = xm.xla_device()
         is_tpu = True
         if xm.is_master_ordinal():
-            print(f"[HARDWARE] Initialized Cloud TPU device: {device} ({xm.xla_device_hw(device)}) | World Size: {xm.xla_world_size()}")
+            print(f"[HARDWARE] Initialized Cloud TPU device: {device} ({xm.xla_device_hw(device)}) | World Size: {get_xla_world_size(is_tpu)}")
     except Exception:
         if torch.cuda.is_available():
             device = torch.device(f"cuda:{rank}" if torch.cuda.device_count() > rank else "cuda:0")
@@ -302,7 +325,7 @@ def run_training(index: int, args: argparse.Namespace):
         print(f"* Precision   : {args.precision}")
         print(f"* Vision LoRA : {args.lora_target_vision}")
         print(f"* LoRA Config : r={args.lora_r}, alpha={args.lora_alpha}, dropout={args.lora_dropout}")
-        world_size = xm.xla_world_size() if is_tpu else 1
+        world_size = get_xla_world_size(is_tpu)
         print(f"* Effective BS: {args.batch_size * args.gradient_accumulation_steps * world_size} ({world_size} device replicas)")
         print(f"* Warmup Ratio: {args.warmup_ratio} | Max Grad Norm: {args.max_grad_norm}")
         print("======================================================================")
@@ -383,10 +406,11 @@ def run_training(index: int, args: argparse.Namespace):
     collator = BucketedQwenVLCollator(processor=processor, track=args.track)
 
     train_sampler = None
-    if is_tpu and xm.xla_world_size() > 1:
+    ws = get_xla_world_size(is_tpu)
+    if is_tpu and ws > 1:
         train_sampler = torch.utils.data.distributed.DistributedSampler(
             train_dataset,
-            num_replicas=xm.xla_world_size(),
+            num_replicas=ws,
             rank=xm.get_ordinal(),
             shuffle=True,
         )
@@ -533,7 +557,7 @@ def run_training(index: int, args: argparse.Namespace):
             if (step + 1) % args.gradient_accumulation_steps == 0 or (step + 1) == len(train_dataloader):
                 # Normalize accumulated gradients by total valid tokens across the window
                 if accum_valid_tokens > 0:
-                    if is_tpu and xm.xla_world_size() > 1:
+                    if is_tpu and get_xla_world_size(is_tpu) > 1:
                         token_t = torch.tensor([accum_valid_tokens], dtype=torch.float32, device=device)
                         global_tokens = xm.all_reduce("sum", token_t).item()
                         scale = 1.0 / max(global_tokens, 1.0)
