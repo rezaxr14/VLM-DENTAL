@@ -403,22 +403,38 @@ def main():
         except Exception as e:
             print(f"[RESUME WARNING] Could not resume from HF: {e}")
 
+    def save_sft_checkpoint(epoch_num: int, is_preemption: bool = False):
+        state_data = {
+            "step": total_steps,
+            "epoch": epoch_num,
+            "track": args.track,
+            "stage": args.stage,
+            "best_val_loss": best_val_loss,
+            "preempted": is_preemption,
+        }
+        if is_tpu:
+            import torch_xla.core.xla_model as xm
+            if xm.is_master_ordinal():
+                model.save_pretrained(str(out_path))
+                with open(state_file, "w") as f:
+                    json.dump(state_data, f)
+            xm.save(optimizer.state_dict(), out_path / "optimizer.pt")
+            xm.save(scheduler.state_dict(), out_path / "scheduler.pt")
+            if args.hf_repo and xm.is_master_ordinal():
+                upload_checkpoint_to_hf(out_path, args.hf_repo, total_steps, epoch_num, path_in_repo=path_in_repo)
+        else:
+            model.save_pretrained(str(out_path))
+            torch.save(optimizer.state_dict(), out_path / "optimizer.pt")
+            torch.save(scheduler.state_dict(), out_path / "scheduler.pt")
+            with open(state_file, "w") as f:
+                json.dump(state_data, f)
+            if args.hf_repo:
+                upload_checkpoint_to_hf(out_path, args.hf_repo, total_steps, epoch_num, path_in_repo=path_in_repo)
+
     # Emergency SIGTERM handler for Kaggle 9-hour session preemption
     def sigterm_handler(signum, frame):
         print("\n[PREEMPTION] Caught SIGTERM signal! Flushing emergency checkpoint...")
-        model.save_pretrained(str(out_path))
-        torch.save(optimizer.state_dict(), out_path / "optimizer.pt")
-        torch.save(scheduler.state_dict(), out_path / "scheduler.pt")
-        with open(state_file, "w") as f:
-            json.dump({
-                "step": total_steps,
-                "epoch": start_epoch,
-                "track": args.track,
-                "stage": args.stage,
-                "best_val_loss": best_val_loss,
-            }, f)
-        if args.hf_repo:
-            upload_checkpoint_to_hf(out_path, args.hf_repo, total_steps, start_epoch, path_in_repo=path_in_repo)
+        save_sft_checkpoint(start_epoch, is_preemption=True)
         sys.exit(0)
 
     signal.signal(signal.SIGTERM, sigterm_handler)
@@ -477,34 +493,10 @@ def main():
 
                 # Periodic checkpoint push to HF Hub
                 if args.hf_repo and total_steps % args.push_every_steps == 0:
-                    model.save_pretrained(str(out_path))
-                    torch.save(optimizer.state_dict(), out_path / "optimizer.pt")
-                    torch.save(scheduler.state_dict(), out_path / "scheduler.pt")
-                    with open(state_file, "w") as f:
-                        json.dump({
-                            "step": total_steps,
-                            "epoch": epoch,
-                            "track": args.track,
-                            "stage": args.stage,
-                            "best_val_loss": best_val_loss,
-                        }, f)
-                    upload_checkpoint_to_hf(out_path, args.hf_repo, total_steps, epoch, path_in_repo=path_in_repo)
+                    save_sft_checkpoint(epoch)
 
         # Epoch end checkpoint
-        model.save_pretrained(str(out_path))
-        torch.save(optimizer.state_dict(), out_path / "optimizer.pt")
-        torch.save(scheduler.state_dict(), out_path / "scheduler.pt")
-        with open(state_file, "w") as f:
-            json.dump({
-                "step": total_steps,
-                "epoch": epoch + 1,
-                "track": args.track,
-                "stage": args.stage,
-                "best_val_loss": best_val_loss,
-            }, f)
-
-        if args.hf_repo:
-            upload_checkpoint_to_hf(out_path, args.hf_repo, total_steps, epoch, path_in_repo=path_in_repo)
+        save_sft_checkpoint(epoch + 1)
 
     print(f"\n[COMPLETE] Stage 1 SFT ({args.stage}) finished! Final checkpoint saved to {out_path}.")
     if best_adapter_path.exists():

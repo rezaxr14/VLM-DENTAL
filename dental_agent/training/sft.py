@@ -46,32 +46,58 @@ def resolve_image_path(sample: dict[str, Any], data_dir: str | Path = "data") ->
     str_id = str(image_id)
     base = Path(data_dir)
 
-    # Common candidate locations
+    # Common candidate locations across local, Kaggle, and Hugging Face snapshot structures
     candidates = [
         base / "images" / f"{str_id}.png",
         base / "images" / f"{str_id}.jpg",
-        base / "images" / "dentex" / f"{str_id}.png",
-        base / "images" / "tufts" / f"{str_id}.png",
-        base / "images" / "healthy_tufts" / f"{str_id}.png",
+        base / "dentex" / "images" / f"{str_id}.png",
+        base / "dentex" / "images" / f"{str_id}.jpg",
         base / "dentex" / "train_images" / f"{str_id}.png",
         base / "dentex" / f"{str_id}.png",
         base / "train_images" / f"{str_id}.png",
         base / "tufts" / "Radiographs" / f"{str_id}.jpg",
+        base / "tufts" / "Radiographs" / f"{str_id}.JPG",
         base / "tufts" / "Radiographs" / f"{str_id}.png",
         base / "tufts" / "radiographs" / f"{str_id}.jpg",
+        base / "tufts" / "radiographs" / f"{str_id}.JPG",
         base / "tufts" / "radiographs" / f"{str_id}.png",
+        base / "tufts" / "images" / f"{str_id}.png",
+        base / "tufts" / "images" / f"{str_id}.jpg",
+        base / "images" / "dentex" / f"{str_id}.png",
+        base / "images" / "tufts" / f"{str_id}.png",
+        base / "images" / "healthy_tufts" / f"{str_id}.png",
         base / "Radiographs" / f"{str_id}.jpg",
+        base / "Radiographs" / f"{str_id}.JPG",
         base / "Radiographs" / f"{str_id}.png",
     ]
+
+    # Check Kaggle input mount directory if on Kaggle platform
+    if os.path.exists("/kaggle/input"):
+        k_base = Path("/kaggle/input")
+        candidates.extend([
+            k_base / "dentex" / "train_images" / f"{str_id}.png",
+            k_base / "dentex" / "images" / f"{str_id}.png",
+            k_base / "dentex-dataset" / "train_images" / f"{str_id}.png",
+            k_base / "dentex-dataset" / "images" / f"{str_id}.png",
+            k_base / "tufts" / "Radiographs" / f"{str_id}.JPG",
+            k_base / "tufts" / "Radiographs" / f"{str_id}.jpg",
+            k_base / "tufts-dataset" / "Radiographs" / f"{str_id}.JPG",
+            k_base / "tufts-dataset" / "Radiographs" / f"{str_id}.jpg",
+        ])
 
     for cand in candidates:
         if cand.is_file():
             return str(cand)
 
     # Fallback recursive search in datasets/ or data/
-    matches = list(base.glob(f"**/{str_id}.png")) + list(base.glob(f"**/{str_id}.jpg"))
+    matches = list(base.glob(f"**/{str_id}.png")) + list(base.glob(f"**/{str_id}.jpg")) + list(base.glob(f"**/{str_id}.JPG"))
     if matches:
         return str(matches[0])
+
+    if os.path.exists("/kaggle/input"):
+        k_matches = list(Path("/kaggle/input").glob(f"**/{str_id}.png")) + list(Path("/kaggle/input").glob(f"**/{str_id}.jpg")) + list(Path("/kaggle/input").glob(f"**/{str_id}.JPG"))
+        if k_matches:
+            return str(k_matches[0])
 
     return None
 
