@@ -34,6 +34,7 @@ from dental_agent.agent.parsing import parse_agent_json
 from dental_agent.data.fdi_utils import row_to_fdi
 from dental_agent.rewards.composite import combine_reward
 from dental_agent.tools.registry import ToolRegistry
+from dental_agent.training.sft import build_conversational_labels
 
 
 # ---------------------------------------------------------------------------
@@ -137,11 +138,23 @@ def build_full_trajectory_labels(
 
     labels = torch.full_like(full_enc["input_ids"], -100)
     for span in trajectory.get("assistant_token_spans", []):
-        start = span["prompt_len"]
-        gen_ids = span["token_ids"]
+        start = span.get("prompt_len", 0)
+        gen_ids = span.get("token_ids", [])
         end = start + len(gen_ids)
         if end <= labels.shape[1]:
             labels[0, start:end] = torch.tensor(gen_ids, dtype=labels.dtype)
+
+    # Defensive fallback (Claude Point 4): if assistant_token_spans was empty or offset shifted,
+    # use context-aware conversational label extraction
+    if (labels != -100).sum() == 0:
+        labels = build_conversational_labels(full_enc["input_ids"], processor.tokenizer)
+
+    # Fail-fast assertion: ensure we never train on zero supervision
+    if (labels != -100).sum() == 0:
+        raise ValueError(
+            f"[GRPO LABELS ERROR] Zero assistant completion tokens found in trajectory (image_id={trajectory.get('image_id')})! "
+            "Cannot optimize policy on empty completion spans."
+        )
 
     full_enc["labels"] = labels
     return dict(full_enc)
@@ -431,7 +444,17 @@ def grpo_step(
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
 
-        optimizer.step()
+        is_tpu = False
+        try:
+            import torch_xla.core.xla_model as xm
+            is_tpu = True
+        except Exception:
+            pass
+
+        if is_tpu:
+            xm.optimizer_step(optimizer)
+        else:
+            optimizer.step()
 
     model.eval()
     mean_kl = total_kl / max(kl_count, 1)

@@ -61,6 +61,12 @@ def parse_args():
         default=os.environ.get("HF_ARTIFACT_REPO", "Reza-Nadimi/vlm-dental-models"),
         help="Hugging Face Hub repo for checkpoint sync (default: Reza-Nadimi/vlm-dental-models)",
     )
+    parser.add_argument(
+        "--num-cores",
+        type=int,
+        default=1,
+        help="Number of TPU cores for distributed data-parallel execution (1 for single core/GPU, 8 for Kaggle TPU v5e-8)",
+    )
     return parser.parse_args()
 
 

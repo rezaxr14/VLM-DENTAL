@@ -7,7 +7,7 @@ Supports:
 - Negative Controls Calibration: Healthy control traces included across all curriculum stages
 - LoRA on Multimodal Vision Projector: --lora-target-vision {projector, none} (adapts merger.mlp)
 - Native Image Resolutions: Zero pixel clamping / downsampling, preserving dental panoramic details
-- Hardware Optimization: Cloud TPU v5e-8 (PyTorch/XLA FSDPv2) and Multi-GPU (BF16/FP16 LoRA)
+- Hardware Optimization: Multi-Core Cloud TPU v5e-8 distributed execution via torch_xla.distributed.xmp.spawn (8-way cross-replica gradient synchronization) and Multi-GPU (BF16/FP16 LoRA)
 - Sequence Length Bucketing & Right-Padding via BucketedQwenVLCollator
 - Conversational Assistant-Only Loss Masking via build_conversational_labels
 - Cosine Annealing with Linear Warmup and Gradient Clipping
@@ -114,6 +114,12 @@ def parse_args():
     )
     parser.add_argument("--push-every-steps", type=int, default=25, help="Frequency of HF checkpoint upload in steps")
     parser.add_argument("--resume-hf", type=str, default=None, help="Hugging Face repo to resume latest checkpoint from")
+    parser.add_argument(
+        "--num-cores",
+        type=int,
+        default=1,
+        help="Number of TPU cores for distributed data-parallel execution (1 for single core/GPU, 8 for Kaggle TPU v5e-8)",
+    )
     return parser.parse_args()
 
 
@@ -164,7 +170,7 @@ def resolve_stage_traces(stage: str, track: str, data_dir: str | Path) -> List[s
     return resolved
 
 
-def setup_hardware(precision: str):
+def setup_hardware(precision: str, rank: int = 0):
     """Detect hardware backend: Cloud TPU v5e-8 vs CUDA GPU vs CPU."""
     is_tpu = False
     device = None
@@ -172,17 +178,23 @@ def setup_hardware(precision: str):
         import torch_xla.core.xla_model as xm
         device = xm.xla_device()
         is_tpu = True
-        print(f"[HARDWARE] Initialized Cloud TPU device: {device} ({xm.xla_device_hw(device)})")
+        if xm.is_master_ordinal():
+            print(f"[HARDWARE] Initialized Cloud TPU device: {device} ({xm.xla_device_hw(device)}) | World Size: {xm.xla_world_size()}")
     except Exception:
         if torch.cuda.is_available():
-            device = torch.device("cuda")
-            print(f"[HARDWARE] Initialized CUDA GPU: {torch.cuda.get_device_name(0)} (Count: {torch.cuda.device_count()})")
+            device = torch.device(f"cuda:{rank}" if torch.cuda.device_count() > rank else "cuda:0")
+            print(f"[HARDWARE] Initialized CUDA GPU: {torch.cuda.get_device_name(device)} (Count: {torch.cuda.device_count()})")
         else:
             device = torch.device("cpu")
             print("[HARDWARE] Running on CPU.")
 
     if is_tpu and precision == "qlora":
-        print("[WARNING] 4-bit QLoRA is not supported on TPU/XLA devices. Switching to native BF16.")
+        try:
+            import torch_xla.core.xla_model as xm
+            if xm.is_master_ordinal():
+                print("[WARNING] 4-bit QLoRA is not supported on TPU/XLA devices. Switching to native BF16.")
+        except Exception:
+            pass
         precision = "bf16"
 
     dtype = torch.bfloat16 if precision == "bf16" else (torch.float16 if precision == "fp16" else torch.float32)
@@ -228,9 +240,8 @@ def evaluate_loss(model: torch.nn.Module, val_loader: DataLoader, device: torch.
     return total_val_loss / max(val_batches, 1)
 
 
-def main():
-    args = parse_args()
-
+def run_training(index: int, args: argparse.Namespace):
+    """Worker function executed per core/device."""
     # Resolve stage-specific traces and default output directory
     resolved_traces: List[str] = []
     if args.dataset_path:
@@ -249,24 +260,31 @@ def main():
     best_adapter_path = out_path / "best_adapter"
     path_in_repo = f"sft/{out_path.name}"
 
-    print("======================================================================")
-    print(f"VLM-DENTAL: STAGE 1 SFT TRAINING ({args.track.upper()} - {args.stage.upper()})")
-    print(f"* Stage       : {args.stage}")
-    print(f"* Model ID    : {args.model_id}")
-    print(f"* Data Dir    : {args.data_dir}")
-    print(f"* Traces ({len(resolved_traces)} files):")
-    for t in resolved_traces:
-        print(f"    - {t}")
-    print(f"* Output Dir  : {args.output_dir}")
-    print(f"* Path in HF  : {path_in_repo}")
-    print(f"* Precision   : {args.precision}")
-    print(f"* Vision LoRA : {args.lora_target_vision}")
-    print(f"* LoRA Config : r={args.lora_r}, alpha={args.lora_alpha}, dropout={args.lora_dropout}")
-    print(f"* Effective BS: {args.batch_size * args.gradient_accumulation_steps}")
-    print(f"* Warmup Ratio: {args.warmup_ratio} | Max Grad Norm: {args.max_grad_norm}")
-    print("======================================================================")
+    is_tpu, device, compute_dtype, active_precision = setup_hardware(args.precision, rank=index)
 
-    is_tpu, device, compute_dtype, active_precision = setup_hardware(args.precision)
+    is_master = True
+    if is_tpu:
+        import torch_xla.core.xla_model as xm
+        is_master = xm.is_master_ordinal()
+
+    if is_master:
+        print("======================================================================")
+        print(f"VLM-DENTAL: STAGE 1 SFT TRAINING ({args.track.upper()} - {args.stage.upper()})")
+        print(f"* Stage       : {args.stage}")
+        print(f"* Model ID    : {args.model_id}")
+        print(f"* Data Dir    : {args.data_dir}")
+        print(f"* Traces ({len(resolved_traces)} files):")
+        for t in resolved_traces:
+            print(f"    - {t}")
+        print(f"* Output Dir  : {args.output_dir}")
+        print(f"* Path in HF  : {path_in_repo}")
+        print(f"* Precision   : {args.precision}")
+        print(f"* Vision LoRA : {args.lora_target_vision}")
+        print(f"* LoRA Config : r={args.lora_r}, alpha={args.lora_alpha}, dropout={args.lora_dropout}")
+        world_size = xm.xla_world_size() if is_tpu else 1
+        print(f"* Effective BS: {args.batch_size * args.gradient_accumulation_steps * world_size} ({world_size} device replicas)")
+        print(f"* Warmup Ratio: {args.warmup_ratio} | Max Grad Norm: {args.max_grad_norm}")
+        print("======================================================================")
 
     # Load processor and model
     from transformers import AutoProcessor
@@ -293,7 +311,8 @@ def main():
     elif not is_tpu and torch.cuda.is_available():
         load_kwargs["device_map"] = "auto"
 
-    print(f"[MODEL] Loading {args.model_id}...")
+    if is_master:
+        print(f"[MODEL] Loading {args.model_id}...")
     model = ModelClass.from_pretrained(args.model_id, **load_kwargs)
 
     # Define LoRA Target Modules (Language Model + optional Vision Projector)
@@ -301,7 +320,8 @@ def main():
     if args.lora_target_vision == "projector":
         # Multimodal patch projector linear projections
         target_modules.extend(["merger.mlp.0", "merger.mlp.2"])
-        print("[LORA] Enabled LoRA on Multimodal Vision Projector ('merger.mlp.0', 'merger.mlp.2')")
+        if is_master:
+            print("[LORA] Enabled LoRA on Multimodal Vision Projector ('merger.mlp.0', 'merger.mlp.2')")
 
     from peft import LoraConfig, get_peft_model
     peft_config = LoraConfig(
@@ -313,7 +333,8 @@ def main():
         task_type="CAUSAL_LM",
     )
     model = get_peft_model(model, peft_config)
-    model.print_trainable_parameters()
+    if is_master:
+        model.print_trainable_parameters()
 
     if is_tpu:
         model = model.to(device)
@@ -334,8 +355,20 @@ def main():
         val_dataset = None
 
     collator = BucketedQwenVLCollator(processor=processor, track=args.track)
-    train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collator)
-    val_dataloader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, collate_fn=collator) if val_dataset else None
+
+    train_sampler = None
+    if is_tpu and xm.xla_world_size() > 1:
+        train_sampler = torch.utils.data.distributed.DistributedSampler(
+            train_dataset,
+            num_replicas=xm.xla_world_size(),
+            rank=xm.get_ordinal(),
+            shuffle=True,
+        )
+        train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, sampler=train_sampler, collate_fn=collator)
+    else:
+        train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collator)
+
+    val_dataloader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, collate_fn=collator) if (val_dataset and is_master) else None
 
     optimizer = torch.optim.AdamW(
         [p for p in model.parameters() if p.requires_grad],
@@ -359,7 +392,7 @@ def main():
 
     # Resume capability from HF Hub or local checkpoint
     state_file = out_path / "training_state.json"
-    if args.resume_hf:
+    if args.resume_hf and is_master:
         print(f"[RESUME] Checking HF Hub for latest checkpoint in {args.resume_hf} (subfolder={path_in_repo})...")
         try:
             from huggingface_hub import snapshot_download
@@ -433,7 +466,8 @@ def main():
 
     # Emergency SIGTERM handler for Kaggle 9-hour session preemption
     def sigterm_handler(signum, frame):
-        print("\n[PREEMPTION] Caught SIGTERM signal! Flushing emergency checkpoint...")
+        if is_master:
+            print("\n[PREEMPTION] Caught SIGTERM signal! Flushing emergency checkpoint...")
         save_sft_checkpoint(start_epoch, is_preemption=True)
         sys.exit(0)
 
@@ -442,23 +476,51 @@ def main():
     log_file = out_path / "training_loss.jsonl"
     model.train()
 
-    print(f"\n[TRAIN] Beginning training: {len(train_dataset)} train samples, {val_size} val samples across {args.epochs} epochs...")
+    if is_master:
+        print(f"\n[TRAIN] Beginning training: {len(train_dataset)} train samples, {val_size} val samples across {args.epochs} epochs...")
+
     for epoch in range(start_epoch, args.epochs + 1):
-        pbar = tqdm(train_dataloader, desc=f"SFT Epoch {epoch}/{args.epochs}")
+        if train_sampler is not None:
+            train_sampler.set_epoch(epoch)
+
+        pbar = tqdm(train_dataloader, desc=f"SFT Epoch {epoch}/{args.epochs}") if is_master else train_dataloader
         optimizer.zero_grad()
+        accum_loss_sum = 0.0
+        accum_valid_tokens = 0
 
         for step, batch in enumerate(pbar):
             inputs = {k: v.to(device) for k, v in batch.items()}
             outputs = model(**inputs)
-            loss = outputs.loss / args.gradient_accumulation_steps
-            loss.backward()
+
+            # Mathematical Gradient Accumulation (Claude Point 1):
+            # outputs.loss is HF internal mean across valid tokens in this microbatch.
+            # Scale by num_valid to get unreduced token-loss sum and accumulate gradients.
+            valid_tokens = (inputs["labels"] != -100).sum()
+            num_valid = valid_tokens.item()
+
+            if num_valid > 0:
+                batch_loss_sum = outputs.loss * valid_tokens
+                batch_loss_sum.backward()
+                accum_loss_sum += batch_loss_sum.item()
+                accum_valid_tokens += num_valid
 
             if (step + 1) % args.gradient_accumulation_steps == 0 or (step + 1) == len(train_dataloader):
-                # Gradient clipping
+                # Normalize accumulated gradients by total valid tokens across the window
+                if accum_valid_tokens > 0:
+                    if is_tpu and xm.xla_world_size() > 1:
+                        token_t = torch.tensor([accum_valid_tokens], dtype=torch.float32, device=device)
+                        global_tokens = xm.all_reduce("sum", token_t).item()
+                        scale = 1.0 / max(global_tokens, 1.0)
+                    else:
+                        scale = 1.0 / max(float(accum_valid_tokens), 1.0)
+
+                    for p in model.parameters():
+                        if p.grad is not None:
+                            p.grad.mul_(scale)
+
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
 
                 if is_tpu:
-                    import torch_xla.core.xla_model as xm
                     xm.optimizer_step(optimizer)
                 else:
                     optimizer.step()
@@ -467,40 +529,68 @@ def main():
                 optimizer.zero_grad()
                 total_steps += 1
 
-                step_loss = loss.item() * args.gradient_accumulation_steps
-                lr_current = scheduler.get_last_lr()[0] if scheduler.get_last_lr() else args.learning_rate
-                pbar.set_postfix({"loss": f"{step_loss:.4f}", "lr": f"{lr_current:.2e}"})
+                step_loss = accum_loss_sum / max(accum_valid_tokens, 1)
+                accum_loss_sum = 0.0
+                accum_valid_tokens = 0
 
-                log_entry = {
-                    "epoch": epoch,
-                    "step": total_steps,
-                    "loss": step_loss,
-                    "lr": lr_current,
-                }
+                if is_master:
+                    lr_current = scheduler.get_last_lr()[0] if scheduler.get_last_lr() else args.learning_rate
+                    if hasattr(pbar, "set_postfix"):
+                        pbar.set_postfix({"loss": f"{step_loss:.4f}", "lr": f"{lr_current:.2e}"})
 
-                # Periodic evaluation on held-out validation set
-                if val_dataloader and total_steps % args.eval_every_steps == 0:
-                    val_loss = evaluate_loss(model, val_dataloader, device, is_tpu)
-                    log_entry["val_loss"] = val_loss
-                    if val_loss < best_val_loss:
-                        best_val_loss = val_loss
-                        best_adapter_path.mkdir(parents=True, exist_ok=True)
-                        model.save_pretrained(str(best_adapter_path))
-                        print(f"\n[VALIDATION] New best adapter saved! Step {total_steps}: val_loss = {val_loss:.4f}")
+                    log_entry = {
+                        "epoch": epoch,
+                        "step": total_steps,
+                        "loss": step_loss,
+                        "lr": lr_current,
+                    }
 
-                with open(log_file, "a", encoding="utf-8") as f:
-                    f.write(json.dumps(log_entry) + "\n")
+                    # Periodic evaluation on held-out validation set
+                    if val_dataloader and total_steps % args.eval_every_steps == 0:
+                        val_loss = evaluate_loss(model, val_dataloader, device, is_tpu)
+                        log_entry["val_loss"] = val_loss
+                        if val_loss < best_val_loss:
+                            best_val_loss = val_loss
+                            best_adapter_path.mkdir(parents=True, exist_ok=True)
+                            model.save_pretrained(str(best_adapter_path))
+                            print(f"\n[VALIDATION] New best adapter saved! Step {total_steps}: val_loss = {val_loss:.4f}")
 
-                # Periodic checkpoint push to HF Hub
-                if args.hf_repo and total_steps % args.push_every_steps == 0:
-                    save_sft_checkpoint(epoch)
+                    with open(log_file, "a", encoding="utf-8") as f:
+                        f.write(json.dumps(log_entry) + "\n")
+
+                    # Periodic checkpoint push to HF Hub
+                    if args.hf_repo and total_steps % args.push_every_steps == 0:
+                        save_sft_checkpoint(epoch)
 
         # Epoch end checkpoint
-        save_sft_checkpoint(epoch + 1)
+        if is_master:
+            save_sft_checkpoint(epoch + 1)
 
-    print(f"\n[COMPLETE] Stage 1 SFT ({args.stage}) finished! Final checkpoint saved to {out_path}.")
-    if best_adapter_path.exists():
-        print(f"[COMPLETE] Best adapter preserved at {best_adapter_path} (best_val_loss={best_val_loss:.4f}).")
+    if is_master:
+        print(f"\n[COMPLETE] Stage 1 SFT ({args.stage}) finished! Final checkpoint saved to {out_path}.")
+        if best_adapter_path.exists():
+            print(f"[COMPLETE] Best adapter preserved at {best_adapter_path} (best_val_loss={best_val_loss:.4f}).")
+
+
+def main():
+    args = parse_args()
+    is_tpu = False
+    try:
+        import torch_xla.core.xla_model as xm
+        is_tpu = True
+    except Exception:
+        pass
+
+    if is_tpu and args.num_cores > 1:
+        try:
+            import torch_xla.distributed.xmp as xmp
+            print(f"[LAUNCH] Spawning multi-core Cloud TPU v5e-8 training on {args.num_cores} cores via xmp.spawn...")
+            xmp.spawn(run_training, args=(args,), nprocs=args.num_cores)
+        except Exception as e:
+            print(f"[LAUNCH WARNING] Could not spawn via xmp ({e}); falling back to single-core execution.")
+            run_training(0, args)
+    else:
+        run_training(0, args)
 
 
 if __name__ == "__main__":

@@ -104,14 +104,21 @@ $$R_{\text{Track B}} = 0.45 R_{\text{FDI}} + 0.45 R_{\text{Diag}} + 0.10 R_{\tex
 
 ---
 
-## 8. TPU v5e-8 Execution & Multi-Account Kaggle Continuity
+## 8. Multi-Core Cloud TPU v5e-8 Distributed Execution & Continuity
 
-1. **8-Way FSDP Mesh**: Shards the 9B model base weights (~2.3 GB per chip), leaving ~12.95 GB HBM free per chip across the 128 GB total HBM on Google Cloud TPU v5e-8.
-2. **Unified Models Repository Checkpoint Sync**: Checkpoints store lightweight LoRA adapter + optimizer states (~760 MB), uploaded to `--hf-repo Reza-Nadimi/vlm-dental-models` under structured subfolders:
+1. **Multi-Core Distributed Execution Topology (`xmp.spawn`)**:
+   - `scripts/run_grpo.py` and `scripts/run_grpo_sweep.py` support `--num-cores 8` on Cloud TPU v5e-8 via `torch_xla.distributed.xmp.spawn(run_worker, nprocs=8)`.
+   - Datasets are partitioned across the 8 cores without overlap (`images_df.iloc[rank::world_size]`), and policy gradients are synchronized via `xm.optimizer_step(optimizer)` over the 2D Torus Inter-Chip Interconnect.
+   - All I/O, terminal progress, and Hugging Face checkpoint uploads are strictly gated to the master ordinal (`xm.is_master_ordinal()`).
+2. **Context-Aware Completion Masking & Zero-Supervision Guard**:
+   - `build_full_trajectory_labels()` unmasks exclusively the assistant-generated reasoning and tool actions.
+   - If turn offsets shift due to BPE tokenization differences, the pipeline automatically falls back to context-aware `build_conversational_labels()`.
+   - A fail-fast assertion (`assert (labels != -100).sum() > 0`) prevents the policy from optimizing on empty completion spans.
+3. **Unified Models Repository Checkpoint Sync**: Checkpoints store lightweight LoRA adapter + optimizer states (~760 MB), uploaded to `--hf-repo Reza-Nadimi/vlm-dental-models` under structured subfolders:
    - SFT References: `sft/qwen3_5_9b_sft_{track}_{sft_stage}/`
    - GRPO Checkpoints: `grpo/qwen3_5_9b_grpo_{track}_k{group_size}_{sft_stage}/`
-3. **Kaggle 9h Timeout & Preemption Handling**: Python `SIGTERM` handler automatically captures session termination and uploads the latest checkpoint to HF Hub.
-4. **Curriculum-Aware Execution & Seamless Resume**:
+4. **Kaggle 9h Timeout & Preemption Handling**: Python `SIGTERM` handler automatically captures session termination and uploads the latest checkpoint to HF Hub.
+5. **Curriculum-Aware Execution & Seamless Resume**:
    ```bash
    # Launch Stage 2 GRPO with Stage 1a SFT reference
    python scripts/run_grpo.py --track with_tools --sft-stage dentex_alone --group-size 4 --hf-repo Reza-Nadimi/vlm-dental-models

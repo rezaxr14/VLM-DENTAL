@@ -19,17 +19,27 @@ This document serves as the master technical specification for Stage 1 Supervise
 
 ---
 
-## 2. Hardware Architecture & Cloud TPU v5e-8 Optimization
+## 2. Hardware Architecture & Cloud TPU v5e-8 Multi-Core Optimization
 
-### 2.1 The 16 GB Per-Chip HBM Ceiling & 8-Way FSDP
+### 2.1 Multi-Core Distributed Execution Topology (`xmp.spawn`)
 A Cloud TPU v5e-8 slice consists of 8 chips, each with **16 GB of HBM2e** (128 GB total node memory).
-- `Qwen/Qwen3.5-9B` in BF16 consumes **~18.4 GB**, exceeding single-chip memory.
-- SFT utilizes **8-way FSDPv2 / SPMD** across the 8-chip 2D Torus ICI network:
-  $$\text{Base Model Weights per Chip} = \frac{18.4\text{ GB}}{8} \approx 2.30\text{ GB}$$
-  $$\text{LoRA Adapter Parameters } (r=32, \alpha=64) = \sim 152\text{ MB}$$
-  $$\text{AdamW Optimizer States for LoRA} = \sim 608\text{ MB}$$
-  $$\mathbf{\text{Total Dedicated Memory per Chip}} \approx \mathbf{3.06\text{ GB}}$$
-- This leaves **~12.94 GB of unencumbered HBM per chip** for static sequence bucketing, native resolution visual patch tokens, and gradient buffers. Zero risk of OOM under native $2:1$ resolutions.
+- Training execution scales across all 8 cores via `torch_xla.distributed.xmp.spawn(run_training, nprocs=8)`:
+  - Each spawned worker process binds to its respective device (`xla:0` through `xla:7`).
+  - `torch.utils.data.distributed.DistributedSampler` partitions the SFT curriculum shards across all 8 chips without redundant computation.
+  - Cross-replica gradient synchronization is performed efficiently via `xm.optimizer_step(optimizer)` utilizing the 2D Torus Inter-Chip Interconnect (ICI).
+- **Dedicated Memory Footprint per Chip**:
+  $$\text{Base Model Weights per Chip (BF16)} \approx 18.4\text{ GB}$$
+  $$\text{LoRA Adapter Parameters } (r=32, \alpha=64) \approx 152\text{ MB}$$
+  $$\text{AdamW Optimizer States for Trainable LoRA} \approx 608\text{ MB}$$
+- All logging, evaluation, and Hugging Face checkpoint uploads are strictly gated to the master ordinal (`xm.is_master_ordinal()`), preventing race conditions.
+
+### 2.2 Mathematical Token-Weighted Gradient Accumulation
+Standard Hugging Face CausalLM models return `outputs.loss` as an internal mean over that specific microbatch's valid non-$(-100)$ tokens. In conversational multi-turn data where sequence lengths and assistant turn counts vary widely across microbatches, dividing `outputs.loss / grad_accum` causes short assistant turns to exert disproportionately high gradient magnitude ("mean-of-means" error).
+- **Exact Token-Weighted Solution**:
+  $$\mathcal{L}_{\text{unreduced}}^{(k)} = \mathcal{L}_{\text{mean}}^{(k)} \times N_k, \quad \text{where } N_k = \sum \mathbb{I}(\text{labels}_{i, j}^{(k)} \neq -100)$$
+  $$\text{Total Window Tokens } N_{\text{total}} = \sum_{k=1}^M N_k$$
+  $$\nabla_\theta \mathcal{L}_{\text{true}} = \frac{1}{N_{\text{total}}} \sum_{k=1}^M \nabla_\theta \mathcal{L}_{\text{unreduced}}^{(k)}$$
+- Gradients are accumulated unnormalized across the accumulation window and scaled once by $1 / N_{\text{total}}$ at the step boundary, ensuring exact mathematical equivalence to full-batch training.
 
 ---
 
@@ -95,10 +105,10 @@ Rather than freezing the entire vision stack or fine-tuning early ViT blocks:
 
 ## 5. Sequence Length Bucketing & Collator Invariants
 
-### 5.1 Static Discrete Buckets
+### 5.1 Static Discrete Buckets & 16,384 Headroom
 Dynamic sequence lengths cause continuous XLA graph recompilations (30–120s stalls per shape). `BucketedQwenVLCollator` rounds sequences up to the nearest static boundary:
 
-- **Track A (`with_tools`)**: `[4096, 6144, 8192, 10240]`
+- **Track A (`with_tools`)**: `[4096, 6144, 8192, 12288, 16384]` (accommodating full multi-turn tool observation reasoning traces with real vision patch tokens up to Rule 19's 16,384 limit, with active overlength warning diagnostics)
 - **Track B (`no_tools`)**: `[1536, 2048, 2560, 3072]`
 
 ### 5.2 Right-Padding Invariant for 3D MRoPE

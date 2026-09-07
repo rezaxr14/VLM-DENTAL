@@ -82,3 +82,81 @@ def test_build_conversational_labels_masking():
     asst2_start = tool_end + 3
     asst2_end = tool_end + len(assistant_2_tokens)
     assert (labels[0, asst2_start:asst2_end] == input_ids[0, asst2_start:asst2_end]).all(), "Assistant 2 tokens must match input_ids"
+
+
+def test_build_conversational_labels_contextual_bpe_recovery():
+    """Test Claude Point 4: BPE tokenizers encoding words differently in isolation vs in-context."""
+    class ContextualMockTokenizer:
+        def __init__(self):
+            self.im_start_id = 1001
+            self.im_end_id = 1002
+            self.newline_id = 3001
+            # Isolated encoding differs from in-context encoding!
+            self.isolated_asst = [9999]  # e.g. tokenizer.encode("assistant") in isolation
+            self.in_context_asst = [2099]  # e.g. encoded differently following <|im_start|>
+
+        def encode(self, text, add_special_tokens=False):
+            if text == "<|im_start|>":
+                return [self.im_start_id]
+            elif text == "<|im_end|>":
+                return [self.im_end_id]
+            elif text == "assistant":
+                return self.isolated_asst
+            elif text == "\n":
+                return [self.newline_id]
+            elif text == "<|im_start|>assistant\n":
+                # In-context templated encoding has 2099 instead of 9999
+                return [self.im_start_id, self.in_context_asst[0], self.newline_id]
+            return [5000]
+
+    tokenizer = ContextualMockTokenizer()
+    # Sequence built with the in-context token [2099]
+    user_tokens = [1001, 2003, 3001, 4003, 1002]
+    asst_tokens = [1001, 2099, 3001, 7001, 7002, 1002]
+    input_ids = torch.tensor([user_tokens + asst_tokens], dtype=torch.long)
+
+    labels = build_conversational_labels(input_ids, tokenizer)
+
+    # Should successfully match via contextual pattern [2099] despite isolated being [9999]
+    supervised_count = (labels != -100).sum().item()
+    assert supervised_count > 0, "Contextual pattern matching must catch BPE in-context token variations"
+    asst_start = len(user_tokens) + 3
+    asst_end = len(user_tokens) + len(asst_tokens)
+    assert (labels[0, asst_start:asst_end] == input_ids[0, asst_start:asst_end]).all()
+
+
+def test_zero_supervision_guard_raises():
+    """Verify that an example with zero assistant supervision raises ValueError."""
+    from dental_agent.training.sft import DentalSFTDataset
+    import json
+    import tempfile
+
+    mock_processor = MagicMock()
+    mock_processor.tokenizer.pad_token_id = 0
+    mock_processor.tokenizer.encode.return_value = [100]
+    mock_processor.apply_chat_template.return_value = "system prompt only"
+    mock_processor.return_value = {
+        "input_ids": torch.tensor([[1001, 2002, 3001, 4001, 1002]]),
+    }
+
+    # Record with no assistant turns
+    bad_record = {
+        "image_id": "test_empty_supervision",
+        "messages": [
+            {"role": "system", "content": "You are dental AI"},
+            {"role": "user", "content": "Only user message, no assistant response"},
+        ],
+    }
+
+    with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False, encoding="utf-8") as f:
+        f.write(json.dumps(bad_record) + "\n")
+        temp_path = f.name
+
+    try:
+        dataset = DentalSFTDataset(temp_path, processor=mock_processor)
+        with pytest.raises(ValueError, match="Zero supervised tokens found"):
+            _ = dataset[0]
+    finally:
+        import os
+        if os.path.exists(temp_path):
+            os.remove(temp_path)

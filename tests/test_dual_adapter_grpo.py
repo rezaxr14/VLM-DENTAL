@@ -139,3 +139,47 @@ def test_peft_dual_adapter_integration():
     assert model.active_adapter == "reference"
     model.set_adapter("grpo_policy")
     assert model.active_adapter == "grpo_policy"
+
+
+def test_grpo_build_trajectory_labels_fallback_and_guard():
+    """Verify build_full_trajectory_labels conversational fallback and fail-fast assertion."""
+    from unittest.mock import MagicMock
+    from dental_agent.training.grpo import build_full_trajectory_labels
+
+    mock_processor = MagicMock()
+    mock_processor.tokenizer.pad_token_id = 0
+    mock_processor.tokenizer.encode.side_effect = lambda text, **kw: [1001] if text == "<|im_start|>" else ([1002] if text == "<|im_end|>" else ([2001] if text == "assistant" else ([3001] if text == "\n" else [5000])))
+    mock_processor.apply_chat_template.return_value = "templated chat"
+
+    # 1. Trajectory with empty assistant_token_spans: should fall back to conversational labels
+    mock_processor.return_value = {
+        "input_ids": torch.tensor([[1001, 2003, 3001, 4001, 1002, 1001, 2001, 3001, 9001, 9002, 1002]]),
+    }
+    traj_empty_spans = {
+        "image_id": "test_1",
+        "messages": [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "world"},
+        ],
+        "assistant_token_spans": [],
+    }
+
+    enc = build_full_trajectory_labels(traj_empty_spans, mock_processor)
+    labels = enc["labels"]
+    # Should have recovered assistant tokens via conversational fallback!
+    assert (labels != -100).sum().item() > 0, "Empty assistant spans should trigger conversational fallback"
+
+    # 2. Trajectory with zero assistant turns at all: should raise ValueError
+    mock_processor.return_value = {
+        "input_ids": torch.tensor([[1001, 2003, 3001, 4001, 1002]]),
+    }
+    traj_zero_supervision = {
+        "image_id": "test_empty",
+        "messages": [
+            {"role": "user", "content": "only user message"},
+        ],
+        "assistant_token_spans": [],
+    }
+
+    with pytest.raises(ValueError, match="Zero assistant completion tokens found"):
+        _ = build_full_trajectory_labels(traj_zero_supervision, mock_processor)

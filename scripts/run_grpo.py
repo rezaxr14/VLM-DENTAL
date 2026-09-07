@@ -137,9 +137,45 @@ def main() -> None:
     )
     parser.add_argument("--push-every-steps", type=int, default=25, help="Frequency of HF checkpoint upload in steps")
     parser.add_argument("--resume-hf", type=str, default=None, help="Hugging Face repo to resume latest checkpoint from")
+    parser.add_argument(
+        "--num-cores",
+        type=int,
+        default=1,
+        help="Number of TPU cores for distributed data-parallel execution (1 for single core/GPU, 8 for Kaggle TPU v5e-8)",
+    )
     args = parser.parse_args()
 
+    is_tpu = False
+    try:
+        import torch_xla.core.xla_model as xm
+        is_tpu = True
+    except Exception:
+        pass
+
+    if is_tpu and args.num_cores > 1:
+        try:
+            import torch_xla.distributed.xmp as xmp
+            print(f"[LAUNCH] Spawning multi-core Cloud TPU v5e-8 GRPO on {args.num_cores} cores via xmp.spawn...")
+            xmp.spawn(run_worker, args=(args,), nprocs=args.num_cores)
+        except Exception as e:
+            print(f"[LAUNCH WARNING] Could not spawn via xmp ({e}); falling back to single-core execution.")
+            run_worker(0, args)
+    else:
+        run_worker(0, args)
+
+
+def run_worker(index: int, args: argparse.Namespace):
+    """Per-device worker routine for GRPO training."""
     cfg = load_config(args.config)
+
+    is_tpu = False
+    try:
+        import torch_xla.core.xla_model as xm
+        is_tpu = True
+        device = xm.xla_device()
+        is_master = xm.is_master_ordinal()
+    except Exception:
+        is_master = True
 
     # Auto-resolve SFT reference directory per track and sft-stage
     resolved_sft_dir = resolve_sft_reference(
@@ -156,7 +192,7 @@ def main() -> None:
     path_in_repo_prefix = f"grpo/{target_name}"
 
     # Handle resume from HF Hub across Kaggle accounts
-    if args.resume_hf:
+    if args.resume_hf and is_master:
         print(f"[RESUME] Checking HF Hub for latest checkpoint in {args.resume_hf}/{path_in_repo_prefix}...")
         try:
             from huggingface_hub import snapshot_download
@@ -175,17 +211,23 @@ def main() -> None:
     else:
         images_df, annots_df, categories_df = load_dentex_dataset(cfg.data.data_dir)
 
-    print("======================================================================")
-    print(f"VLM-DENTAL: STAGE 2 GRPO RL ({args.track.upper()})")
-    print(f"* SFT Stage   : {args.sft_stage}")
-    print(f"* Group Size K: {args.group_size}")
-    print(f"* SFT Ref Dir : {resolved_sft_dir}")
-    print(f"* Target Ckpt : {out_dir}")
-    print(f"* HF Repo Sync: {args.hf_repo} ({path_in_repo_prefix})")
-    print(f"* Dataset     : {args.dataset}")
-    print(f"* KL Beta     : {args.kl_beta}")
-    print(f"* Learning Rate: {args.lr}")
-    print("======================================================================")
+    # If multi-core TPU, partition dataset among replicas
+    if is_tpu and args.num_cores > 1:
+        images_df = images_df.iloc[index::args.num_cores].reset_index(drop=True)
+
+    if is_master:
+        print("======================================================================")
+        print(f"VLM-DENTAL: STAGE 2 GRPO RL ({args.track.upper()})")
+        print(f"* SFT Stage   : {args.sft_stage}")
+        print(f"* Group Size K: {args.group_size}")
+        print(f"* SFT Ref Dir : {resolved_sft_dir}")
+        print(f"* Target Ckpt : {out_dir}")
+        print(f"* HF Repo Sync: {args.hf_repo} ({path_in_repo_prefix})")
+        print(f"* Dataset     : {args.dataset}")
+        print(f"* KL Beta     : {args.kl_beta}")
+        print(f"* Learning Rate: {args.lr}")
+        print(f"* Replicas    : {args.num_cores} device cores")
+        print("======================================================================")
 
     train_grpo(
         images_df=images_df,
@@ -200,7 +242,7 @@ def main() -> None:
         clip_eps=args.clip_eps,
         learning_rate=args.lr,
         track=args.track,
-        hf_repo=args.hf_repo,
+        hf_repo=args.hf_repo if is_master else None,
         push_every_steps=args.push_every_steps,
         path_in_repo_prefix=path_in_repo_prefix,
     )

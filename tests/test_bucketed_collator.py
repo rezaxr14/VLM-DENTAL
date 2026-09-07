@@ -20,20 +20,41 @@ def test_bucketed_collator_snapping_and_right_padding():
     mock_processor.tokenizer.pad_token_id = 0
 
     collator_tools = BucketedQwenVLCollator(mock_processor, track="with_tools")
-    assert collator_tools.buckets == [4096, 6144, 8192, 10240]
+    assert collator_tools.buckets == [4096, 6144, 8192, 12288, 16384]
 
-    # Test snapping logic
+    # Test snapping logic up to 16384 headroom
     assert collator_tools._snap_to_bucket(1000) == 4096
     assert collator_tools._snap_to_bucket(4096) == 4096
     assert collator_tools._snap_to_bucket(4097) == 6144
     assert collator_tools._snap_to_bucket(7000) == 8192
-    assert collator_tools._snap_to_bucket(9000) == 10240
-    assert collator_tools._snap_to_bucket(12000) == 10240
+    assert collator_tools._snap_to_bucket(9000) == 12288
+    assert collator_tools._snap_to_bucket(11500) == 12288
+    assert collator_tools._snap_to_bucket(13000) == 16384
+    assert collator_tools._snap_to_bucket(20000) == 16384
 
     collator_no_tools = BucketedQwenVLCollator(mock_processor, track="no_tools")
     assert collator_no_tools.buckets == [1536, 2048, 2560, 3072]
     assert collator_no_tools._snap_to_bucket(800) == 1536
     assert collator_no_tools._snap_to_bucket(1800) == 2048
+
+
+def test_bucketed_collator_overlength_warning():
+    mock_processor = MagicMock()
+    mock_processor.tokenizer.pad_token_id = 0
+
+    collator = BucketedQwenVLCollator(mock_processor, custom_buckets=[50, 100])
+    seq_len = 120  # Exceeds max bucket 100
+    input_ids = torch.arange(1, seq_len + 1, dtype=torch.long).unsqueeze(0)
+    labels = input_ids.clone()
+    attention_mask = torch.ones((1, seq_len), dtype=torch.long)
+    batch = [{"input_ids": input_ids, "labels": labels, "attention_mask": attention_mask}]
+
+    with pytest.warns(UserWarning, match="exceeds maximum bucket"):
+        collated = collator(batch)
+
+    # Should be truncated to max bucket 100
+    assert collated["input_ids"].shape == (1, 100)
+    assert collated["labels"].shape == (1, 100)
 
 
 def test_bucketed_collator_batch_padding():

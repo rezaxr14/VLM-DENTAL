@@ -117,27 +117,50 @@ def build_conversational_labels(
 
     # Identify special token sequences
     im_start_id = getattr(tokenizer, "im_start_id", None)
-    if im_start_id is None:
+    if not isinstance(im_start_id, int):
         enc_start = tokenizer.encode("<|im_start|>", add_special_tokens=False)
         im_start_id = enc_start[0] if enc_start else None
 
     im_end_id = getattr(tokenizer, "im_end_id", None)
-    if im_end_id is None:
+    if not isinstance(im_end_id, int):
         enc_end = tokenizer.encode("<|im_end|>", add_special_tokens=False)
         im_end_id = enc_end[0] if enc_end else None
 
-    assistant_token_ids = tokenizer.encode("assistant", add_special_tokens=False)
     newline_id = tokenizer.encode("\n", add_special_tokens=False)[-1]
+    assistant_token_ids = tokenizer.encode("assistant", add_special_tokens=False)
+
+    # Context-aware extraction: capture exact token sequence of assistant inside <|im_start|>assistant\n
+    # Guard against BPE tokenizers encoding words differently in isolation vs in-context (Claude Point 4)
+    contextual_asst_ids = None
+    try:
+        header_enc = tokenizer.encode("<|im_start|>assistant\n", add_special_tokens=False)
+        if header_enc and im_start_id is not None and header_enc[0] == im_start_id:
+            nl_pos = -1
+            for idx in range(len(header_enc) - 1, 0, -1):
+                if header_enc[idx] == newline_id:
+                    nl_pos = idx
+                    break
+            if nl_pos > 1:
+                contextual_asst_ids = header_enc[1:nl_pos]
+    except Exception:
+        contextual_asst_ids = None
+
+    candidate_patterns = [p for p in [assistant_token_ids, contextual_asst_ids] if p]
 
     i = 0
     seq_len = len(flat_ids)
     while i < seq_len:
-        # Match <|im_start|> assistant
+        # Match <|im_start|> followed by assistant token pattern
         if flat_ids[i] == im_start_id:
-            sub = flat_ids[i + 1 : i + 1 + len(assistant_token_ids)]
-            if sub == assistant_token_ids:
+            matched_len = None
+            for pat in candidate_patterns:
+                if flat_ids[i + 1 : i + 1 + len(pat)] == pat:
+                    matched_len = len(pat)
+                    break
+
+            if matched_len is not None:
                 # Assistant turn found! Skip past 'assistant\n'
-                start_idx = i + 1 + len(assistant_token_ids)
+                start_idx = i + 1 + matched_len
                 if start_idx < seq_len and flat_ids[start_idx] == newline_id:
                     start_idx += 1
 
@@ -167,11 +190,12 @@ class BucketedQwenVLCollator:
 
     Enforces:
     1. Strict right-padding (`padding_side = "right"`) to preserve 3D MRoPE coordinate origin.
-    2. Discrete bucket snapping to eliminate XLA dynamic graph recompilations on TPU v5e-8.
-    3. Padding tokens masked with `labels = -100`.
+    2. Discrete bucket snapping up to 16,384 tokens to eliminate XLA dynamic graph recompilations.
+    3. Overlength warning diagnostics when sequences exceed maximum headroom.
+    4. Padding tokens masked with `labels = -100`.
     """
 
-    BUCKETS_WITH_TOOLS = [4096, 6144, 8192, 10240]
+    BUCKETS_WITH_TOOLS = [4096, 6144, 8192, 12288, 16384]
     BUCKETS_NO_TOOLS = [1536, 2048, 2560, 3072]
 
     def __init__(
@@ -216,6 +240,14 @@ class BucketedQwenVLCollator:
         for ex in batch:
             curr_len = ex["input_ids"].shape[1]
             if curr_len > target_len:
+                import warnings
+                warnings.warn(
+                    f"[COLLATOR WARNING] Sequence token length ({curr_len}) exceeds maximum bucket ({target_len}). "
+                    f"Truncating tail tokens; note that this may truncate the assistant's final diagnostic response. "
+                    "Consider checking upstream tool-call image resolution or splitting turns.",
+                    UserWarning,
+                    stacklevel=2,
+                )
                 # Truncate if exceeding maximum bucket
                 input_ids = ex["input_ids"][:, :target_len]
                 labels = ex["labels"][:, :target_len]
@@ -361,6 +393,15 @@ class DentalSFTDataset(Dataset):
         labels = build_conversational_labels(enc["input_ids"], self.processor.tokenizer)
         enc["labels"] = labels
 
+        # Defensive assertion (Claude Point 4): guard against zero supervision
+        num_supervised = (labels != -100).sum().item()
+        if num_supervised == 0:
+            raise ValueError(
+                f"[LOSS MASKING ERROR] Zero supervised tokens found for sample (image_id={rec.get('image_id')})! "
+                "The assistant turn delimiter was not matched by build_conversational_labels. "
+                "Failing fast to prevent training on empty supervision."
+            )
+
         return {k: v for k, v in enc.items()}
 
 
@@ -406,20 +447,41 @@ def train_sft(
     for epoch in range(1, epochs + 1):
         pbar = tqdm(dataloader, desc=f"SFT Epoch {epoch}/{epochs}")
         optimizer.zero_grad()
+        accum_loss_sum = 0.0
+        accum_valid_tokens = 0
 
         for step, batch in enumerate(pbar):
             inputs = {k: v.to(model.device) for k, v in batch.items()}
             outputs = model(**inputs)
-            loss = outputs.loss / gradient_accumulation_steps
-            loss.backward()
+
+            # Mathematical Gradient Accumulation (Claude Point 1):
+            # outputs.loss is HF internal mean across valid tokens in this microbatch.
+            # Multiply by num_valid to get unreduced loss sum, accumulate gradients,
+            # and divide by total valid tokens at the accumulation boundary.
+            valid_tokens = (inputs["labels"] != -100).sum()
+            num_valid = valid_tokens.item()
+
+            if num_valid > 0:
+                batch_loss_sum = outputs.loss * valid_tokens
+                batch_loss_sum.backward()
+                accum_loss_sum += batch_loss_sum.item()
+                accum_valid_tokens += num_valid
 
             if (step + 1) % gradient_accumulation_steps == 0 or (step + 1) == len(dataloader):
+                if accum_valid_tokens > 0:
+                    scale = 1.0 / max(float(accum_valid_tokens), 1.0)
+                    for p in model.parameters():
+                        if p.grad is not None:
+                            p.grad.mul_(scale)
+
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                 optimizer.step()
                 optimizer.zero_grad()
                 total_steps += 1
 
-                step_loss = loss.item() * gradient_accumulation_steps
+                step_loss = accum_loss_sum / max(accum_valid_tokens, 1)
+                accum_loss_sum = 0.0
+                accum_valid_tokens = 0
                 pbar.set_postfix({"loss": f"{step_loss:.4f}"})
 
                 with open(log_file, "a", encoding="utf-8") as f:
