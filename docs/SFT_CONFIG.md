@@ -21,16 +21,23 @@ This document serves as the master technical specification for Stage 1 Supervise
 
 ## 2. Hardware Architecture & Cloud TPU v5e-8 Multi-Core Optimization
 
-### 2.1 Multi-Core Distributed Execution Topology (`xmp.spawn`)
+### 2.1 PyTorch/XLA FSDP Parameter Sharding & Multi-Core Execution Topology
 A Cloud TPU v5e-8 slice consists of 8 chips, each with **16 GB of HBM2e** (128 GB total node memory).
-- Training execution scales across all 8 cores via `torch_xla.distributed.xmp.spawn(run_training, nprocs=8)`:
-  - Each spawned worker process binds to its respective device (`xla:0` through `xla:7`).
-  - `torch.utils.data.distributed.DistributedSampler` partitions the SFT curriculum shards across all 8 chips without redundant computation.
-  - Cross-replica gradient synchronization is performed efficiently via `xm.optimizer_step(optimizer)` utilizing the 2D Torus Inter-Chip Interconnect (ICI).
-- **Dedicated Memory Footprint per Chip**:
-  $$\text{Base Model Weights per Chip (BF16)} \approx 18.4\text{ GB}$$
-  $$\text{LoRA Adapter Parameters } (r=32, \alpha=64) \approx 152\text{ MB}$$
-  $$\text{AdamW Optimizer States for Trainable LoRA} \approx 608\text{ MB}$$
+Because a 9B parameter model in BF16 requires **~18.4 GB** just for the frozen base weights, running in standard DDP (full model replication per core) would exceed the 16 GB per-chip limit and cause an immediate Out-Of-Memory (OOM) error before step 0.
+
+To solve this, VLM-DENTAL implements **PyTorch/XLA Fully Sharded Data Parallelism (`torch_xla.distributed.fsdp.XlaFullyShardedDataParallel`)**:
+- **8-Way Parameter Sharding**:
+  $$\text{Sharded Base Weights per Chip} = \frac{18.4\text{ GB}}{8\text{ cores}} \approx 2.30\text{ GB}$$
+  $$\text{Trainable LoRA Parameters } (r=32, \alpha=64) \approx 60\text{ MB}$$
+  $$\text{AdamW Optimizer States for LoRA} \approx 120\text{ MB}$$
+  $$\text{Total Memory Footprint per Chip} \approx 4\text{--}5\text{ GB (comfortably within 16 GB HBM)}$$
+- **Immediate Resharding (`reshard_after_forward=True`)**: Discards all-gathered layer weights immediately after forward and backward passes, preventing memory accumulation.
+- **Generous Headroom**: Leaves $>10\text{ GB}$ of free HBM per chip to accommodate large multi-turn vision token sequences up to 16,384 tokens without risk of OOM.
+- **CLI Flag**: Controlled via `--fsdp` (default: enabled on multi-core TPU) or `--no-fsdp` (for standard single-device/CUDA placement).
+- **Process Orchestration (`xmp.spawn`)**:
+  - `xmp.spawn(run_training, args=(args,), nprocs=8)` spawns 8 worker processes, each binding to its respective device (`xla:0` through `xla:7`).
+  - `torch.utils.data.distributed.DistributedSampler` partitions the SFT curriculum shards across all 8 chips.
+  - Cross-replica gradient synchronization is performed via `xm.optimizer_step(optimizer)` utilizing the 2D Torus Inter-Chip Interconnect (ICI).
 - All logging, evaluation, and Hugging Face checkpoint uploads are strictly gated to the master ordinal (`xm.is_master_ordinal()`), preventing race conditions.
 
 ### 2.2 Mathematical Token-Weighted Gradient Accumulation

@@ -34,7 +34,11 @@ from dental_agent.agent.parsing import parse_agent_json
 from dental_agent.data.fdi_utils import row_to_fdi
 from dental_agent.rewards.composite import combine_reward
 from dental_agent.tools.registry import ToolRegistry
-from dental_agent.training.sft import build_conversational_labels
+from dental_agent.training.sft import (
+    build_conversational_labels,
+    unwrap_peft_model,
+    wrap_distributed_model,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -97,26 +101,27 @@ def compute_token_log_probs(
     model_inputs = {k: v for k, v in enc.items() if k != "labels"}
 
     # Toggle dual-adapter mechanism
+    peft_m = unwrap_peft_model(model)
     if use_reference:
-        if hasattr(model, "set_adapter"):
-            model.set_adapter("reference")
-        elif hasattr(model, "disable_adapter"):
-            model.disable_adapter()
+        if hasattr(peft_m, "set_adapter"):
+            peft_m.set_adapter("reference")
+        elif hasattr(peft_m, "disable_adapter"):
+            peft_m.disable_adapter()
     else:
-        if hasattr(model, "set_adapter"):
-            model.set_adapter("grpo_policy")
-        elif hasattr(model, "enable_adapter"):
-            model.enable_adapter()
+        if hasattr(peft_m, "set_adapter"):
+            peft_m.set_adapter("grpo_policy")
+        elif hasattr(peft_m, "enable_adapter"):
+            peft_m.enable_adapter()
 
     with torch.set_grad_enabled(not use_reference):
         outputs = model(**model_inputs)
 
     # Revert to grpo_policy just in case
     if use_reference:
-        if hasattr(model, "set_adapter"):
-            model.set_adapter("grpo_policy")
-        elif hasattr(model, "enable_adapter"):
-            model.enable_adapter()
+        if hasattr(peft_m, "set_adapter"):
+            peft_m.set_adapter("grpo_policy")
+        elif hasattr(peft_m, "enable_adapter"):
+            peft_m.enable_adapter()
 
     logits = outputs.logits[:, :-1, :]
     shift_labels = labels[:, 1:].to(logits.device)
@@ -581,6 +586,8 @@ def train_grpo(
     hf_repo: str | None = None,
     push_every_steps: int = 25,
     path_in_repo_prefix: str | None = None,
+    num_cores: int = 1,
+    use_fsdp: bool = True,
 ) -> str:
     """Execute Stage 2 GRPO policy optimization with dual-adapter reference and group advantage normalization."""
     from peft import PeftModel, LoraConfig
@@ -612,6 +619,15 @@ def train_grpo(
     else:
         print(f"WARNING: No SFT model found at {sft_model_dir}. Applying fresh LoRA adapter.")
         model = apply_lora(model, config)
+
+    is_tpu = False
+    try:
+        import torch_xla.core.xla_model as xm
+        is_tpu = True
+    except Exception:
+        pass
+
+    model = wrap_distributed_model(model, is_tpu=is_tpu, num_cores=num_cores, use_fsdp=use_fsdp)
 
     cat_lookup = dict(zip(categories_df["id"], categories_df["name"])) if len(categories_df) else {}
     registry = ToolRegistry.create_default() if track == "with_tools" else None
@@ -657,7 +673,7 @@ def train_grpo(
         if step % push_every_steps == 0 or step == total_steps:
             step_tag = f"grpo-{track}-step-{step}"
             ckpt_path = save_checkpoint(
-                model=model,
+                model=unwrap_peft_model(model),
                 processor=processor,
                 tag=step_tag,
                 checkpoint_dir=checkpoint_dir,
@@ -673,7 +689,7 @@ def train_grpo(
 
     final_tag = f"grpo-{track}-final"
     final_path = save_checkpoint(
-        model=model,
+        model=unwrap_peft_model(model),
         processor=processor,
         tag=final_tag,
         checkpoint_dir=checkpoint_dir,

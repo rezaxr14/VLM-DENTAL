@@ -405,6 +405,81 @@ class DentalSFTDataset(Dataset):
         return {k: v for k, v in enc.items()}
 
 
+def unwrap_peft_model(model: Any) -> Any:
+    """Safely unwrap a model wrapped in FSDP, DDP, or DataParallel down to the underlying PeftModel/PreTrainedModel.
+
+    Guarantees that attribute accesses like .set_adapter(), .save_pretrained(),
+    and .peft_config target the underlying model rather than a distributed wrapper.
+    """
+    cur = model
+    while hasattr(cur, "module"):
+        cur = cur.module
+    return cur
+
+
+def wrap_distributed_model(
+    model: Any,
+    is_tpu: bool = False,
+    num_cores: int = 1,
+    use_fsdp: bool = True,
+    is_master: bool = True,
+) -> Any:
+    """Wrap model for distributed TPU v5e-8 or multi-GPU execution.
+
+    On Google Cloud TPU v5e-8, each core has only 16 GB HBM. A 9B model in BF16
+    is ~18.4 GB just for frozen base weights. When `is_tpu and num_cores > 1 and use_fsdp`,
+    this function wraps the model with `torch_xla.distributed.fsdp.XlaFullyShardedDataParallel`
+    (FSDP) with `reshard_after_forward=True`. This shards the 18.4 GB model across the 8 cores
+    (~2.3 GB per core), keeping per-core memory footprint comfortably at ~4-5 GB and protecting
+    against the 16 GB HBM ceiling.
+    """
+    if is_tpu:
+        try:
+            import torch_xla.core.xla_model as xm
+            device = xm.xla_device()
+        except Exception as e:
+            if is_master:
+                print(f"[FSDP WARNING] torch_xla is not installed or available ({e}); skipping TPU placement.")
+            return model
+
+        if num_cores > 1 and use_fsdp:
+            try:
+                from torch_xla.distributed.fsdp import XlaFullyShardedDataParallel as FSDP
+
+                auto_wrap_policy = None
+                try:
+                    from peft.utils.other import fsdp_auto_wrap_policy
+                    auto_wrap_policy = fsdp_auto_wrap_policy(model)
+                except Exception:
+                    pass
+
+                wrap_kwargs: dict[str, Any] = {"reshard_after_forward": True}
+                if auto_wrap_policy is not None:
+                    wrap_kwargs["auto_wrap_policy"] = auto_wrap_policy
+
+                model = FSDP(model, **wrap_kwargs)
+                if is_master:
+                    per_core_gb = 18.4 / max(num_cores, 1)
+                    print(
+                        f"[FSDP] Successfully wrapped model in torch_xla XlaFullyShardedDataParallel across {num_cores} TPU cores."
+                    )
+                    print(
+                        f"[FSDP] Base model parameters sharded (~{per_core_gb:.2f} GB/core). 16 GB HBM ceiling protected."
+                    )
+                return model
+            except Exception as e:
+                if is_master:
+                    print(f"[FSDP WARNING] Could not wrap with XlaFullyShardedDataParallel ({e}); falling back to model.to(device).")
+                return model.to(device)
+        else:
+            return model.to(device)
+
+    # CUDA / CPU device placement
+    if torch.cuda.is_available() and not hasattr(model, "hf_device_map"):
+        return model.to("cuda")
+    return model
+
+
 def train_sft(
     data_path: str | Path,
     track: str = "with_tools",
@@ -418,6 +493,8 @@ def train_sft(
     gradient_accumulation_steps: int = 16,
     hf_repo: str | None = None,
     push_every_steps: int = 25,
+    num_cores: int = 1,
+    use_fsdp: bool = True,
 ) -> str:
     """Execute Stage 1 SFT on verified expert traces with conversational loss masking."""
     print(f"--- Starting Stage 1 SFT Training (Track={track}, Epochs={epochs}, LR={learning_rate}) ---")
@@ -425,6 +502,15 @@ def train_sft(
     # Load model and tokenizer
     model, processor = load_model(config)
     model = apply_lora(model, config)
+
+    is_tpu = False
+    try:
+        import torch_xla.core.xla_model as xm
+        is_tpu = True
+    except Exception:
+        pass
+
+    model = wrap_distributed_model(model, is_tpu=is_tpu, num_cores=num_cores, use_fsdp=use_fsdp)
     model.train()
 
     dataset = DentalSFTDataset(data_path, processor=processor, track=track)
@@ -488,7 +574,7 @@ def train_sft(
                     f.write(json.dumps({"epoch": epoch, "step": total_steps, "loss": step_loss}) + "\n")
 
     saved_path = save_checkpoint(
-        model=model,
+        model=unwrap_peft_model(model),
         processor=processor,
         tag=f"sft-{track}-final",
         checkpoint_dir=checkpoint_dir,

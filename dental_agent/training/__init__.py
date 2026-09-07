@@ -20,6 +20,8 @@ from dental_agent.training.sft import (
     DentalSFTDataset,
     load_trace_dataset,
     train_sft,
+    wrap_distributed_model,
+    unwrap_peft_model,
 )
 from dental_agent.training.grpo import (
     compute_group_advantages,
@@ -54,6 +56,8 @@ __all__ = [
     "DentalSFTDataset",
     "load_trace_dataset",
     "train_sft",
+    "wrap_distributed_model",
+    "unwrap_peft_model",
     "compute_group_advantages",
     "compute_token_log_probs",
     "build_full_trajectory_labels",

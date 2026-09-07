@@ -143,6 +143,12 @@ def main() -> None:
         default=1,
         help="Number of TPU cores for distributed data-parallel execution (1 for single core/GPU, 8 for Kaggle TPU v5e-8)",
     )
+    parser.add_argument(
+        "--fsdp",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable PyTorch/XLA FSDP parameter sharding across TPU cores to fit 9B BF16 model within 16 GB HBM (default: True on multi-core TPU)",
+    )
     args = parser.parse_args()
 
     is_tpu = False
@@ -245,6 +251,8 @@ def run_worker(index: int, args: argparse.Namespace):
         hf_repo=args.hf_repo if is_master else None,
         push_every_steps=args.push_every_steps,
         path_in_repo_prefix=path_in_repo_prefix,
+        num_cores=args.num_cores,
+        use_fsdp=args.fsdp,
     )
 
 

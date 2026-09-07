@@ -38,6 +38,8 @@ if repo_root not in sys.path:
 from dental_agent.training.sft import (
     DentalSFTDataset,
     BucketedQwenVLCollator,
+    wrap_distributed_model,
+    unwrap_peft_model,
 )
 from dental_agent.model.backbone import get_model_classes
 
@@ -119,6 +121,12 @@ def parse_args():
         type=int,
         default=1,
         help="Number of TPU cores for distributed data-parallel execution (1 for single core/GPU, 8 for Kaggle TPU v5e-8)",
+    )
+    parser.add_argument(
+        "--fsdp",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable PyTorch/XLA FSDP parameter sharding across TPU cores to fit 9B BF16 model within 16 GB HBM (default: True on multi-core TPU)",
     )
     return parser.parse_args()
 
@@ -336,8 +344,13 @@ def run_training(index: int, args: argparse.Namespace):
     if is_master:
         model.print_trainable_parameters()
 
-    if is_tpu:
-        model = model.to(device)
+    model = wrap_distributed_model(
+        model,
+        is_tpu=is_tpu,
+        num_cores=args.num_cores,
+        use_fsdp=args.fsdp,
+        is_master=is_master,
+    )
 
     # Dataset & Bucketed Collator
     full_dataset = DentalSFTDataset(resolved_traces, processor=processor, track=args.track, data_dir=args.data_dir)
@@ -448,7 +461,7 @@ def run_training(index: int, args: argparse.Namespace):
         if is_tpu:
             import torch_xla.core.xla_model as xm
             if xm.is_master_ordinal():
-                model.save_pretrained(str(out_path))
+                unwrap_peft_model(model).save_pretrained(str(out_path))
                 with open(state_file, "w") as f:
                     json.dump(state_data, f)
             xm.save(optimizer.state_dict(), out_path / "optimizer.pt")
@@ -456,7 +469,7 @@ def run_training(index: int, args: argparse.Namespace):
             if args.hf_repo and xm.is_master_ordinal():
                 upload_checkpoint_to_hf(out_path, args.hf_repo, total_steps, epoch_num, path_in_repo=path_in_repo)
         else:
-            model.save_pretrained(str(out_path))
+            unwrap_peft_model(model).save_pretrained(str(out_path))
             torch.save(optimizer.state_dict(), out_path / "optimizer.pt")
             torch.save(scheduler.state_dict(), out_path / "scheduler.pt")
             with open(state_file, "w") as f:
@@ -552,7 +565,7 @@ def run_training(index: int, args: argparse.Namespace):
                         if val_loss < best_val_loss:
                             best_val_loss = val_loss
                             best_adapter_path.mkdir(parents=True, exist_ok=True)
-                            model.save_pretrained(str(best_adapter_path))
+                            unwrap_peft_model(model).save_pretrained(str(best_adapter_path))
                             print(f"\n[VALIDATION] New best adapter saved! Step {total_steps}: val_loss = {val_loss:.4f}")
 
                     with open(log_file, "a", encoding="utf-8") as f:

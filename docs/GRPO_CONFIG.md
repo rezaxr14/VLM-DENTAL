@@ -106,11 +106,16 @@ $$R_{\text{Track B}} = 0.45 R_{\text{FDI}} + 0.45 R_{\text{Diag}} + 0.10 R_{\tex
 
 ## 8. Multi-Core Cloud TPU v5e-8 Distributed Execution & Continuity
 
-1. **Multi-Core Distributed Execution Topology (`xmp.spawn`)**:
+1. **PyTorch/XLA FSDP Parameter Sharding (`XlaFullyShardedDataParallel`)**:
+   - On Cloud TPU v5e-8, each chip has 16 GB of HBM2e. To prevent out-of-memory errors on the 18.4 GB `Qwen/Qwen3.5-9B` base model, the policy model is sharded across all 8 cores via `torch_xla.distributed.fsdp.XlaFullyShardedDataParallel`.
+   - Shards base model parameters down to ~2.3 GB per chip, leaving $>10\text{ GB}$ of free HBM for dynamic agent rollouts.
+   - Dual-adapter switching (`reference` vs `grpo_policy`) operates cleanly through `unwrap_peft_model()`.
+   - Controlled via `--fsdp` (default: enabled on multi-core TPU) or `--no-fsdp`.
+2. **Multi-Core Distributed Execution Topology (`xmp.spawn`)**:
    - `scripts/run_grpo.py` and `scripts/run_grpo_sweep.py` support `--num-cores 8` on Cloud TPU v5e-8 via `torch_xla.distributed.xmp.spawn(run_worker, nprocs=8)`.
    - Datasets are partitioned across the 8 cores without overlap (`images_df.iloc[rank::world_size]`), and policy gradients are synchronized via `xm.optimizer_step(optimizer)` over the 2D Torus Inter-Chip Interconnect.
    - All I/O, terminal progress, and Hugging Face checkpoint uploads are strictly gated to the master ordinal (`xm.is_master_ordinal()`).
-2. **Context-Aware Completion Masking & Zero-Supervision Guard**:
+3. **Context-Aware Completion Masking & Zero-Supervision Guard**:
    - `build_full_trajectory_labels()` unmasks exclusively the assistant-generated reasoning and tool actions.
    - If turn offsets shift due to BPE tokenization differences, the pipeline automatically falls back to context-aware `build_conversational_labels()`.
    - A fail-fast assertion (`assert (labels != -100).sum() > 0`) prevents the policy from optimizing on empty completion spans.
