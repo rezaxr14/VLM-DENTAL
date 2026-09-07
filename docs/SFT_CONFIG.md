@@ -142,14 +142,15 @@ To prevent the model from penalizing or memorizing system prompts, user instruct
 | Hyperparameter | Value | Description |
 | :--- | :--- | :--- |
 | **Optimizer** | `AdamW` | Standard decoupled weight decay optimizer. |
-| **Peak Learning Rate** | $2.0 \times 10^{-5}$ | Conservative learning rate preserving pretrained visual features. |
-| **Learning Rate Schedule** | Cosine with 5% Warmup | Smooth decay to $1\times 10^{-6}$ at final step. |
+| **Peak Learning Rate** | $5.0 \times 10^{-5}$ | Calibrated multimodal LoRA rate (safe for `merger.mlp` vision projector while providing active gradient momentum for adapter updates). |
+| **Learning Rate Schedule** | Cosine with 5% Warmup | Smooth decay to $1\times 10^{-6}$ at final step; 12 gradual warmup steps over ~252 optimization steps. |
 | **Weight Decay** | $0.01$ | Regularization applied to LoRA adapter weights. |
 | **Per-Device Batch Size** | $1$ | Maximizes available memory for high-resolution visual tokens. |
-| **Gradient Accumulation** | $16$ (Dual GPU) / $4$ (8-TPU) | Enforces an effective batch size of $16$ to $32$. |
+| **Gradient Accumulation** | $1$ (8-TPU) / $16$ (Single device) | Option B: Enforces an effective batch size of $8$ on 8-core TPU ($1\times 1 \times 8 = 8$) and $16$ on single device ($1 \times 16 = 16$). |
+| **Total Optimization Steps** | $\approx 252$ steps | Generates ~84 steps/epoch across 3 epochs on ~705 traces; avoids underfitting. |
 | **Epochs** | $3$ | Optimal convergence across verified synthetic traces without overfitting. |
 | **Gradient Clipping** | $1.0$ | Mitigates exploding gradients on high-loss multi-turn transitions. |
-| **Validation Split** | $5\%$ held-out | Evaluated every 25 steps; best validation loss triggers `best_adapter/` saving. |
+| **Validation & Checkpoint Sync** | Every $25$ steps | Fires 10 validation passes and 10 Hugging Face Hub checkpoint pushes across training. |
 
 ---
 

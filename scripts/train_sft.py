@@ -99,8 +99,18 @@ def parse_args():
         help="Attach LoRA to multimodal patch projector ('projector': merger.mlp.0, merger.mlp.2) or 'none'",
     )
     parser.add_argument("--batch-size", type=int, default=1, help="Per-device batch size")
-    parser.add_argument("--gradient-accumulation-steps", type=int, default=16, help="Gradient accumulation steps")
-    parser.add_argument("--learning-rate", type=float, default=2e-5, help="Peak learning rate for AdamW")
+    parser.add_argument(
+        "--gradient-accumulation-steps",
+        type=int,
+        default=None,
+        help="Gradient accumulation steps (default: 1 on multi-core TPU for effective batch size 8, 16 on single device)",
+    )
+    parser.add_argument(
+        "--learning-rate",
+        type=float,
+        default=5e-5,
+        help="Peak learning rate for AdamW (default: 5e-5 for multimodal LoRA)",
+    )
     parser.add_argument("--warmup-ratio", type=float, default=0.05, help="Linear warmup ratio for learning rate scheduler")
     parser.add_argument("--max-grad-norm", type=float, default=1.0, help="Maximum gradient norm for gradient clipping")
     parser.add_argument("--epochs", type=int, default=3, help="Number of training epochs")
@@ -128,7 +138,10 @@ def parse_args():
         default=True,
         help="Enable PyTorch/XLA FSDP parameter sharding across TPU cores to fit 9B BF16 model within 16 GB HBM (default: True on multi-core TPU)",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.gradient_accumulation_steps is None:
+        args.gradient_accumulation_steps = 1 if args.num_cores > 1 else 16
+    return args
 
 
 def resolve_stage_traces(stage: str, track: str, data_dir: str | Path) -> List[str]:
