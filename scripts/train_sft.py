@@ -633,7 +633,10 @@ def main():
 
     if is_tpu and args.num_cores > 1:
         try:
-            import torch_xla.distributed.xmp as xmp
+            try:
+                import torch_xla.distributed.xla_multiprocessing as xmp
+            except ImportError:
+                import torch_xla.distributed.xmp as xmp
             print(f"[LAUNCH] Spawning multi-core Cloud TPU v5e-8 training on {args.num_cores} cores via xmp.spawn...")
             xmp.spawn(run_training, args=(args,), nprocs=args.num_cores)
         except Exception as e:
