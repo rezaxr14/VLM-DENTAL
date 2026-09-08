@@ -359,6 +359,7 @@ def run_training(index: int, args: argparse.Namespace):
     load_kwargs: Dict[str, Any] = {
         "trust_remote_code": True,
         "dtype": load_dtype,
+        "low_cpu_mem_usage": True,
     }
 
     if active_precision == "qlora":
