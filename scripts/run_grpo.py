@@ -160,9 +160,9 @@ def main() -> None:
 
     is_tpu = False
     try:
-        import torch_xla.core.xla_model as xm
-        is_tpu = True
-    except Exception:
+        import torch_xla  # noqa: F401 — lightweight check; do NOT import xla_model here
+        is_tpu = True     # (importing xla_model initializes libtpu and claims /dev/vfio exclusively)
+    except ImportError:
         pass
 
     if is_tpu and args.num_cores > 1:
