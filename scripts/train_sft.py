@@ -28,8 +28,11 @@ from typing import Any, Dict, List, Optional, Tuple
 for _var in ["TPU_PROCESS_ADDRESSES", "TPU_PROCESS_COUNT", "CLOUD_TPU_TASK_ID"]:
     os.environ.pop(_var, None)
 
-if "PJRT_DEVICE" not in os.environ:
-    os.environ["PJRT_DEVICE"] = "TPU"
+# NOTE: PJRT_DEVICE is set lazily inside setup_hardware(), NOT here.
+# Setting it before `import torch` causes torch_xla's torch plugin to auto-initialize
+# the PJRT TPU client at import time. Then when setup_hardware() explicitly calls
+# xm.xla_device(), libtpu's RuntimeMetricAggregator crashes with
+# "Check failed: reporting_closure_ == nullptr" because it's initialized twice.
 
 import torch
 from torch.utils.data import DataLoader, random_split
@@ -226,6 +229,10 @@ def setup_hardware(precision: str, rank: int = 0):
     is_tpu = False
     device = None
     try:
+        # Set PJRT_DEVICE right before the first xla_model import to ensure
+        # a single, controlled initialization of the PJRT TPU client.
+        if "PJRT_DEVICE" not in os.environ:
+            os.environ["PJRT_DEVICE"] = "TPU"
         import torch_xla.core.xla_model as xm
         device = xm.xla_device()
         is_tpu = True

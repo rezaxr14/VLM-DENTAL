@@ -22,8 +22,9 @@ from pathlib import Path
 for _var in ["TPU_PROCESS_ADDRESSES", "TPU_PROCESS_COUNT", "CLOUD_TPU_TASK_ID"]:
     os.environ.pop(_var, None)
 
-if "PJRT_DEVICE" not in os.environ:
-    os.environ["PJRT_DEVICE"] = "TPU"
+# NOTE: PJRT_DEVICE is set lazily inside run_worker(), NOT here.
+# Setting it before `import torch` causes torch_xla's torch plugin to auto-initialize
+# the PJRT TPU client at import time, leading to double-initialization crashes.
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -189,6 +190,8 @@ def run_worker(index: int, args: argparse.Namespace):
 
     is_tpu = False
     try:
+        if "PJRT_DEVICE" not in os.environ:
+            os.environ["PJRT_DEVICE"] = "TPU"
         import torch_xla.core.xla_model as xm
         is_tpu = True
         device = xm.xla_device()
