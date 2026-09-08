@@ -167,6 +167,8 @@ def main() -> None:
         pass
 
     if is_tpu and args.num_cores > 1:
+        if "PJRT_DEVICE" not in os.environ:
+            os.environ["PJRT_DEVICE"] = "TPU"
         try:
             try:
                 import torch_xla.distributed.xla_multiprocessing as xmp
