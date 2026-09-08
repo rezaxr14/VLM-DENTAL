@@ -170,8 +170,11 @@ def main() -> None:
             print(f"[LAUNCH] Spawning multi-core Cloud TPU v5e-8 GRPO across available TPU cores via xmp.spawn(nprocs=None)...")
             xmp.spawn(run_worker, args=(args,), nprocs=None)
         except Exception as e:
-            print(f"[LAUNCH WARNING] Could not spawn via xmp ({e}); falling back to single-core execution.")
-            run_worker(0, args)
+            print(f"\n[FATAL TPU ERROR] Could not spawn multi-core GRPO via xmp: {e}")
+            print("[DIAGNOSTIC] On Cloud TPU VMs, hardware access to /dev/vfio/* is exclusive.")
+            print("[DIAGNOSTIC] If running from Jupyter/Colab/Kaggle, ensure the notebook kernel did not call xm.xla_device() before launching this script.")
+            print("[DIAGNOSTIC] Please restart the notebook session (Run -> Restart Session) and re-run to release /dev/vfio/*.\n")
+            raise RuntimeError(f"Multi-core Cloud TPU GRPO launch failed: {e}") from e
     else:
         run_worker(0, args)
 
