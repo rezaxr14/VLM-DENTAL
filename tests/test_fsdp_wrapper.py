@@ -87,3 +87,42 @@ def test_grpo_cli_fsdp_flags():
 
     args_no = parser.parse_args(["--no-fsdp"])
     assert args_no.fsdp is False
+
+
+def test_xla_fsdp_auto_wrap_policy_adapter():
+    """Verify that PEFT FSDP policy handles torch_xla's unwrapped_params keyword argument without crashing."""
+    from peft import LoraConfig, get_peft_model
+    from peft.utils.other import fsdp_auto_wrap_policy
+
+    class SubBlock(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear = nn.Linear(8, 8)
+        def forward(self, x):
+            return self.linear(x)
+
+    class DummyModel(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.block = SubBlock()
+        def forward(self, x):
+            return self.block(x)
+
+    model = DummyModel()
+    peft_model = get_peft_model(model, LoraConfig(target_modules=["linear"]))
+    raw_policy = fsdp_auto_wrap_policy(peft_model)
+    assert raw_policy is not None
+
+    def xla_policy(module, recurse, unwrapped_params=0, **kwargs):
+        try:
+            return raw_policy(module=module, recurse=recurse, nonwrapped_numel=unwrapped_params)
+        except TypeError:
+            try:
+                return raw_policy(module, recurse, unwrapped_params)
+            except TypeError:
+                return raw_policy(module=module, recurse=recurse)
+
+    # Calling with torch_xla convention (unwrapped_params as keyword arg)
+    result = xla_policy(module=peft_model.base_model.model.block, recurse=True, unwrapped_params=64)
+    assert isinstance(result, bool)
+

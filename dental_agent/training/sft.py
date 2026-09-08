@@ -449,9 +449,45 @@ def wrap_distributed_model(
                 auto_wrap_policy = None
                 try:
                     from peft.utils.other import fsdp_auto_wrap_policy
-                    auto_wrap_policy = fsdp_auto_wrap_policy(model)
-                except Exception:
-                    pass
+                    raw_policy = fsdp_auto_wrap_policy(model)
+                    if raw_policy is not None:
+                        # PyTorch/XLA's FSDP recursive_wrap calls auto_wrap_policy(module, recurse=True, unwrapped_params=num_params).
+                        # PEFT's policy uses PyTorch core's _or_policy, which expects parameter name 'nonwrapped_numel'.
+                        # This adapter translates unwrapped_params -> nonwrapped_numel to prevent TypeError: unexpected keyword argument 'unwrapped_params'.
+                        def xla_policy(module, recurse, unwrapped_params=0, **kwargs):
+                            try:
+                                return raw_policy(module=module, recurse=recurse, nonwrapped_numel=unwrapped_params)
+                            except TypeError:
+                                try:
+                                    return raw_policy(module, recurse, unwrapped_params)
+                                except TypeError:
+                                    return raw_policy(module=module, recurse=recurse)
+
+                        auto_wrap_policy = xla_policy
+                except Exception as e:
+                    if is_master:
+                        print(f"[FSDP] PEFT auto_wrap_policy detection failed ({e}); falling back to native transformer policy.")
+
+                # Fallback to torch_xla native transformer_auto_wrap_policy if PEFT policy is not available
+                if auto_wrap_policy is None:
+                    try:
+                        from torch_xla.distributed.fsdp.wrap import transformer_auto_wrap_policy
+                        from functools import partial
+                        transformer_cls = set()
+                        for m in model.modules():
+                            cls_name = m.__class__.__name__
+                            if any(k in cls_name for k in ["DecoderLayer", "Block", "TransformerLayer"]):
+                                transformer_cls.add(m.__class__)
+                        if transformer_cls:
+                            base_t_policy = partial(transformer_auto_wrap_policy, transformer_layer_cls=transformer_cls)
+                            def xla_transformer_policy(module, recurse, unwrapped_params=0, **kwargs):
+                                try:
+                                    return base_t_policy(module=module, recurse=recurse, nonwrapped_numel=unwrapped_params)
+                                except TypeError:
+                                    return base_t_policy(module=module, recurse=recurse, unwrapped_params=unwrapped_params)
+                            auto_wrap_policy = xla_transformer_policy
+                    except Exception:
+                        pass
 
                 wrap_kwargs: dict[str, Any] = {"reshard_after_forward": True}
                 if auto_wrap_policy is not None:
@@ -468,9 +504,11 @@ def wrap_distributed_model(
                     )
                 return model
             except Exception as e:
-                if is_master:
-                    print(f"[FSDP WARNING] Could not wrap with XlaFullyShardedDataParallel ({e}); falling back to model.to(device).")
-                return model.to(device)
+                raise RuntimeError(
+                    f"FSDP parameter sharding failed across {num_cores} TPU cores: {e}. "
+                    f"Cannot fall back to single-device model.to(device) because a 9B BF16 model (~18.4 GB) "
+                    f"exceeds the 16 GB per-core HBM limit of Cloud TPU v5e-8."
+                ) from e
         else:
             return model.to(device)
 
