@@ -337,7 +337,8 @@ def run_training(index: int, args: argparse.Namespace):
             print(f"    - {t}")
         print(f"* Output Dir  : {args.output_dir}")
         print(f"* Path in HF  : {path_in_repo}")
-        print(f"* Precision   : {args.precision}")
+        prec_str = f"{args.precision} (master weights: float32, compute: bfloat16 via FSDP)" if (is_tpu and args.fsdp and args.num_cores > 1) else args.precision
+        print(f"* Precision   : {prec_str}")
         print(f"* Vision LoRA : {args.lora_target_vision}")
         print(f"* LoRA Config : r={args.lora_r}, alpha={args.lora_alpha}, dropout={args.lora_dropout}")
         world_size = get_xla_world_size(is_tpu)
@@ -357,7 +358,7 @@ def run_training(index: int, args: argparse.Namespace):
     load_dtype = torch.float32 if (is_tpu and args.fsdp and args.num_cores > 1) else compute_dtype
     load_kwargs: Dict[str, Any] = {
         "trust_remote_code": True,
-        "torch_dtype": load_dtype,
+        "dtype": load_dtype,
     }
 
     if active_precision == "qlora":
@@ -373,8 +374,16 @@ def run_training(index: int, args: argparse.Namespace):
         load_kwargs["device_map"] = "auto"
 
     if is_master:
-        print(f"[MODEL] Loading {args.model_id}...")
-    model = ModelClass.from_pretrained(args.model_id, **load_kwargs)
+        if is_tpu and args.fsdp and args.num_cores > 1:
+            print(f"[MODEL] Loading {args.model_id} (master weights: float32 for FSDP sharding across {args.num_cores} cores, compute: bfloat16)...")
+        else:
+            print(f"[MODEL] Loading {args.model_id}...")
+    try:
+        model = ModelClass.from_pretrained(args.model_id, **load_kwargs)
+    except TypeError:
+        # Fallback for older transformers (<4.48) that only accept torch_dtype
+        load_kwargs["torch_dtype"] = load_kwargs.pop("dtype")
+        model = ModelClass.from_pretrained(args.model_id, **load_kwargs)
 
     # Define LoRA Target Modules (Language Model + optional Vision Projector)
     target_modules = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
@@ -657,6 +666,17 @@ def main():
         pass
 
     if is_tpu and args.num_cores > 1:
+        # Pre-cache base model to local disk once before spawning 8 worker processes,
+        # preventing 8-way concurrent Hugging Face download lock contention.
+        if not Path(args.model_id).exists():
+            try:
+                from huggingface_hub import snapshot_download
+                print(f"[PRE-FETCH] Verifying {args.model_id} in local cache before spawning workers...")
+                snapshot_download(repo_id=args.model_id)
+                print(f"[PRE-FETCH] Base model {args.model_id} ready in local cache.")
+            except Exception as e:
+                print(f"[PRE-FETCH WARNING] Pre-download check skipped ({e}); workers will load directly.")
+
         try:
             try:
                 import torch_xla.distributed.xla_multiprocessing as xmp
