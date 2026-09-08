@@ -646,10 +646,7 @@ def main():
             except ImportError:
                 import torch_xla.distributed.xmp as xmp
             print(f"[LAUNCH] Spawning multi-core Cloud TPU v5e-8 training across available TPU cores via xmp.spawn(nprocs=None)...")
-            try:
-                xmp.spawn(run_training, args=(args,), nprocs=None, start_method="fork")
-            except (TypeError, ValueError):
-                xmp.spawn(run_training, args=(args,), nprocs=None)
+            xmp.spawn(run_training, args=(args,), nprocs=None)
         except Exception as e:
             print(f"\n[FATAL TPU ERROR] Could not spawn multi-core training via xmp: {e}")
             print("[DIAGNOSTIC] On Cloud TPU VMs, hardware access to /dev/vfio/* is exclusive.")
