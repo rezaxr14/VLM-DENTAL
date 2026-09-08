@@ -576,7 +576,8 @@ def run_training(index: int, args: argparse.Namespace):
                 if accum_valid_tokens > 0:
                     if is_tpu and get_xla_world_size(is_tpu) > 1:
                         token_t = torch.tensor([accum_valid_tokens], dtype=torch.float32, device=device)
-                        global_tokens = xm.all_reduce("sum", token_t).item()
+                        reduce_op = getattr(xm, "REDUCE_SUM", "sum")
+                        global_tokens = xm.all_reduce(reduce_op, token_t).item()
                         scale = 1.0 / max(global_tokens, 1.0)
                     else:
                         scale = 1.0 / max(float(accum_valid_tokens), 1.0)
