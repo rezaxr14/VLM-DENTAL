@@ -24,8 +24,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-# Clear conflicting legacy TPU multi-host cluster address variables on Kaggle/Colab
-for _var in ["TPU_PROCESS_ADDRESSES", "TPU_PROCESS_COUNT", "CLOUD_TPU_TASK_ID"]:
+# Clear conflicting legacy TPU variables and PJRT_DEVICE on Kaggle/Colab
+for _var in ["TPU_PROCESS_ADDRESSES", "TPU_PROCESS_COUNT", "CLOUD_TPU_TASK_ID", "PJRT_DEVICE"]:
     os.environ.pop(_var, None)
 
 # NOTE: PJRT_DEVICE is set lazily inside setup_hardware(), NOT here.
@@ -647,8 +647,6 @@ def main():
         pass
 
     if is_tpu and args.num_cores > 1:
-        if "PJRT_DEVICE" not in os.environ:
-            os.environ["PJRT_DEVICE"] = "TPU"
         try:
             try:
                 import torch_xla.distributed.xla_multiprocessing as xmp

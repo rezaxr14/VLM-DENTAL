@@ -52,3 +52,8 @@ All agents must adhere to the modular rules in `.agents/rules/`:
    - Zero tampering with user token limits or budgets (`LOCAL_MAX_TOKENS`, `max_tokens`, 16384 headroom).
    - Never lower, clamp, or alter user-specified token headroom or dependency versions (`transformers>=5.0.0`).
 
+10. **[Anti-False-Confidence Testing & Reality-Grounded Verification](anti_false_confidence_testing.md)**:
+    - Absolute prohibition of false-confidence claims ("100% verified", "passed tests") from local CPU/mock tests when targeting Cloud TPU/GPU hardware.
+    - Ban mock tests that remove real hardware failure modes; state explicitly what local tests prove (syntax only) vs. what requires cloud hardware verification.
+    - Zero excuses or test boasting on failure: 100% focus on stack trace forensics, C++ check failures, and memory math.
+
