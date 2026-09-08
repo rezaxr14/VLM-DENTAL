@@ -136,6 +136,12 @@ def main() -> None:
         default=None,
         help="Path to SFT adapter for reference policy (auto-defaults per track & sft-stage)",
     )
+    parser.add_argument(
+        "--model-id",
+        type=str,
+        default=os.environ.get("MODEL_NAME", "Qwen/Qwen3.5-9B"),
+        help="Base VLM model identifier or local directory (e.g. /kaggle/input/qwen3-5-9b)",
+    )
     parser.add_argument("--output-dir", type=str, default="data/models", help="Directory to save RL checkpoints")
     parser.add_argument(
         "--hf-repo",
@@ -187,6 +193,8 @@ def main() -> None:
 def run_worker(index: int, args: argparse.Namespace):
     """Per-device worker routine for GRPO training."""
     cfg = load_config(args.config)
+    if args.model_id:
+        cfg.model.name = args.model_id
 
     is_tpu = False
     try:
