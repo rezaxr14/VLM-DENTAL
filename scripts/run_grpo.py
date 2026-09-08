@@ -18,6 +18,9 @@ import signal
 import sys
 from pathlib import Path
 
+if "PJRT_DEVICE" not in os.environ:
+    os.environ["PJRT_DEVICE"] = "TPU"
+
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -164,8 +167,8 @@ def main() -> None:
                 import torch_xla.distributed.xla_multiprocessing as xmp
             except ImportError:
                 import torch_xla.distributed.xmp as xmp
-            print(f"[LAUNCH] Spawning multi-core Cloud TPU v5e-8 GRPO on {args.num_cores} cores via xmp.spawn...")
-            xmp.spawn(run_worker, args=(args,), nprocs=args.num_cores)
+            print(f"[LAUNCH] Spawning multi-core Cloud TPU v5e-8 GRPO across available TPU cores via xmp.spawn(nprocs=None)...")
+            xmp.spawn(run_worker, args=(args,), nprocs=None)
         except Exception as e:
             print(f"[LAUNCH WARNING] Could not spawn via xmp ({e}); falling back to single-core execution.")
             run_worker(0, args)

@@ -24,6 +24,9 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+if "PJRT_DEVICE" not in os.environ:
+    os.environ["PJRT_DEVICE"] = "TPU"
+
 import torch
 from torch.utils.data import DataLoader, random_split
 from tqdm import tqdm
@@ -224,7 +227,8 @@ def setup_hardware(precision: str, rank: int = 0):
         is_tpu = True
         if xm.is_master_ordinal():
             print(f"[HARDWARE] Initialized Cloud TPU device: {device} ({xm.xla_device_hw(device)}) | World Size: {get_xla_world_size(is_tpu)}")
-    except Exception:
+    except Exception as e:
+        print(f"[HARDWARE WARNING] TPU backend initialization failed ({e}); checking CUDA/CPU.")
         if torch.cuda.is_available():
             device = torch.device(f"cuda:{rank}" if torch.cuda.device_count() > rank else "cuda:0")
             print(f"[HARDWARE] Initialized CUDA GPU: {torch.cuda.get_device_name(device)} (Count: {torch.cuda.device_count()})")
@@ -637,8 +641,8 @@ def main():
                 import torch_xla.distributed.xla_multiprocessing as xmp
             except ImportError:
                 import torch_xla.distributed.xmp as xmp
-            print(f"[LAUNCH] Spawning multi-core Cloud TPU v5e-8 training on {args.num_cores} cores via xmp.spawn...")
-            xmp.spawn(run_training, args=(args,), nprocs=args.num_cores)
+            print(f"[LAUNCH] Spawning multi-core Cloud TPU v5e-8 training across available TPU cores via xmp.spawn(nprocs=None)...")
+            xmp.spawn(run_training, args=(args,), nprocs=None)
         except Exception as e:
             print(f"[LAUNCH WARNING] Could not spawn via xmp ({e}); falling back to single-core execution.")
             run_training(0, args)
