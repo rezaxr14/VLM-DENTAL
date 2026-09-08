@@ -24,6 +24,10 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+# Clear conflicting legacy TPU multi-host cluster address variables on Kaggle/Colab
+for _var in ["TPU_PROCESS_ADDRESSES", "TPU_PROCESS_COUNT", "CLOUD_TPU_TASK_ID"]:
+    os.environ.pop(_var, None)
+
 if "PJRT_DEVICE" not in os.environ:
     os.environ["PJRT_DEVICE"] = "TPU"
 
@@ -642,7 +646,10 @@ def main():
             except ImportError:
                 import torch_xla.distributed.xmp as xmp
             print(f"[LAUNCH] Spawning multi-core Cloud TPU v5e-8 training across available TPU cores via xmp.spawn(nprocs=None)...")
-            xmp.spawn(run_training, args=(args,), nprocs=None)
+            try:
+                xmp.spawn(run_training, args=(args,), nprocs=None, start_method="fork")
+            except (TypeError, ValueError):
+                xmp.spawn(run_training, args=(args,), nprocs=None)
         except Exception as e:
             print(f"\n[FATAL TPU ERROR] Could not spawn multi-core training via xmp: {e}")
             print("[DIAGNOSTIC] On Cloud TPU VMs, hardware access to /dev/vfio/* is exclusive.")

@@ -18,6 +18,10 @@ import signal
 import sys
 from pathlib import Path
 
+# Clear conflicting legacy TPU multi-host cluster address variables on Kaggle/Colab
+for _var in ["TPU_PROCESS_ADDRESSES", "TPU_PROCESS_COUNT", "CLOUD_TPU_TASK_ID"]:
+    os.environ.pop(_var, None)
+
 if "PJRT_DEVICE" not in os.environ:
     os.environ["PJRT_DEVICE"] = "TPU"
 
@@ -168,7 +172,10 @@ def main() -> None:
             except ImportError:
                 import torch_xla.distributed.xmp as xmp
             print(f"[LAUNCH] Spawning multi-core Cloud TPU v5e-8 GRPO across available TPU cores via xmp.spawn(nprocs=None)...")
-            xmp.spawn(run_worker, args=(args,), nprocs=None)
+            try:
+                xmp.spawn(run_worker, args=(args,), nprocs=None, start_method="fork")
+            except (TypeError, ValueError):
+                xmp.spawn(run_worker, args=(args,), nprocs=None)
         except Exception as e:
             print(f"\n[FATAL TPU ERROR] Could not spawn multi-core GRPO via xmp: {e}")
             print("[DIAGNOSTIC] On Cloud TPU VMs, hardware access to /dev/vfio/* is exclusive.")
