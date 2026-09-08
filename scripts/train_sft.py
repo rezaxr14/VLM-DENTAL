@@ -353,9 +353,11 @@ def run_training(index: int, args: argparse.Namespace):
 
     ModelClass = get_model_classes()
 
+    # For FSDP on multi-core TPU, load directly in float32 to avoid duplicate RAM spike from .float()
+    load_dtype = torch.float32 if (is_tpu and args.fsdp and args.num_cores > 1) else compute_dtype
     load_kwargs: Dict[str, Any] = {
         "trust_remote_code": True,
-        "torch_dtype": compute_dtype,
+        "torch_dtype": load_dtype,
     }
 
     if active_precision == "qlora":
@@ -426,7 +428,7 @@ def run_training(index: int, args: argparse.Namespace):
         train_sampler = torch.utils.data.distributed.DistributedSampler(
             train_dataset,
             num_replicas=ws,
-            rank=xm.get_ordinal(),
+            rank=index,
             shuffle=True,
         )
         train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, sampler=train_sampler, collate_fn=collator)

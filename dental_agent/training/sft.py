@@ -447,8 +447,9 @@ def wrap_distributed_model(
                 from torch_xla.distributed.fsdp import XlaFullyShardedDataParallel as FSDP
 
                 # PyTorch/XLA FSDP strictly requires master parameters in torch.float32 for sharding.
-                # Cast the model parameters to float32 before wrapping.
-                model = model.float()
+                # If not already float32, cast the model parameters before wrapping.
+                if next(model.parameters()).dtype != torch.float32:
+                    model = model.float()
 
                 auto_wrap_policy = None
                 try:
