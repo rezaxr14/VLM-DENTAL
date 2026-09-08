@@ -446,6 +446,10 @@ def wrap_distributed_model(
             try:
                 from torch_xla.distributed.fsdp import XlaFullyShardedDataParallel as FSDP
 
+                # PyTorch/XLA FSDP strictly requires master parameters in torch.float32 for sharding.
+                # Cast the model parameters to float32 before wrapping.
+                model = model.float()
+
                 auto_wrap_policy = None
                 try:
                     from peft.utils.other import fsdp_auto_wrap_policy
@@ -489,18 +493,22 @@ def wrap_distributed_model(
                     except Exception:
                         pass
 
-                wrap_kwargs: dict[str, Any] = {"reshard_after_forward": True}
+                wrap_kwargs: dict[str, Any] = {
+                    "reshard_after_forward": True,
+                    "compute_dtype": torch.bfloat16,
+                    "buffer_dtype": torch.bfloat16,
+                }
                 if auto_wrap_policy is not None:
                     wrap_kwargs["auto_wrap_policy"] = auto_wrap_policy
 
                 model = FSDP(model, **wrap_kwargs)
                 if is_master:
-                    per_core_gb = 18.4 / max(num_cores, 1)
+                    per_core_gb = 36.0 / max(num_cores, 1)
                     print(
                         f"[FSDP] Successfully wrapped model in torch_xla XlaFullyShardedDataParallel across {num_cores} TPU cores."
                     )
                     print(
-                        f"[FSDP] Base model parameters sharded (~{per_core_gb:.2f} GB/core). 16 GB HBM ceiling protected."
+                        f"[FSDP] Base model parameters sharded in FP32 with BF16 compute (~{per_core_gb:.2f} GB/core). 16 GB HBM ceiling protected."
                     )
                 return model
             except Exception as e:

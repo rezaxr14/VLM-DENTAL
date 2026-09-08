@@ -583,10 +583,17 @@ def run_training(index: int, args: argparse.Namespace):
                         if p.grad is not None:
                             p.grad.mul_(scale)
 
-                torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+                if hasattr(model, "clip_grad_norm_"):
+                    model.clip_grad_norm_(args.max_grad_norm)
+                else:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
 
                 if is_tpu:
-                    xm.optimizer_step(optimizer)
+                    if args.fsdp and args.num_cores > 1:
+                        optimizer.step()
+                        xm.mark_step()
+                    else:
+                        xm.optimizer_step(optimizer)
                 else:
                     optimizer.step()
 
