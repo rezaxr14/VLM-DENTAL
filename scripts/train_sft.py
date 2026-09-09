@@ -666,6 +666,27 @@ def main():
     except ImportError:
         pass
 
+    # Pre-sync clinical traces to local disk if missing, preventing FileNotFoundError in workers
+    resolved_traces = resolve_stage_traces(args.stage, args.track, args.data_dir)
+    if not resolved_traces:
+        traces_repo = os.environ.get("HF_TRACES_REPO", "Reza-Nadimi/vlm-dental-traces")
+        print(f"\n[AUTO-SYNC] No local trace files found for stage='{args.stage}'.")
+        print(f"[AUTO-SYNC] Synchronizing verified clinical traces from Hugging Face ({traces_repo})...")
+        try:
+            from huggingface_hub import snapshot_download
+            traces_dir = Path(args.data_dir) / "traces"
+            traces_dir.mkdir(parents=True, exist_ok=True)
+            snapshot_download(
+                repo_id=traces_repo,
+                repo_type="dataset",
+                local_dir=str(traces_dir),
+                token=os.environ.get("HF_TOKEN"),
+            )
+            resolved_traces = resolve_stage_traces(args.stage, args.track, args.data_dir)
+            print(f"[AUTO-SYNC] Traces successfully synchronized: {resolved_traces}\n")
+        except Exception as e:
+            print(f"[AUTO-SYNC WARNING] Could not auto-download traces from {traces_repo}: {e}")
+
     if is_tpu and args.num_cores > 1:
         # Pre-cache base model to local disk once before spawning 8 worker processes,
         # preventing 8-way concurrent Hugging Face download lock contention.
