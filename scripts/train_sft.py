@@ -263,6 +263,11 @@ def setup_hardware(precision: str, rank: int = 0):
         import torch_xla.core.xla_model as xm
         device = xm.xla_device()
         is_tpu = True
+        
+        import torch_xla
+        if not hasattr(torch, "xla"):
+            torch._register_device_module("xla", torch_xla)
+            
         if xm.is_master_ordinal():
             print(f"[HARDWARE] Initialized Cloud TPU device: {device} ({xm.xla_device_hw(device)}) | World Size: {get_xla_world_size(is_tpu)}")
     except Exception as e:
@@ -448,7 +453,7 @@ def run_training(index: int, args: argparse.Namespace):
         model.enable_input_require_grads()
         model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": True, "preserve_rng_state": False})
         if is_master:
-            print("[MEMORY] Gradient checkpointing enabled (use_reentrant=True) for activation memory stability.")
+            print("[MEMORY] Gradient checkpointing enabled (use_reentrant=True, preserve_rng_state=False) to bound activation memory for large sequence-length buckets.")
     except Exception as e:
         if is_master:
             print(f"[MEMORY WARNING] Could not enable gradient checkpointing: {e}")
