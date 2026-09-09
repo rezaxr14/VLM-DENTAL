@@ -438,7 +438,7 @@ def run_training(index: int, args: argparse.Namespace):
     if is_master:
         model.print_trainable_parameters()
 
-    # Enable non-reentrant gradient checkpointing before FSDP wrapping to bound activation
+    # Enable reentrant gradient checkpointing before FSDP wrapping to bound activation
     # memory for large sequence buckets and protect TPU v5e-8's 16 GB per-core HBM
     try:
         model.config.use_cache = False
@@ -446,9 +446,9 @@ def run_training(index: int, args: argparse.Namespace):
         pass
     try:
         model.enable_input_require_grads()
-        model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+        model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": True})
         if is_master:
-            print("[MEMORY] Gradient checkpointing enabled (use_reentrant=False) for activation memory stability.")
+            print("[MEMORY] Gradient checkpointing enabled (use_reentrant=True) for activation memory stability.")
     except Exception as e:
         if is_master:
             print(f"[MEMORY WARNING] Could not enable gradient checkpointing: {e}")
