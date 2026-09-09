@@ -143,6 +143,19 @@ def parse_args():
         help="Number of TPU cores for distributed data-parallel execution (1 for single core/GPU, 8 for Kaggle TPU v5e-8)",
     )
     parser.add_argument(
+        "--max-seq-len",
+        type=int,
+        default=None,
+        help="Maximum sequence length bucket ceiling (e.g. 40960, 49152) for collator",
+    )
+    parser.add_argument(
+        "--custom-buckets",
+        type=int,
+        nargs="+",
+        default=None,
+        help="Custom sequence length buckets for collator",
+    )
+    parser.add_argument(
         "--fsdp",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -430,7 +443,21 @@ def run_training(index: int, args: argparse.Namespace):
         train_dataset = full_dataset
         val_dataset = None
 
-    collator = BucketedQwenVLCollator(processor=processor, track=args.track)
+    custom_buckets = args.custom_buckets
+    if not custom_buckets and args.max_seq_len:
+        base_buckets = (
+            BucketedQwenVLCollator.BUCKETS_WITH_TOOLS
+            if args.track == "with_tools"
+            else BucketedQwenVLCollator.BUCKETS_NO_TOOLS
+        )
+        extended = [b for b in base_buckets if b <= args.max_seq_len]
+        if not extended or extended[-1] < args.max_seq_len:
+            extended.append(args.max_seq_len)
+        custom_buckets = extended
+
+    collator = BucketedQwenVLCollator(processor=processor, track=args.track, custom_buckets=custom_buckets)
+    if is_master:
+        print(f"[COLLATOR] Active sequence length buckets: {collator.buckets} (max headroom: {collator.buckets[-1]})")
 
     train_sampler = None
     ws = get_xla_world_size(is_tpu)

@@ -195,7 +195,7 @@ class BucketedQwenVLCollator:
     4. Padding tokens masked with `labels = -100`.
     """
 
-    BUCKETS_WITH_TOOLS = [4096, 6144, 8192, 12288, 16384]
+    BUCKETS_WITH_TOOLS = [4096, 6144, 8192, 12288, 16384, 24576, 32768, 40960, 49152, 65536]
     BUCKETS_NO_TOOLS = [1536, 2048, 2560, 3072]
 
     def __init__(

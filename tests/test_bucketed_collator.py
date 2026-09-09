@@ -20,9 +20,9 @@ def test_bucketed_collator_snapping_and_right_padding():
     mock_processor.tokenizer.pad_token_id = 0
 
     collator_tools = BucketedQwenVLCollator(mock_processor, track="with_tools")
-    assert collator_tools.buckets == [4096, 6144, 8192, 12288, 16384]
+    assert collator_tools.buckets == [4096, 6144, 8192, 12288, 16384, 24576, 32768, 40960, 49152, 65536]
 
-    # Test snapping logic up to 16384 headroom
+    # Test snapping logic up to 65536 headroom
     assert collator_tools._snap_to_bucket(1000) == 4096
     assert collator_tools._snap_to_bucket(4096) == 4096
     assert collator_tools._snap_to_bucket(4097) == 6144
@@ -30,7 +30,12 @@ def test_bucketed_collator_snapping_and_right_padding():
     assert collator_tools._snap_to_bucket(9000) == 12288
     assert collator_tools._snap_to_bucket(11500) == 12288
     assert collator_tools._snap_to_bucket(13000) == 16384
-    assert collator_tools._snap_to_bucket(20000) == 16384
+    assert collator_tools._snap_to_bucket(20000) == 24576
+    assert collator_tools._snap_to_bucket(30000) == 32768
+    assert collator_tools._snap_to_bucket(35000) == 40960
+    assert collator_tools._snap_to_bucket(45000) == 49152
+    assert collator_tools._snap_to_bucket(60000) == 65536
+    assert collator_tools._snap_to_bucket(70000) == 65536
 
     collator_no_tools = BucketedQwenVLCollator(mock_processor, track="no_tools")
     assert collator_no_tools.buckets == [1536, 2048, 2560, 3072]
