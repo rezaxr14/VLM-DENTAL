@@ -446,7 +446,7 @@ def run_training(index: int, args: argparse.Namespace):
         pass
     try:
         model.enable_input_require_grads()
-        model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": True})
+        model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": True, "preserve_rng_state": False})
         if is_master:
             print("[MEMORY] Gradient checkpointing enabled (use_reentrant=True) for activation memory stability.")
     except Exception as e:
