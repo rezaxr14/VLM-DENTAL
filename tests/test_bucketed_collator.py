@@ -91,3 +91,37 @@ def test_bucketed_collator_batch_padding():
     assert (collated["input_ids"][0, seq_len:] == 9999).all(), "Padding tokens must be placed at the end (right-padding)"
     assert (collated["labels"][0, seq_len:] == -100).all(), "Padded positions must have labels = -100"
     assert (collated["attention_mask"][0, seq_len:] == 0).all(), "Padded positions must have attention_mask = 0"
+
+
+def test_bucketed_collator_mm_token_type_ids():
+    mock_processor = MagicMock()
+    mock_processor.tokenizer.pad_token_id = 0
+    mock_processor.image_token_id = 151655
+
+    collator = BucketedQwenVLCollator(mock_processor, custom_buckets=[20])
+
+    seq_len = 10
+    input_ids = torch.tensor([[100, 151655, 151655, 101, 102, 103, 104, 105, 106, 107]])
+    labels = input_ids.clone()
+    attention_mask = torch.ones((1, seq_len), dtype=torch.long)
+    mm_types = torch.tensor([[0, 1, 1, 0, 0, 0, 0, 0, 0, 0]])
+
+    batch = [{
+        "input_ids": input_ids,
+        "labels": labels,
+        "attention_mask": attention_mask,
+        "mm_token_type_ids": mm_types,
+        "pixel_values": torch.randn((2, 16)),
+        "image_grid_thw": torch.tensor([[1, 2, 2]]),
+    }]
+
+    collated = collator(batch)
+
+    assert "mm_token_type_ids" in collated
+    assert collated["mm_token_type_ids"].shape == (1, 20)
+    # Original positions preserved
+    assert (collated["mm_token_type_ids"][0, :seq_len] == mm_types[0]).all()
+    # Padded positions are 0 (text/pad type)
+    assert (collated["mm_token_type_ids"][0, seq_len:] == 0).all()
+    assert "pixel_values" in collated
+    assert "image_grid_thw" in collated

@@ -214,7 +214,10 @@ class BucketedQwenVLCollator:
         else:
             self.buckets = self.BUCKETS_WITH_TOOLS
 
-        self.pad_token_id = getattr(self.tokenizer, "pad_token_id", None) or getattr(self.tokenizer, "eos_token_id", 0)
+        pad_id = getattr(self.tokenizer, "pad_token_id", None)
+        if pad_id is None:
+            pad_id = getattr(self.tokenizer, "eos_token_id", 0)
+        self.pad_token_id = pad_id if pad_id is not None else 0
 
     def _snap_to_bucket(self, length: int) -> int:
         for b in self.buckets:
@@ -233,9 +236,19 @@ class BucketedQwenVLCollator:
         padded_input_ids = []
         padded_attention_mask = []
         padded_labels = []
+        padded_mm_token_type_ids = []
 
         all_pixel_values = []
         all_image_grid_thw = []
+        all_pixel_values_videos = []
+        all_video_grid_thw = []
+
+        has_mm_types = any("mm_token_type_ids" in ex and ex["mm_token_type_ids"] is not None for ex in batch)
+        has_multimodal = any(
+            ("image_grid_thw" in ex and ex["image_grid_thw"] is not None)
+            or ("video_grid_thw" in ex and ex["video_grid_thw"] is not None)
+            for ex in batch
+        )
 
         for ex in batch:
             curr_len = ex["input_ids"].shape[1]
@@ -269,6 +282,32 @@ class BucketedQwenVLCollator:
                 labels = torch.cat([labels, pad_labels], dim=1)
                 attention_mask = torch.cat([attention_mask, pad_mask], dim=1)
 
+            # Preserve and right-pad mm_token_type_ids (required for M-RoPE 3D position computation in Qwen3.5)
+            mm_types = ex.get("mm_token_type_ids")
+            if mm_types is not None:
+                if mm_types.dim() == 1:
+                    mm_types = mm_types.unsqueeze(0)
+                if curr_len > target_len:
+                    mm_types = mm_types[:, :target_len]
+                if pad_needed > 0:
+                    pad_mm = torch.zeros((1, pad_needed), dtype=mm_types.dtype, device=mm_types.device)
+                    mm_types = torch.cat([mm_types, pad_mm], dim=1)
+                padded_mm_token_type_ids.append(mm_types)
+            elif has_multimodal or has_mm_types:
+                # Defensive synthesis of mm_token_type_ids: 0 for text/pad, 1 for image, 2 for video
+                mm_types = torch.zeros_like(input_ids)
+                image_token_id = getattr(self.processor, "image_token_id", None)
+                if not isinstance(image_token_id, int) and hasattr(self.processor, "tokenizer"):
+                    image_token_id = getattr(self.processor.tokenizer, "image_token_id", None)
+                if not isinstance(image_token_id, int) and hasattr(self.processor, "tokenizer"):
+                    try:
+                        image_token_id = self.processor.tokenizer.convert_tokens_to_ids("<|image_pad|>")
+                    except Exception:
+                        image_token_id = None
+                if isinstance(image_token_id, int) and image_token_id > 0:
+                    mm_types[input_ids == image_token_id] = 1
+                padded_mm_token_type_ids.append(mm_types)
+
             padded_input_ids.append(input_ids)
             padded_attention_mask.append(attention_mask)
             padded_labels.append(labels)
@@ -277,6 +316,10 @@ class BucketedQwenVLCollator:
                 all_pixel_values.append(ex["pixel_values"])
             if "image_grid_thw" in ex and ex["image_grid_thw"] is not None:
                 all_image_grid_thw.append(ex["image_grid_thw"])
+            if "pixel_values_videos" in ex and ex["pixel_values_videos"] is not None:
+                all_pixel_values_videos.append(ex["pixel_values_videos"])
+            if "video_grid_thw" in ex and ex["video_grid_thw"] is not None:
+                all_video_grid_thw.append(ex["video_grid_thw"])
 
         collated = {
             "input_ids": torch.cat(padded_input_ids, dim=0),
@@ -284,10 +327,16 @@ class BucketedQwenVLCollator:
             "labels": torch.cat(padded_labels, dim=0),
         }
 
+        if padded_mm_token_type_ids:
+            collated["mm_token_type_ids"] = torch.cat(padded_mm_token_type_ids, dim=0)
         if all_pixel_values:
             collated["pixel_values"] = torch.cat(all_pixel_values, dim=0)
         if all_image_grid_thw:
             collated["image_grid_thw"] = torch.cat(all_image_grid_thw, dim=0)
+        if all_pixel_values_videos:
+            collated["pixel_values_videos"] = torch.cat(all_pixel_values_videos, dim=0)
+        if all_video_grid_thw:
+            collated["video_grid_thw"] = torch.cat(all_video_grid_thw, dim=0)
 
         return collated
 
