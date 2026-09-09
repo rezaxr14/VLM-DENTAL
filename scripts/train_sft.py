@@ -548,7 +548,12 @@ def run_training(index: int, args: argparse.Namespace):
         save_sft_checkpoint(start_epoch, is_preemption=True)
         sys.exit(0)
 
-    signal.signal(signal.SIGTERM, sigterm_handler)
+    try:
+        import threading
+        if threading.current_thread() is threading.main_thread():
+            signal.signal(signal.SIGTERM, sigterm_handler)
+    except (ValueError, AttributeError, RuntimeError):
+        pass
 
     log_file = out_path / "training_loss.jsonl"
     model.train()
