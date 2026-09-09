@@ -127,14 +127,28 @@ def parse_args():
     parser.add_argument("--lora-r", type=int, default=32, help="LoRA rank dimension")
     parser.add_argument("--lora-alpha", type=int, default=64, help="LoRA alpha scaling factor")
     parser.add_argument("--lora-dropout", type=float, default=0.05, help="LoRA dropout probability")
-    parser.add_argument("--eval-every-steps", type=int, default=25, help="Frequency of validation evaluation in steps")
+    parser.add_argument("--eval-every-steps", type=int, default=0, help="Frequency of validation evaluation in steps (0 = epoch-boundary only; only active when --eval-strategy includes 'steps')")
+    parser.add_argument(
+        "--eval-strategy",
+        type=str,
+        default="epoch",
+        choices=["epoch", "steps", "both"],
+        help="Validation evaluation strategy: 'epoch' (at end of each epoch), 'steps' (every --eval-every-steps), or 'both' (default: epoch)",
+    )
+    parser.add_argument(
+        "--save-strategy",
+        type=str,
+        default="epoch",
+        choices=["epoch", "steps", "both"],
+        help="Checkpoint save & HF push strategy: 'epoch' (at end of each epoch), 'steps' (every --push-every-steps), or 'both' (default: epoch)",
+    )
     parser.add_argument(
         "--hf-repo",
         type=str,
         default=os.environ.get("HF_ARTIFACT_REPO", "Reza-Nadimi/vlm-dental-models"),
         help="Hugging Face Hub repository for checkpoint sync (default: Reza-Nadimi/vlm-dental-models)",
     )
-    parser.add_argument("--push-every-steps", type=int, default=25, help="Frequency of HF checkpoint upload in steps")
+    parser.add_argument("--push-every-steps", type=int, default=0, help="Frequency of HF checkpoint upload in steps (0 = epoch-boundary only; only active when --save-strategy includes 'steps')")
     parser.add_argument("--resume-hf", type=str, default=None, help="Hugging Face repo to resume latest checkpoint from")
     parser.add_argument(
         "--num-cores",
@@ -359,6 +373,10 @@ def run_training(index: int, args: argparse.Namespace):
         print(f"* Warmup Ratio: {args.warmup_ratio} | Max Grad Norm: {args.max_grad_norm}")
         print("======================================================================")
 
+    # Stagger worker process initialization to prevent simultaneous 8-way CPU RAM surge
+    if is_tpu and args.num_cores > 1:
+        time.sleep(index * 1.5)
+
     # Load processor and model
     from transformers import AutoProcessor
     processor = AutoProcessor.from_pretrained(args.model_id, trust_remote_code=True)
@@ -420,6 +438,21 @@ def run_training(index: int, args: argparse.Namespace):
     if is_master:
         model.print_trainable_parameters()
 
+    # Enable non-reentrant gradient checkpointing before FSDP wrapping to bound activation
+    # memory for large sequence buckets and protect TPU v5e-8's 16 GB per-core HBM
+    try:
+        model.config.use_cache = False
+    except AttributeError:
+        pass
+    try:
+        model.enable_input_require_grads()
+        model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+        if is_master:
+            print("[MEMORY] Gradient checkpointing enabled (use_reentrant=False) for activation memory stability.")
+    except Exception as e:
+        if is_master:
+            print(f"[MEMORY WARNING] Could not enable gradient checkpointing: {e}")
+
     model = wrap_distributed_model(
         model,
         is_tpu=is_tpu,
@@ -427,6 +460,16 @@ def run_training(index: int, args: argparse.Namespace):
         use_fsdp=args.fsdp,
         is_master=is_master,
     )
+
+    # Host RAM reclamation: force glibc to release unmapped model-loading heap memory back to the Linux kernel
+    import gc, ctypes
+    gc.collect()
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+        if is_master:
+            print("[MEMORY] glibc malloc_trim(0) invoked: released unmapped host CPU loading buffers back to OS.")
+    except Exception:
+        pass
 
     # Dataset & Bucketed Collator
     full_dataset = DentalSFTDataset(resolved_traces, processor=processor, track=args.track, data_dir=args.data_dir)
@@ -598,17 +641,15 @@ def run_training(index: int, args: argparse.Namespace):
         accum_valid_tokens = 0
 
         for step, batch in enumerate(pbar):
+            # Count valid tokens directly on CPU tensor before moving to device.
+            # This completely eliminates premature TPU-CPU synchronization barriers
+            # before backward, keeping lazy tensor graph execution clean.
+            num_valid = int((batch["labels"] != -100).sum().item())
             inputs = {k: v.to(device) for k, v in batch.items()}
             outputs = model(**inputs)
 
-            # Mathematical Gradient Accumulation (Claude Point 1):
-            # outputs.loss is HF internal mean across valid tokens in this microbatch.
-            # Scale by num_valid to get unreduced token-loss sum and accumulate gradients.
-            valid_tokens = (inputs["labels"] != -100).sum()
-            num_valid = valid_tokens.item()
-
             if num_valid > 0:
-                batch_loss_sum = outputs.loss * valid_tokens
+                batch_loss_sum = outputs.loss * num_valid
                 batch_loss_sum.backward()
                 accum_loss_sum += batch_loss_sum.item()
                 accum_valid_tokens += num_valid
@@ -662,8 +703,9 @@ def run_training(index: int, args: argparse.Namespace):
                         "lr": lr_current,
                     }
 
-                    # Periodic evaluation on held-out validation set
-                    if val_dataloader and total_steps % args.eval_every_steps == 0:
+                    # Step-interval evaluation on held-out validation set
+                    eval_at_steps = args.eval_strategy in ("steps", "both")
+                    if eval_at_steps and val_dataloader and args.eval_every_steps > 0 and total_steps % args.eval_every_steps == 0:
                         val_loss = evaluate_loss(model, val_dataloader, device, is_tpu)
                         log_entry["val_loss"] = val_loss
                         if val_loss < best_val_loss:
@@ -675,13 +717,35 @@ def run_training(index: int, args: argparse.Namespace):
                     with open(log_file, "a", encoding="utf-8") as f:
                         f.write(json.dumps(log_entry) + "\n")
 
-                    # Periodic checkpoint push to HF Hub
-                    if args.hf_repo and total_steps % args.push_every_steps == 0:
+                    # Step-interval checkpoint push to HF Hub
+                    save_at_steps = args.save_strategy in ("steps", "both")
+                    if save_at_steps and args.hf_repo and args.push_every_steps > 0 and total_steps % args.push_every_steps == 0:
                         save_sft_checkpoint(epoch)
 
-        # Epoch end checkpoint
-        if is_master:
+        # ── Epoch-End: Guaranteed Validation & Checkpoint ──
+        # Evaluate validation loss at every epoch boundary regardless of step-interval,
+        # ensuring best_adapter is always compared at the true epoch completion point.
+        if is_master and val_dataloader and args.eval_strategy in ("epoch", "both"):
+            val_loss = evaluate_loss(model, val_dataloader, device, is_tpu)
+            print(f"\n[EPOCH {epoch} EVALUATION] val_loss = {val_loss:.4f} (previous best = {best_val_loss:.4f})")
+            epoch_log = {"epoch": epoch, "step": total_steps, "epoch_end_val_loss": val_loss}
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                best_adapter_path.mkdir(parents=True, exist_ok=True)
+                unwrap_peft_model(model).save_pretrained(str(best_adapter_path))
+                print(f"[VALIDATION] New best adapter saved at Epoch {epoch} boundary! val_loss = {val_loss:.4f}")
+            with open(log_file, "a", encoding="utf-8") as f:
+                f.write(json.dumps(epoch_log) + "\n")
+
+        # Epoch-end checkpoint save
+        if is_master and args.save_strategy in ("epoch", "both"):
             save_sft_checkpoint(epoch + 1)
+
+        # Multi-core TPU synchronization barrier: ensure master finishes
+        # epoch-end validation and checkpoint saving before workers proceed.
+        if is_tpu and args.num_cores > 1:
+            import torch_xla.core.xla_model as xm
+            xm.rendezvous(f"epoch_end_{epoch}")
 
     if is_master:
         print(f"\n[COMPLETE] Stage 1 SFT ({args.stage}) finished! Final checkpoint saved to {out_path}.")

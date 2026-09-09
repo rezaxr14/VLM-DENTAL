@@ -58,20 +58,22 @@ class TraceGenState(TypedDict, total=False):
 
 import os
 
-# Per-provider defaults for context-trim threshold (roughly 70% of that provider's
-# real TPM/context ceiling) and max output tokens. Both are .env-overridable per
-# provider; these are just the fallback if no env var is set. Groq's numbers are
-# confirmed from the console (8,000 TPM) for qwen/qwen3.6-27b -- the others are
-# generous since neither NVIDIA nor Gemini has shown an actual ceiling.
+# Per-provider defaults for context-trim threshold and max output tokens. Both are
+# .env-overridable per provider; these are the fallbacks if no env var is set.
+# Locked to 16,384 headroom across all providers in compliance with Rule 19.
 _PROVIDER_TRIM_THRESHOLD_DEFAULTS: dict[str, int] = {
-    "groq": 2048,
-    "openrouter": 4096,
-    "nvidia_nim": 8192,
+    "groq": 16384,
+    "openrouter": 16384,
+    "nvidia_nim": 16384,
     "gemini": 16384,
     "local": 16384,
 }
 _PROVIDER_MAX_TOKENS_DEFAULTS: dict[str, int] = {
-    "groq": 1024, "openrouter": 1536, "nvidia_nim": 16384, "gemini": 16384, "local": 8192,
+    "groq": 16384,
+    "openrouter": 16384,
+    "nvidia_nim": 16384,
+    "gemini": 16384,
+    "local": 16384,
 }
 
 
@@ -141,9 +143,9 @@ def _reasoning_node_factory(
         est_tokens += image_count * 600
 
         def _trim_images(keep_last_n: int):
-            # Find all image blocks in tool responses (skip the first user turn which has the original X-ray)
+            # Find all image blocks in tool responses (skip index 0 [system] and index 1 [initial user turn with original X-ray])
             img_blocks = []
-            for m in state["messages"][1:]:
+            for m in state["messages"][2:]:
                 if isinstance(m.get("content"), list):
                     for block in m["content"]:
                         if isinstance(block, dict) and block.get("type") == "image":
@@ -152,7 +154,7 @@ def _reasoning_node_factory(
             # Trim the oldest ones
             if len(img_blocks) > keep_last_n:
                 to_trim = img_blocks[:-keep_last_n] if keep_last_n > 0 else img_blocks
-                for m in state["messages"][1:]:
+                for m in state["messages"][2:]:
                     if isinstance(m.get("content"), list):
                         new_content = []
                         for block in m["content"]:

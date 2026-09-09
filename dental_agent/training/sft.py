@@ -25,6 +25,8 @@ from tqdm import tqdm
 from dental_agent.config import ProjectConfig, TrainingConfig
 from dental_agent.model.backbone import load_model, apply_lora, safe_process_vision_info
 from dental_agent.model.checkpoints import save_checkpoint
+from dental_agent.tools.registry import ToolRegistry
+from dental_agent.agent.tool_dispatch import execute_tool_call
 
 
 def resolve_image_path(sample: dict[str, Any], data_dir: str | Path = "data") -> Optional[str]:
@@ -195,7 +197,7 @@ class BucketedQwenVLCollator:
     4. Padding tokens masked with `labels = -100`.
     """
 
-    BUCKETS_WITH_TOOLS = [4096, 6144, 8192, 12288, 16384, 24576, 32768, 40960, 49152, 65536]
+    BUCKETS_WITH_TOOLS = [4096, 6144, 8192, 12288, 16384, 24576, 32768]
     BUCKETS_NO_TOOLS = [1536, 2048, 2560, 3072]
 
     def __init__(
@@ -355,6 +357,8 @@ class DentalSFTDataset(Dataset):
         self.track = track
         self.data_dir = data_dir
         self.records: list[dict[str, Any]] = []
+        self.registry = ToolRegistry.create_default()
+        self._crop_cache: dict[str, Image.Image] = {}
 
         paths = [data_path] if isinstance(data_path, (str, Path)) else list(data_path)
         for p in paths:
@@ -393,37 +397,133 @@ class DentalSFTDataset(Dataset):
                 {"role": "assistant", "content": json.dumps(rec.get("final_answer", {}))},
             ]
 
-        # Sanitize messages: replace string '<Image>' placeholders with cropped image or base_image
+        # Process raw messages with dynamic tool image generation
         sanitized_messages = []
-        for msg in raw_messages:
+        turns_records = rec.get("turns", [])
+        image_id_str = str(rec.get("image_id", idx))
+
+        IMAGE_PRODUCING_TOOLS = {
+            "zoom_crop",
+            "denoise",
+            "window_level",
+            "contralateral_compare",
+            "enhance_contrast",
+        }
+
+        last_assistant_tool_calls: list[dict[str, Any]] = []
+        assistant_turn_count = 0
+
+        for msg_idx, msg in enumerate(raw_messages):
             role = msg.get("role")
             content = msg.get("content")
 
-            if isinstance(content, list):
+            if role == "assistant":
+                last_assistant_tool_calls = []
+                try:
+                    if isinstance(content, str):
+                        parsed = json.loads(content)
+                    elif isinstance(content, dict):
+                        parsed = content
+                    else:
+                        parsed = {}
+                    if isinstance(parsed, dict) and "tool_calls" in parsed:
+                        calls = parsed["tool_calls"]
+                        if isinstance(calls, list):
+                            last_assistant_tool_calls = calls
+                except Exception:
+                    pass
+                assistant_turn_count += 1
+                sanitized_messages.append(msg)
+
+            elif role == "user" and (msg_idx == 1 or len(sanitized_messages) <= 1):
+                # Turn 1: Always provide the authentic full native-resolution panoramic base_image
                 sanitized_content = []
-                for item in content:
-                    if isinstance(item, dict) and item.get("type") == "image":
-                        img_val = item.get("image")
-                        if isinstance(img_val, str) and (img_val == "<Image>" or not os.path.isfile(img_val)):
-                            # Substitute valid PIL Image to prevent process_vision_info crash
-                            sanitized_content.append({"type": "image", "image": base_image})
+                if isinstance(content, list):
+                    prompt_text = ""
+                    for item in content:
+                        if isinstance(item, dict) and item.get("type") == "text":
+                            txt = item.get("text", "")
+                            if "[Earlier tool result omitted" not in txt:
+                                prompt_text += txt + "\n"
+                    if not prompt_text.strip():
+                        prompt_text = "Analyze this panoramic X-ray. Identify any abnormal teeth and determine the diagnosis."
+                    sanitized_content.append({"type": "image", "image": base_image})
+                    sanitized_content.append({"type": "text", "text": prompt_text.strip()})
+                elif isinstance(content, str):
+                    sanitized_content.append({"type": "image", "image": base_image})
+                    sanitized_content.append({"type": "text", "text": content})
+                else:
+                    sanitized_content.append({"type": "image", "image": base_image})
+                sanitized_messages.append({"role": "user", "content": sanitized_content})
+
+            elif role == "user":
+                # Subsequent tool observation turns: generate authentic tool outputs dynamically
+                if isinstance(content, list):
+                    sanitized_content = []
+                    pending_calls = list(last_assistant_tool_calls)
+                    if not pending_calls and assistant_turn_count - 1 < len(turns_records):
+                        t_rec = turns_records[assistant_turn_count - 1]
+                        raw_calls = t_rec.get("tool_calls_this_turn", [])
+                        pending_calls = [{"tool": c.get("tool_name"), "args": c.get("tool_args", {})} for c in raw_calls]
+
+                    call_cursor = 0
+                    for item_idx, item in enumerate(content):
+                        if isinstance(item, dict) and item.get("type") == "image":
+                            # Match the tool that generated this image
+                            matched_tool_name = None
+                            if item_idx + 1 < len(content):
+                                next_item = content[item_idx + 1]
+                                if isinstance(next_item, dict) and next_item.get("type") == "text":
+                                    txt = next_item.get("text", "")
+                                    if txt.startswith("Result of "):
+                                        matched_tool_name = txt.split(":")[0].replace("Result of ", "").strip()
+
+                            tool_args = {}
+                            if matched_tool_name:
+                                for pc in pending_calls:
+                                    if pc.get("tool") == matched_tool_name:
+                                        tool_args = pc.get("args", {})
+                                        break
+                            elif call_cursor < len(pending_calls):
+                                pc = pending_calls[call_cursor]
+                                matched_tool_name = pc.get("tool")
+                                tool_args = pc.get("args", {})
+                                call_cursor += 1
+
+                            if matched_tool_name is None:
+                                matched_tool_name = "zoom_crop"
+
+                            tool_img = None
+                            if matched_tool_name in IMAGE_PRODUCING_TOOLS:
+                                cache_key = f"{image_id_str}_{matched_tool_name}_{json.dumps(tool_args, sort_keys=True)}"
+                                if cache_key in self._crop_cache:
+                                    tool_img = self._crop_cache[cache_key]
+                                else:
+                                    try:
+                                        res = execute_tool_call(self.registry, matched_tool_name, tool_args, base_image)
+                                        if isinstance(res, Image.Image):
+                                            tool_img = res
+                                            self._crop_cache[cache_key] = tool_img
+                                    except Exception:
+                                        pass
+
+                            if tool_img is None:
+                                try:
+                                    fallback_box = tool_args.get("bbox") if isinstance(tool_args, dict) and "bbox" in tool_args else [100.0, 100.0, 200.0, 200.0]
+                                    tool_img = execute_tool_call(self.registry, "zoom_crop", {"bbox": fallback_box}, base_image)
+                                except Exception:
+                                    tool_img = Image.new("RGB", (256, 256), color=(128, 128, 128))
+
+                            sanitized_content.append({"type": "image", "image": tool_img})
                         else:
                             sanitized_content.append(item)
-                    else:
-                        sanitized_content.append(item)
-                sanitized_messages.append({"role": role, "content": sanitized_content})
-            else:
-                # Ensure the very first user message carries the base image
-                if role == "user" and len(sanitized_messages) == 1:
-                    sanitized_messages.append({
-                        "role": "user",
-                        "content": [
-                            {"type": "image", "image": base_image},
-                            {"type": "text", "text": str(content)},
-                        ],
-                    })
+
+                    sanitized_messages.append({"role": "user", "content": sanitized_content})
                 else:
                     sanitized_messages.append(msg)
+
+            else:
+                sanitized_messages.append(msg)
 
         text = self.processor.apply_chat_template(
             sanitized_messages, tokenize=False, add_generation_prompt=False
