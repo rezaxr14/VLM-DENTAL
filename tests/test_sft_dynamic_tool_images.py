@@ -159,11 +159,15 @@ def test_collator_bucket_snapping_headroom():
     assert collator.buckets[-1] == 32768
     assert 65536 not in collator.buckets
 
-    assert collator._snap_to_bucket(3000) == 4096
-    assert collator._snap_to_bucket(5000) == 6144
+    assert collator._snap_to_bucket(3000) == 8192
     assert collator._snap_to_bucket(7500) == 8192
-    assert collator._snap_to_bucket(10000) == 12288
+    assert collator._snap_to_bucket(10000) == 16384
     assert collator._snap_to_bucket(15000) == 16384
-    assert collator._snap_to_bucket(20000) == 24576
+    assert collator._snap_to_bucket(20000) == 32768
     assert collator._snap_to_bucket(30000) == 32768
     assert collator._snap_to_bucket(35000) == 32768
+
+    collator_no_tools = BucketedQwenVLCollator(processor=processor, track="no_tools")
+    assert collator_no_tools.buckets == [1536, 2048, 2560, 3072, 8192]
+    assert collator_no_tools._snap_to_bucket(1000) == 1536
+    assert collator_no_tools._snap_to_bucket(4000) == 8192

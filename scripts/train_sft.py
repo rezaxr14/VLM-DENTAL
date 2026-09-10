@@ -175,6 +175,12 @@ def parse_args():
         default=True,
         help="Enable PyTorch/XLA FSDP parameter sharding across TPU cores to fit 9B BF16 model within 16 GB HBM (default: True on multi-core TPU)",
     )
+    parser.add_argument(
+        "--xla-cache-dir",
+        type=str,
+        default=None,
+        help="Directory for XLA persistent compilation cache (auto-detected if attached as Kaggle input or in data/xla_cache)",
+    )
     args = parser.parse_args()
     if args.gradient_accumulation_steps is None:
         args.gradient_accumulation_steps = 1 if args.num_cores > 1 else 16
@@ -336,6 +342,53 @@ def evaluate_loss(model: torch.nn.Module, val_loader: DataLoader, device: torch.
     return total_val_loss / max(val_batches, 1)
 
 
+def resolve_xla_cache_dir(cache_arg: str | None) -> tuple[Path | None, bool]:
+    """Resolve persistent XLA compilation cache directory and whether it is read-only.
+
+    Checks in order:
+    1. Explicit CLI argument --xla-cache-dir
+    2. Environment variable XLA_PERSISTENT_CACHE_PATH or XLA_CACHE_DIR
+    3. Attached Kaggle input dataset directories (/kaggle/input/*xla*cache*)
+    4. Local working directories (/kaggle/working/xla_cache, data/xla_cache)
+
+    Returns (resolved_path, readonly). If no cache is found or valid, returns (None, False).
+    """
+    candidates: list[Path] = []
+    if cache_arg:
+        candidates.append(Path(cache_arg))
+    for env_var in ["XLA_PERSISTENT_CACHE_PATH", "XLA_CACHE_DIR"]:
+        val = os.environ.get(env_var)
+        if val:
+            candidates.append(Path(val))
+
+    # Standard Kaggle input dataset paths
+    kaggle_input = Path("/kaggle/input")
+    if kaggle_input.is_dir():
+        for item in sorted(kaggle_input.glob("*xla*cache*")):
+            if item.is_dir():
+                candidates.append(item)
+        for item in sorted(kaggle_input.glob("*cache*")):
+            if item.is_dir():
+                candidates.append(item)
+
+    # Writable scratch / local fallbacks
+    candidates.extend([
+        Path("/kaggle/working/xla_cache"),
+        Path("data/xla_cache"),
+    ])
+
+    for cand in candidates:
+        if cand.is_dir():
+            # Check if directory is under /kaggle/input (read-only mount)
+            try:
+                is_readonly = str(cand.resolve()).startswith(str(kaggle_input.resolve()))
+            except Exception:
+                is_readonly = False
+            return cand, is_readonly
+
+    return None, False
+
+
 def run_training(index: int, args: argparse.Namespace):
     """Worker function executed per core/device."""
     # Resolve stage-specific traces and default output directory
@@ -382,6 +435,23 @@ def run_training(index: int, args: argparse.Namespace):
         print(f"* Effective BS: {args.batch_size * args.gradient_accumulation_steps * world_size} ({world_size} device replicas)")
         print(f"* Warmup Ratio: {args.warmup_ratio} | Max Grad Norm: {args.max_grad_norm}")
         print("======================================================================")
+
+    # Initialize persistent XLA compilation cache if available (or continue gracefully without crashing)
+    cache_path, is_readonly = resolve_xla_cache_dir(args.xla_cache_dir)
+    if is_tpu and cache_path:
+        try:
+            import torch_xla.runtime as xr
+            rank_cache = cache_path / f"rank_{index}"
+            target_cache = rank_cache if rank_cache.is_dir() else cache_path
+            xr.initialize_cache(str(target_cache), readonly=is_readonly)
+            if is_master:
+                mode_str = "read-only" if is_readonly else "writable"
+                print(f"[XLA CACHE] Initialized persistent compilation cache ({mode_str}): {target_cache}")
+        except Exception as e:
+            if is_master:
+                print(f"[XLA CACHE WARNING] Could not initialize XLA persistent cache ({e}); continuing with normal on-the-fly compilation.")
+    elif is_master and is_tpu:
+        print("[XLA CACHE] No persistent compilation cache specified or detected; continuing with normal on-the-fly compilation.")
 
     # Stagger worker process initialization to prevent simultaneous 8-way CPU RAM surge
     if is_tpu and args.num_cores > 1:
