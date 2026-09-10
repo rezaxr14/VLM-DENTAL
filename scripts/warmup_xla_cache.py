@@ -383,8 +383,8 @@ def main():
 
     if is_tpu and args.num_cores > 1:
         import torch_xla.distributed.xla_multiprocessing as xmp
-        print(f"[LAUNCH] Spawning AOT compilation warmup across {args.num_cores} TPU cores via xmp.spawn...")
-        xmp.spawn(run_warmup_worker, args=(args,), nprocs=args.num_cores)
+        print(f"[LAUNCH] Spawning AOT compilation warmup across available TPU cores via xmp.spawn(nprocs=None)...")
+        xmp.spawn(run_warmup_worker, args=(args,), nprocs=None)
     else:
         run_warmup_worker(0, args)
 
