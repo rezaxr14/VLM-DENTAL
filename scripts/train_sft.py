@@ -264,6 +264,11 @@ def setup_hardware(precision: str, rank: int = 0):
         device = xm.xla_device()
         is_tpu = True
         
+        # torch.utils.checkpoint's fork_rng() calls torch.get_device_module("xla")
+        # unconditionally -- before it even checks preserve_rng_state -- and that
+        # lookup is just getattr(torch, "xla", None). XLA has no torch.xla submodule,
+        # so it raises. Registering torch_xla here satisfies that existence check;
+        # preserve_rng_state=False means its actual methods never get called.
         import torch_xla
         if not hasattr(torch, "xla"):
             torch._register_device_module("xla", torch_xla)
@@ -396,6 +401,7 @@ def run_training(index: int, args: argparse.Namespace):
         "trust_remote_code": True,
         "dtype": load_dtype,
         "low_cpu_mem_usage": True,
+        "attn_implementation": "sdpa",
     }
 
     if active_precision == "qlora":
