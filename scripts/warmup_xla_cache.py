@@ -23,6 +23,10 @@ import traceback
 from pathlib import Path
 from typing import Any, Dict, List
 
+# Clear conflicting legacy TPU variables and PJRT_DEVICE on Kaggle/Colab
+for _var in ["TPU_PROCESS_ADDRESSES", "TPU_PROCESS_COUNT", "CLOUD_TPU_TASK_ID", "PJRT_DEVICE"]:
+    os.environ.pop(_var, None)
+
 import torch
 from PIL import Image
 
@@ -50,6 +54,10 @@ def setup_hardware(precision: str, rank: int = 0):
     is_tpu = False
     device = torch.device("cpu")
     try:
+        # Set PJRT_DEVICE right before the first xla_model import to ensure
+        # a single, controlled initialization of the PJRT TPU client.
+        if "PJRT_DEVICE" not in os.environ:
+            os.environ["PJRT_DEVICE"] = "TPU"
         import torch_xla.core.xla_model as xm
         device = xm.xla_device()
         is_tpu = True
