@@ -368,15 +368,27 @@ def resolve_xla_cache_dir(cache_arg: str | None) -> tuple[Path | None, bool]:
         if val:
             candidates.append(Path(val))
 
-    # Standard Kaggle input dataset paths
+    # Explicit Kaggle dataset mount locations matching the user's dataset pattern
+    candidates.extend([
+        Path("/kaggle/input/datasets/rezanadimikj/vlm-dental-xla-cache"),
+        Path("/kaggle/input/datasets/rezanadimikj/vlm-dental-xla-cache/xla_cache"),
+        Path("/kaggle/input/vlm-dental-xla-cache"),
+        Path("/kaggle/input/vlm-dental-xla-cache/xla_cache"),
+        Path("/kaggle/input/xla-cache-sft"),
+    ])
+
+    # Dynamic search across /kaggle/input (both root and datasets/* subtrees)
     kaggle_input = Path("/kaggle/input")
     if kaggle_input.is_dir():
+        for item in sorted(kaggle_input.glob("**/datasets/*/*xla*cache*")):
+            if item.is_dir():
+                candidates.insert(0, item)
+        for item in sorted(kaggle_input.glob("**/*xla*cache*")):
+            if item.is_dir():
+                candidates.insert(0, item)
         for item in sorted(kaggle_input.glob("*xla*cache*")):
             if item.is_dir():
-                candidates.append(item)
-        for item in sorted(kaggle_input.glob("*cache*")):
-            if item.is_dir():
-                candidates.append(item)
+                candidates.insert(0, item)
 
     # Writable scratch / local fallbacks
     candidates.extend([
@@ -384,14 +396,22 @@ def resolve_xla_cache_dir(cache_arg: str | None) -> tuple[Path | None, bool]:
         Path("data/xla_cache"),
     ])
 
+    def is_valid_cache(d: Path) -> bool:
+        if not d.is_dir():
+            return False
+        # Valid cache must contain compilation artifacts other than just dataset-metadata.json
+        files = [f for f in d.iterdir() if f.name != "dataset-metadata.json"]
+        return len(files) > 0
+
     for cand in candidates:
-        if cand.is_dir():
+        target = cand / "xla_cache" if (cand / "xla_cache").is_dir() else cand
+        if is_valid_cache(target):
             # Check if directory is under /kaggle/input (read-only mount)
             try:
-                is_readonly = str(cand.resolve()).startswith(str(kaggle_input.resolve()))
+                is_readonly = str(target.resolve()).startswith(str(kaggle_input.resolve()))
             except Exception:
                 is_readonly = False
-            return cand, is_readonly
+            return target, is_readonly
 
     return None, False
 
@@ -448,8 +468,12 @@ def run_training(index: int, args: argparse.Namespace):
     if is_tpu and cache_path:
         try:
             import torch_xla.runtime as xr
-            rank_cache = cache_path / f"rank_{index}"
-            target_cache = rank_cache if (rank_cache.is_dir() and any(rank_cache.iterdir())) else cache_path
+            # Prefer shared cache directly unless legacy non-symlink per-rank directories with .bin files exist
+            legacy_rank_cache = cache_path / f"rank_{index}"
+            if legacy_rank_cache.is_dir() and not legacy_rank_cache.is_symlink() and any(legacy_rank_cache.glob("*.bin")):
+                target_cache = legacy_rank_cache
+            else:
+                target_cache = cache_path
             xr.initialize_cache(str(target_cache), readonly=is_readonly)
             if is_master:
                 mode_str = "read-only" if is_readonly else "writable"

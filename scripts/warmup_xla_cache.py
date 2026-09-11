@@ -377,8 +377,7 @@ def run_warmup_worker(index: int, args: argparse.Namespace):
                         pass
 
             print(f"[KAGGLE CLI] To upload to Kaggle Datasets, run:")
-            print(f"  kaggle datasets create -p {cache_base} -u --dir-mode tar")
-            print(f"  (or `kaggle datasets version -p {cache_base} -m 'Update cache' --dir-mode tar`)")
+            print(f"  kaggle datasets version -p {cache_base} -m 'Update SFT XLA persistent cache' --dir-mode tar || kaggle datasets create -p {cache_base} --dir-mode tar")
 
     except Exception as e:
         import sys, traceback
