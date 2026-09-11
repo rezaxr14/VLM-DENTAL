@@ -678,30 +678,43 @@ def wrap_distributed_model(
                 import torch_xla.runtime as xr
 
                 os.environ["XLA_USE_SPMD"] = "1"
-                num_devices = xr.global_device_count()
-                device_ids = np.arange(num_devices)
-                mesh = xs.Mesh(device_ids, (num_devices,), ("data",))
+
+                # Resolve true global TPU device count across host (8 cores on TPU v5e-8)
+                num_devs = num_cores
+                if hasattr(xr, "addressable_device_count"):
+                    try:
+                        addr_cnt = xr.addressable_device_count()
+                        if addr_cnt > 1:
+                            num_devs = addr_cnt
+                    except Exception:
+                        pass
+
+                device_ids = np.arange(num_devs)
+                mesh = xs.Mesh(device_ids, (num_devs,), ("data",))
                 xs.set_global_mesh(mesh)
                 if is_master:
-                    print(f"[SPMD] Initialized GSPMD 1D mesh across {num_devices} TPU devices.")
+                    print(f"[SPMD] Initialized GSPMD 1D mesh across {num_devs} TPU devices.")
 
                 model = model.to(device)
 
                 # Shard parameter tensors across the TPU devices so each core only holds ~2.3 GB HBM
                 sharded_count = 0
                 for name, p in model.named_parameters():
-                    if p.ndim >= 2 and p.shape[0] % num_devices == 0:
-                        xs.mark_sharding(p, mesh, ("data",) + (None,) * (p.ndim - 1))
-                        sharded_count += 1
-                    elif p.ndim >= 2 and p.shape[1] % num_devices == 0:
-                        xs.mark_sharding(p, mesh, (None, "data") + (None,) * (p.ndim - 2))
-                        sharded_count += 1
-                    elif p.ndim == 1 and p.shape[0] % num_devices == 0:
-                        xs.mark_sharding(p, mesh, ("data",))
-                        sharded_count += 1
+                    try:
+                        if p.ndim >= 2 and p.shape[0] % num_devs == 0:
+                            xs.mark_sharding(p, mesh, ("data",) + (None,) * (p.ndim - 1))
+                            sharded_count += 1
+                        elif p.ndim >= 2 and p.shape[1] % num_devs == 0:
+                            xs.mark_sharding(p, mesh, (None, "data") + (None,) * (p.ndim - 2))
+                            sharded_count += 1
+                        elif p.ndim == 1 and p.shape[0] % num_devs == 0:
+                            xs.mark_sharding(p, mesh, ("data",))
+                            sharded_count += 1
+                    except Exception:
+                        pass
 
                 if is_master:
-                    print(f"[SPMD] Sharded {sharded_count} parameter tensors across {num_devices} TPU cores via xs.mark_sharding.")
+                    print(f"[SPMD] Sharded {sharded_count} parameter tensors across {num_devs} TPU cores via xs.mark_sharding.")
                 return model
             except Exception as e:
                 if is_master:

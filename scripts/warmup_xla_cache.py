@@ -74,11 +74,15 @@ DEFAULT_BUCKETS_WITH_TOOLS = [8192, 16384, 32768]
 DEFAULT_BUCKETS_NO_TOOLS = [1536, 2048, 2560, 3072, 8192]
 
 
-def setup_hardware(precision: str, rank: int = 0, xla_pallas: bool = True):
+def setup_hardware(precision: str, rank: int = 0, xla_pallas: bool = True, xla_spmd: bool = False):
     """Detect hardware and initialize device for worker rank."""
     is_tpu = False
     device = torch.device("cpu")
     try:
+        # If SPMD is requested, set XLA_USE_SPMD before PJRT device initialization
+        if xla_spmd:
+            os.environ["XLA_USE_SPMD"] = "1"
+
         # Set PJRT_DEVICE right before the first xla_model import to ensure
         # a single, controlled initialization of the PJRT TPU client.
         if "PJRT_DEVICE" not in os.environ:
@@ -181,6 +185,7 @@ def run_warmup_worker(index: int, args: argparse.Namespace):
             args.precision,
             rank=index,
             xla_pallas=getattr(args, "xla_pallas", True),
+            xla_spmd=getattr(args, "xla_spmd", False),
         )
 
         is_master = True

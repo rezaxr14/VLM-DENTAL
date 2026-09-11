@@ -288,11 +288,15 @@ def get_xla_world_size(is_tpu: bool = False) -> int:
     return 1
 
 
-def setup_hardware(precision: str, rank: int = 0, xla_pallas: bool = True):
+def setup_hardware(precision: str, rank: int = 0, xla_pallas: bool = True, xla_spmd: bool = False):
     """Detect hardware backend: Cloud TPU v5e-8 vs CUDA GPU vs CPU."""
     is_tpu = False
     device = None
     try:
+        # If SPMD is requested, set XLA_USE_SPMD before PJRT device initialization
+        if xla_spmd:
+            os.environ["XLA_USE_SPMD"] = "1"
+
         # Set PJRT_DEVICE right before the first xla_model import to ensure
         # a single, controlled initialization of the PJRT TPU client.
         if "PJRT_DEVICE" not in os.environ:
@@ -484,6 +488,7 @@ def run_training(index: int, args: argparse.Namespace):
         args.precision,
         rank=index,
         xla_pallas=getattr(args, "xla_pallas", True),
+        xla_spmd=getattr(args, "xla_spmd", False),
     )
 
     is_master = True
