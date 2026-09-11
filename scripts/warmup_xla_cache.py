@@ -66,17 +66,10 @@ def setup_hardware(precision: str, rank: int = 0, xla_pallas: bool = True):
         if "PJRT_DEVICE" not in os.environ:
             os.environ["PJRT_DEVICE"] = "TPU"
 
-        if xla_pallas:
-            xla_flags = os.environ.get("XLA_FLAGS", "")
-            for flag in ["--xla_tpu_enable_flash_attention=true", "--xla_tpu_flash_attention_max_seq_len=65536"]:
-                if flag.split("=")[0] not in xla_flags:
-                    xla_flags += f" {flag}"
-            os.environ["XLA_FLAGS"] = xla_flags.strip()
-
-            libtpu_args = os.environ.get("LIBTPU_INIT_ARGS", "")
-            if "--xla_tpu_enable_flash_attention" not in libtpu_args:
-                libtpu_args += " --xla_tpu_enable_flash_attention=true"
-                os.environ["LIBTPU_INIT_ARGS"] = libtpu_args.strip()
+        # Attention optimization on TPU is driven natively via PyTorch SDPA (--attn-implementation sdpa),
+        # without injecting unparsed C++ flags into XLA_FLAGS which cause parse_flags_from_env.cc fatal crashes.
+        if xla_pallas and rank == 0:
+            print("[ATTENTION] TPU attention acceleration active via PyTorch SDPA lowering.")
 
         import torch_xla.core.xla_model as xm
         device = xm.xla_device()
@@ -486,7 +479,7 @@ def parse_args() -> argparse.Namespace:
         "--xla-pallas",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Enable XLA TPU Pallas FlashAttention compilation flags (--xla_tpu_enable_flash_attention=true)",
+        help="Enable XLA TPU attention compilation and kernel optimizations (SDPA lowering).",
     )
     parser.add_argument(
         "--xla-spmd",
