@@ -546,7 +546,28 @@ def run_training(index: int, args: argparse.Namespace):
         if is_master:
             print("[LORA] Enabled LoRA on Multimodal Vision Projector ('merger.mlp.0', 'merger.mlp.2')")
 
+    # Defensive guard: peft raises an unhandled ImportError if torchao < 0.16.0 is installed
+    # (common on Kaggle default images), even when torchao is completely unused.
+    try:
+        import peft.import_utils
+        orig_is_torchao = getattr(peft.import_utils, "is_torchao_available", None)
+        if orig_is_torchao is not None:
+            def _safe_is_torchao():
+                try:
+                    return orig_is_torchao()
+                except ImportError:
+                    return False
+            peft.import_utils.is_torchao_available = _safe_is_torchao
+    except Exception:
+        pass
+
     from peft import LoraConfig, get_peft_model
+    try:
+        import peft.tuners.lora.torchao as _lora_torchao
+        _lora_torchao.is_torchao_available = lambda: False
+    except Exception:
+        pass
+
     peft_config = LoraConfig(
         r=args.lora_r,
         lora_alpha=args.lora_alpha,
