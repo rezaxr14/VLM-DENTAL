@@ -314,7 +314,12 @@ def setup_hardware(precision: str, rank: int = 0):
             print(f"[HARDWARE NOTICE] {gpu_name} does not support native BF16. Automatically switching compute & loading precision to FP16.")
             precision = "fp16"
 
-    dtype = torch.bfloat16 if precision == "bf16" else (torch.float16 if precision == "fp16" else torch.float32)
+    if precision == "bf16":
+        dtype = torch.bfloat16
+    elif precision in ("fp16", "qlora"):
+        dtype = torch.bfloat16 if (torch.cuda.is_available() and torch.cuda.is_bf16_supported()) else torch.float16
+    else:
+        dtype = torch.float32
     return is_tpu, device, dtype, precision
 
 
@@ -572,9 +577,9 @@ def run_training(index: int, args: argparse.Namespace):
     if active_precision == "qlora":
         from peft import prepare_model_for_kbit_training
         try:
-            model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
+            model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=False)
             if is_master:
-                print("[QLORA] Prepared 4-bit model for k-bit training (FP32 layernorms & autograd hooks active).")
+                print("[QLORA] Prepared 4-bit model for k-bit training (FP32 layernorms active).")
         except Exception as e:
             if is_master:
                 print(f"[QLORA WARNING] prepare_model_for_kbit_training failed ({e}); proceeding directly.")
@@ -591,22 +596,21 @@ def run_training(index: int, args: argparse.Namespace):
     if is_master:
         model.print_trainable_parameters()
 
-    # Enable gradient checkpointing for full precision / standard LoRA
+    # Enable gradient checkpointing across all precision modes
     try:
         model.config.use_cache = False
     except AttributeError:
         pass
-    if active_precision != "qlora":
-        try:
-            model.enable_input_require_grads()
-            gc_kwargs = {"use_reentrant": True, "preserve_rng_state": False} if is_tpu else {"use_reentrant": False}
-            model.gradient_checkpointing_enable(gradient_checkpointing_kwargs=gc_kwargs)
-            if is_master:
-                gc_type_str = "use_reentrant=True (TPU/XLA)" if is_tpu else "use_reentrant=False (CUDA)"
-                print(f"[MEMORY] Gradient checkpointing enabled ({gc_type_str}) to bound activation memory.")
-        except Exception as e:
-            if is_master:
-                print(f"[MEMORY WARNING] Could not enable gradient checkpointing: {e}")
+    try:
+        model.enable_input_require_grads()
+        gc_kwargs = {"use_reentrant": True, "preserve_rng_state": False} if is_tpu else {"use_reentrant": False}
+        model.gradient_checkpointing_enable(gradient_checkpointing_kwargs=gc_kwargs)
+        if is_master:
+            gc_type_str = "use_reentrant=True (TPU/XLA)" if is_tpu else "use_reentrant=False (CUDA)"
+            print(f"[MEMORY] Gradient checkpointing enabled ({gc_type_str}) to bound activation memory.")
+    except Exception as e:
+        if is_master:
+            print(f"[MEMORY WARNING] Could not enable gradient checkpointing: {e}")
 
     model = wrap_distributed_model(
         model,
