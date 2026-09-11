@@ -437,7 +437,7 @@ def run_training(index: int, args: argparse.Namespace):
         raise FileNotFoundError(f"No valid trace files found for stage='{args.stage}', track='{args.track}'")
 
     if args.output_dir is None:
-        args.output_dir = f"data/models/qwen3_5_9b_sft_{args.track}_{args.stage}"
+        args.output_dir = f"data/models/qwen3_5_9b_sft_{args.track}_{args.stage}_{args.precision}"
 
     out_path = Path(args.output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
@@ -526,18 +526,6 @@ def run_training(index: int, args: argparse.Namespace):
         load_kwargs["device_map"] = "auto"
     elif not is_tpu and torch.cuda.is_available():
         load_kwargs["device_map"] = "auto"
-        if torch.cuda.device_count() > 1 and active_precision != "qlora":
-            # For multi-GPU FP16/BF16, balance weights across GPUs to prevent GPU 1 from being packed
-            # to 14.1+ GiB with zero activation headroom.
-            # Reserve 4.5 GiB headroom on every GPU for activations, gradients, and optimizer states.
-            device_max_mem = {}
-            for d_idx in range(torch.cuda.device_count()):
-                total_gib = torch.cuda.get_device_properties(d_idx).total_memory / (1024**3)
-                safe_alloc_gib = max(int(total_gib - 4.5), 4)
-                device_max_mem[d_idx] = f"{safe_alloc_gib}GiB"
-            load_kwargs["max_memory"] = device_max_mem
-            if is_master:
-                print(f"[MEMORY] Multi-GPU balanced allocation active: {device_max_mem}")
 
     if is_master:
         if is_tpu and args.fsdp and args.num_cores > 1:
@@ -581,6 +569,16 @@ def run_training(index: int, args: argparse.Namespace):
     except Exception:
         pass
 
+    if active_precision == "qlora":
+        from peft import prepare_model_for_kbit_training
+        try:
+            model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
+            if is_master:
+                print("[QLORA] Prepared 4-bit model for k-bit training (FP32 layernorms & autograd hooks active).")
+        except Exception as e:
+            if is_master:
+                print(f"[QLORA WARNING] prepare_model_for_kbit_training failed ({e}); proceeding directly.")
+
     peft_config = LoraConfig(
         r=args.lora_r,
         lora_alpha=args.lora_alpha,
@@ -593,22 +591,22 @@ def run_training(index: int, args: argparse.Namespace):
     if is_master:
         model.print_trainable_parameters()
 
-    # Enable reentrant gradient checkpointing before FSDP wrapping to bound activation
-    # memory for large sequence buckets and protect TPU v5e-8's 16 GB per-core HBM
+    # Enable gradient checkpointing for full precision / standard LoRA
     try:
         model.config.use_cache = False
     except AttributeError:
         pass
-    try:
-        model.enable_input_require_grads()
-        gc_kwargs = {"use_reentrant": True, "preserve_rng_state": False} if is_tpu else {"use_reentrant": False}
-        model.gradient_checkpointing_enable(gradient_checkpointing_kwargs=gc_kwargs)
-        if is_master:
-            gc_type_str = "use_reentrant=True (TPU/XLA)" if is_tpu else "use_reentrant=False (CUDA)"
-            print(f"[MEMORY] Gradient checkpointing enabled ({gc_type_str}) to bound activation memory.")
-    except Exception as e:
-        if is_master:
-            print(f"[MEMORY WARNING] Could not enable gradient checkpointing: {e}")
+    if active_precision != "qlora":
+        try:
+            model.enable_input_require_grads()
+            gc_kwargs = {"use_reentrant": True, "preserve_rng_state": False} if is_tpu else {"use_reentrant": False}
+            model.gradient_checkpointing_enable(gradient_checkpointing_kwargs=gc_kwargs)
+            if is_master:
+                gc_type_str = "use_reentrant=True (TPU/XLA)" if is_tpu else "use_reentrant=False (CUDA)"
+                print(f"[MEMORY] Gradient checkpointing enabled ({gc_type_str}) to bound activation memory.")
+        except Exception as e:
+            if is_master:
+                print(f"[MEMORY WARNING] Could not enable gradient checkpointing: {e}")
 
     model = wrap_distributed_model(
         model,
