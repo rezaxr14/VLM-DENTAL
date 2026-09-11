@@ -142,3 +142,25 @@ def test_xla_fsdp_auto_wrap_policy_adapter():
     result = xla_policy(module=peft_model.base_model.model.block, recurse=True, unwrapped_params=64)
     assert isinstance(result, bool)
 
+
+def test_warmup_xla_cache_cli_spmd_flags():
+    """Verify scripts/warmup_xla_cache.py parses --xla-spmd and --no-xla-spmd correctly."""
+    from scripts.warmup_xla_cache import parse_args
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(sys, "argv", ["warmup_xla_cache.py", "--track", "with_tools", "--xla-spmd"])
+        args = parse_args()
+        assert args.xla_spmd is True
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(sys, "argv", ["warmup_xla_cache.py", "--track", "with_tools", "--no-xla-spmd"])
+        args = parse_args()
+        assert args.xla_spmd is False
+
+
+def test_wrap_distributed_model_spmd_cpu_fallback():
+    """wrap_distributed_model with use_spmd=True on CPU should return base model without errors."""
+    base = SimpleLinear()
+    out = wrap_distributed_model(base, is_tpu=False, num_cores=8, use_spmd=True)
+    assert out is base
+
+

@@ -21,8 +21,14 @@ import os
 import signal
 import sys
 import time
+import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+# Permanently suppress torch_xla / tensorflow conflict warnings
+warnings.filterwarnings("ignore", category=UserWarning, message=".*tensorflow.*can conflict with.*torch-xla.*")
+warnings.filterwarnings("ignore", category=UserWarning, module="torch_xla.*")
+os.environ.setdefault("PYTHONWARNINGS", "ignore::UserWarning")
 
 # Clear conflicting legacy TPU variables and PJRT_DEVICE on Kaggle/Colab
 for _var in ["TPU_PROCESS_ADDRESSES", "TPU_PROCESS_COUNT", "CLOUD_TPU_TASK_ID", "PJRT_DEVICE"]:
@@ -529,7 +535,8 @@ def run_training(index: int, args: argparse.Namespace):
     # Strict serialized loading across ranks: only ONE worker loads the 18 GB weights from disk
     # at a time. Once sharded via FSDP, memory drops to ~2.2 GB before the next rank starts.
     # This keeps total host CPU RAM below 28 GB at all times on Kaggle.
-    if is_tpu and args.num_cores > 1:
+    use_spmd = getattr(args, "xla_spmd", False)
+    if is_tpu and args.num_cores > 1 and not use_spmd:
         lock_dir = Path("/tmp/xla_sft_locks")
         lock_dir.mkdir(parents=True, exist_ok=True)
         my_turn_file = lock_dir / f"rank_{index}.done"
@@ -547,8 +554,9 @@ def run_training(index: int, args: argparse.Namespace):
 
     ModelClass = get_model_classes()
 
-    # PyTorch/XLA FSDP strictly requires master parameters in torch.float32 for sharding
-    load_dtype = torch.float32 if (is_tpu and args.fsdp and args.num_cores > 1) else compute_dtype
+    # PyTorch/XLA FSDP strictly requires master parameters in torch.float32 for sharding.
+    # Under SPMD, model stays in compute_dtype (bfloat16, ~18 GB, avoiding 36 GB float32 allocation).
+    load_dtype = torch.float32 if (is_tpu and args.fsdp and args.num_cores > 1 and not use_spmd) else compute_dtype
 
     # Select attention implementation: FlashAttention-2 if CUDA Ampere+, otherwise sdpa
     attn_impl = "sdpa"
@@ -681,7 +689,7 @@ def run_training(index: int, args: argparse.Namespace):
         pass
 
     # Signal that this rank has finished loading & sharding, allowing the next worker to start loading
-    if is_tpu and args.num_cores > 1:
+    if is_tpu and args.num_cores > 1 and not use_spmd:
         try:
             my_turn_file.touch()
         except Exception:
@@ -726,7 +734,7 @@ def run_training(index: int, args: argparse.Namespace):
 
     train_sampler = None
     ws = get_xla_world_size(is_tpu)
-    if is_tpu and ws > 1:
+    if is_tpu and ws > 1 and not use_spmd:
         train_sampler = torch.utils.data.distributed.DistributedSampler(
             train_dataset,
             num_replicas=ws,
@@ -901,7 +909,7 @@ def run_training(index: int, args: argparse.Namespace):
                     torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
 
                 if is_tpu:
-                    if args.fsdp and args.num_cores > 1:
+                    if args.fsdp and args.num_cores > 1 and not use_spmd:
                         optimizer.step()
                         xm.mark_step()
                     else:
@@ -1009,7 +1017,8 @@ def main():
         except Exception as e:
             print(f"[AUTO-SYNC WARNING] Could not auto-download traces from {traces_repo}: {e}")
 
-    if is_tpu and args.num_cores > 1:
+    use_spmd = getattr(args, "xla_spmd", False)
+    if is_tpu and args.num_cores > 1 and not use_spmd:
         # Pre-cache base model to local disk once before spawning 8 worker processes,
         # preventing 8-way concurrent Hugging Face download lock contention.
         if not Path(args.model_id).exists():
@@ -1035,6 +1044,8 @@ def main():
             print("[DIAGNOSTIC] Please restart the notebook session (Run -> Restart Session) and re-run to release /dev/vfio/*.\n")
             raise RuntimeError(f"Multi-core Cloud TPU launch failed: {e}") from e
     else:
+        if use_spmd:
+            print(f"[LAUNCH] Running PyTorch/XLA GSPMD SFT training in single-process mode across {args.num_cores} TPU cores...")
         run_training(0, args)
 
 

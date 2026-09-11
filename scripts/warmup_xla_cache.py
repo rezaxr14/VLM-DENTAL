@@ -20,8 +20,14 @@ import os
 import sys
 import time
 import traceback
+import warnings
 from pathlib import Path
 from typing import Any, Dict, List
+
+# Permanently suppress torch_xla / tensorflow conflict warnings
+warnings.filterwarnings("ignore", category=UserWarning, message=".*tensorflow.*can conflict with.*torch-xla.*")
+warnings.filterwarnings("ignore", category=UserWarning, module="torch_xla.*")
+os.environ.setdefault("PYTHONWARNINGS", "ignore::UserWarning")
 
 # Clear conflicting legacy TPU variables and PJRT_DEVICE on Kaggle/Colab
 for _var in ["TPU_PROCESS_ADDRESSES", "TPU_PROCESS_COUNT", "CLOUD_TPU_TASK_ID", "PJRT_DEVICE"]:
@@ -196,10 +202,11 @@ def run_warmup_worker(index: int, args: argparse.Namespace):
                 if is_master:
                     print(f"[XLA CACHE WARNING] Could not initialize XLA persistent cache: {e}")
 
-        # Strict serialized loading across ranks: only ONE worker loads the 18 GB weights from disk
-        # at a time. Once sharded via FSDP, memory drops to ~2.2 GB before the next rank starts.
-        # This keeps total host CPU RAM below 28 GB at all times on Kaggle.
-        if is_tpu and args.num_cores > 1:
+        # In SPMD mode, only 1 process runs, so rank locks are not needed.
+        # PyTorch/XLA FSDP strictly requires master parameters in torch.float32 for sharding.
+        # Under SPMD, model stays in compute_dtype (bfloat16, ~18 GB, avoiding 36 GB float32 allocation).
+        use_spmd = getattr(args, "xla_spmd", False)
+        if is_tpu and args.num_cores > 1 and not use_spmd:
             lock_dir = Path("/tmp/xla_warmup_locks")
             lock_dir.mkdir(parents=True, exist_ok=True)
             my_turn_file = lock_dir / f"rank_{index}.done"
@@ -219,7 +226,7 @@ def run_warmup_worker(index: int, args: argparse.Namespace):
         ModelClass = get_model_classes()
 
         # PyTorch/XLA FSDP strictly requires master parameters in torch.float32 for sharding
-        load_dtype = torch.float32 if (is_tpu and args.fsdp and args.num_cores > 1) else compute_dtype
+        load_dtype = torch.float32 if (is_tpu and args.fsdp and args.num_cores > 1 and not use_spmd) else compute_dtype
         load_kwargs: Dict[str, Any] = {
             "trust_remote_code": True,
             "dtype": load_dtype,
@@ -308,7 +315,7 @@ def run_warmup_worker(index: int, args: argparse.Namespace):
             pass
 
         # Signal that this rank has finished loading & sharding, allowing the next worker to start loading
-        if is_tpu and args.num_cores > 1:
+        if is_tpu and args.num_cores > 1 and not use_spmd:
             try:
                 my_turn_file.touch()
             except Exception:
@@ -381,10 +388,10 @@ def run_warmup_worker(index: int, args: argparse.Namespace):
                 t_str = time.strftime("%H:%M:%S")
                 print(f"[{t_str}] [AOT {idx}/{len(target_buckets)}] Graph traced. Triggering XLA compilation & execution (xm.mark_step)...")
 
-            # Align optimizer step with FSDP execution pattern
+            # Align optimizer step with FSDP or SPMD execution pattern
             if is_tpu:
                 import torch_xla.core.xla_model as xm
-                if args.fsdp and args.num_cores > 1:
+                if args.fsdp and args.num_cores > 1 and not use_spmd:
                     optimizer.step()
                     xm.mark_step()
                 else:
@@ -402,7 +409,7 @@ def run_warmup_worker(index: int, args: argparse.Namespace):
             except Exception:
                 pass
 
-            if is_tpu:
+            if is_tpu and args.num_cores > 1 and not use_spmd:
                 import torch_xla.core.xla_model as xm
                 xm.rendezvous(f"bucket_{b_len}_done")
 
@@ -540,11 +547,14 @@ def main():
     if os.path.exists("/dev/vfio") or os.environ.get("PJRT_DEVICE") == "TPU" or "COLAB_TPU_ADDR" in os.environ:
         is_tpu = True
 
-    if is_tpu and args.num_cores > 1:
+    use_spmd = getattr(args, "xla_spmd", False)
+    if is_tpu and args.num_cores > 1 and not use_spmd:
         import torch_xla.distributed.xla_multiprocessing as xmp
         print(f"[LAUNCH] Spawning AOT compilation warmup across available TPU cores via xmp.spawn(nprocs=None)...")
         xmp.spawn(run_warmup_worker, args=(args,), nprocs=None)
     else:
+        if use_spmd:
+            print(f"[LAUNCH] Running PyTorch/XLA GSPMD AOT compilation in single-process mode across {args.num_cores} TPU cores...")
         run_warmup_worker(0, args)
 
 

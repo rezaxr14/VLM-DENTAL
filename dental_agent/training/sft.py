@@ -110,12 +110,13 @@ def resolve_image_path(sample: dict[str, Any], data_dir: str | Path = "data") ->
     search_root = base / ("tufts" if ds_name == "tufts" else "dentex")
     if not search_root.exists():
         search_root = base
-    pattern = f"**/{str_id}.*"
-    for match in search_root.glob(pattern):
-        if match.is_file() and match.suffix.lower() in (".png", ".jpg", ".jpeg"):
-            res = str(match)
-            _IMAGE_PATH_RESOLVE_CACHE[cache_key] = res
-            return res
+    patterns = [f"**/{str_id}.*", f"**/train_{str_id}.*"] if ds_name == "dentex" else [f"**/{str_id}.*"]
+    for pat in patterns:
+        for match in search_root.glob(pat):
+            if match.is_file() and match.suffix.lower() in (".png", ".jpg", ".jpeg"):
+                res = str(match)
+                _IMAGE_PATH_RESOLVE_CACHE[cache_key] = res
+                return res
 
     return None
 
@@ -671,21 +672,43 @@ def wrap_distributed_model(
 
         if num_cores > 1 and use_spmd:
             try:
+                import os
+                import numpy as np
                 import torch_xla.distributed.spmd as xs
                 import torch_xla.runtime as xr
-                import numpy as np
+
+                os.environ["XLA_USE_SPMD"] = "1"
                 num_devices = xr.global_device_count()
                 device_ids = np.arange(num_devices)
                 mesh = xs.Mesh(device_ids, (num_devices,), ("data",))
                 xs.set_global_mesh(mesh)
                 if is_master:
                     print(f"[SPMD] Initialized GSPMD 1D mesh across {num_devices} TPU devices.")
-                return model.to(device)
+
+                model = model.to(device)
+
+                # Shard parameter tensors across the TPU devices so each core only holds ~2.3 GB HBM
+                sharded_count = 0
+                for name, p in model.named_parameters():
+                    if p.ndim >= 2 and p.shape[0] % num_devices == 0:
+                        xs.mark_sharding(p, mesh, ("data",) + (None,) * (p.ndim - 1))
+                        sharded_count += 1
+                    elif p.ndim >= 2 and p.shape[1] % num_devices == 0:
+                        xs.mark_sharding(p, mesh, (None, "data") + (None,) * (p.ndim - 2))
+                        sharded_count += 1
+                    elif p.ndim == 1 and p.shape[0] % num_devices == 0:
+                        xs.mark_sharding(p, mesh, ("data",))
+                        sharded_count += 1
+
+                if is_master:
+                    print(f"[SPMD] Sharded {sharded_count} parameter tensors across {num_devices} TPU cores via xs.mark_sharding.")
+                return model
             except Exception as e:
                 if is_master:
-                    print(f"[SPMD WARNING] GSPMD setup failed ({e}); proceeding with standard FSDP sharding.")
+                    print(f"[SPMD ERROR] GSPMD setup failed: {e}")
+                raise RuntimeError(f"PyTorch/XLA SPMD initialization failed: {e}") from e
 
-        if num_cores > 1 and use_fsdp:
+        if num_cores > 1 and use_fsdp and not use_spmd:
             try:
                 from torch_xla.distributed.fsdp import XlaFullyShardedDataParallel as FSDP
 
