@@ -205,10 +205,12 @@ class BucketedQwenVLCollator:
         processor: Any,
         track: str = "with_tools",
         custom_buckets: list[int] | None = None,
+        dynamic_padding: bool = False,
     ) -> None:
         self.processor = processor
         self.tokenizer = processor.tokenizer
         self.track = track
+        self.dynamic_padding = dynamic_padding
         if custom_buckets:
             self.buckets = sorted(custom_buckets)
         elif track == "no_tools":
@@ -231,9 +233,9 @@ class BucketedQwenVLCollator:
         if not batch:
             return {}
 
-        # Determine target bucket length based on longest sequence in batch
+        # Determine target sequence length: dynamic (GPU/CPU eager mode) vs static discrete buckets (Cloud TPU v5e-8 XLA)
         max_batch_len = max(ex["input_ids"].shape[1] for ex in batch)
-        target_len = self._snap_to_bucket(max_batch_len)
+        target_len = max_batch_len if self.dynamic_padding else self._snap_to_bucket(max_batch_len)
 
         padded_input_ids = []
         padded_attention_mask = []

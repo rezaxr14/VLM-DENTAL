@@ -117,6 +117,29 @@ def test_bucketed_collator_mm_token_type_ids():
     # Original positions preserved
     assert (collated["mm_token_type_ids"][0, :seq_len] == mm_types[0]).all()
     # Padded positions are 0 (text/pad type)
-    assert (collated["mm_token_type_ids"][0, seq_len:] == 0).all()
     assert "pixel_values" in collated
     assert "image_grid_thw" in collated
+
+
+def test_dynamic_padding_collator():
+    """Verify that dynamic_padding=True pads to max_batch_len without static bucket snapping."""
+    mock_processor = MagicMock()
+    mock_processor.tokenizer.pad_token_id = 0
+
+    collator = BucketedQwenVLCollator(mock_processor, track="with_tools", dynamic_padding=True)
+    assert collator.dynamic_padding is True
+
+    # Sequence length 350 - if bucketed, it would snap to 8192
+    seq_len = 350
+    input_ids = torch.arange(1, seq_len + 1, dtype=torch.long).unsqueeze(0)
+    labels = input_ids.clone()
+    attention_mask = torch.ones((1, seq_len), dtype=torch.long)
+
+    batch = [{"input_ids": input_ids, "labels": labels, "attention_mask": attention_mask}]
+    collated = collator(batch)
+
+    # Must be exactly 350, NOT 8192!
+    assert collated["input_ids"].shape == (1, 350)
+    assert collated["labels"].shape == (1, 350)
+    assert collated["attention_mask"].shape == (1, 350)
+

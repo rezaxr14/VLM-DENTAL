@@ -34,6 +34,7 @@ os.environ.setdefault("OMP_NUM_THREADS", "4")
 os.environ.setdefault("TF_NUM_INTRAOP_THREADS", "4")
 os.environ.setdefault("TF_NUM_INTEROP_THREADS", "4")
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "4")
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 # NOTE: PJRT_DEVICE is set lazily inside setup_hardware(), NOT here.
 # Setting it before `import torch` causes torch_xla's torch plugin to auto-initialize
@@ -525,6 +526,18 @@ def run_training(index: int, args: argparse.Namespace):
         load_kwargs["device_map"] = "auto"
     elif not is_tpu and torch.cuda.is_available():
         load_kwargs["device_map"] = "auto"
+        if torch.cuda.device_count() > 1 and active_precision != "qlora":
+            # For multi-GPU FP16/BF16, balance weights across GPUs to prevent GPU 1 from being packed
+            # to 14.1+ GiB with zero activation headroom.
+            # Reserve 4.5 GiB headroom on every GPU for activations, gradients, and optimizer states.
+            device_max_mem = {}
+            for d_idx in range(torch.cuda.device_count()):
+                total_gib = torch.cuda.get_device_properties(d_idx).total_memory / (1024**3)
+                safe_alloc_gib = max(int(total_gib - 4.5), 4)
+                device_max_mem[d_idx] = f"{safe_alloc_gib}GiB"
+            load_kwargs["max_memory"] = device_max_mem
+            if is_master:
+                print(f"[MEMORY] Multi-GPU balanced allocation active: {device_max_mem}")
 
     if is_master:
         if is_tpu and args.fsdp and args.num_cores > 1:
@@ -588,9 +601,11 @@ def run_training(index: int, args: argparse.Namespace):
         pass
     try:
         model.enable_input_require_grads()
-        model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": True, "preserve_rng_state": False})
+        gc_kwargs = {"use_reentrant": True, "preserve_rng_state": False} if is_tpu else {"use_reentrant": False}
+        model.gradient_checkpointing_enable(gradient_checkpointing_kwargs=gc_kwargs)
         if is_master:
-            print("[MEMORY] Gradient checkpointing enabled (use_reentrant=True, preserve_rng_state=False) to bound activation memory for large sequence-length buckets.")
+            gc_type_str = "use_reentrant=True (TPU/XLA)" if is_tpu else "use_reentrant=False (CUDA)"
+            print(f"[MEMORY] Gradient checkpointing enabled ({gc_type_str}) to bound activation memory.")
     except Exception as e:
         if is_master:
             print(f"[MEMORY WARNING] Could not enable gradient checkpointing: {e}")
@@ -628,21 +643,27 @@ def run_training(index: int, args: argparse.Namespace):
         train_dataset = full_dataset
         val_dataset = None
 
-    custom_buckets = args.custom_buckets
-    if not custom_buckets and args.max_seq_len:
-        base_buckets = (
-            BucketedQwenVLCollator.BUCKETS_WITH_TOOLS
-            if args.track == "with_tools"
-            else BucketedQwenVLCollator.BUCKETS_NO_TOOLS
-        )
-        extended = [b for b in base_buckets if b <= args.max_seq_len]
-        if not extended or extended[-1] < args.max_seq_len:
-            extended.append(args.max_seq_len)
-        custom_buckets = extended
+    if is_tpu:
+        custom_buckets = args.custom_buckets
+        if not custom_buckets and args.max_seq_len:
+            base_buckets = (
+                BucketedQwenVLCollator.BUCKETS_WITH_TOOLS
+                if args.track == "with_tools"
+                else BucketedQwenVLCollator.BUCKETS_NO_TOOLS
+            )
+            extended = [b for b in base_buckets if b <= args.max_seq_len]
+            if not extended or extended[-1] < args.max_seq_len:
+                extended.append(args.max_seq_len)
+            custom_buckets = extended
 
-    collator = BucketedQwenVLCollator(processor=processor, track=args.track, custom_buckets=custom_buckets)
-    if is_master:
-        print(f"[COLLATOR] Active sequence length buckets: {collator.buckets} (max headroom: {collator.buckets[-1]})")
+        collator = BucketedQwenVLCollator(processor=processor, track=args.track, custom_buckets=custom_buckets, dynamic_padding=False)
+        if is_master:
+            print(f"[COLLATOR] Active sequence length buckets: {collator.buckets} (max headroom: {collator.buckets[-1]})")
+    else:
+        # On GPU / CPU: dynamic sequence padding to longest item in each batch (eliminates 8192/16384 static bucket overhead)
+        collator = BucketedQwenVLCollator(processor=processor, track=args.track, dynamic_padding=True)
+        if is_master:
+            print("[COLLATOR] Dynamic sequence padding enabled (GPU eager mode: batch-adaptive length, zero static bucket overhead).")
 
     train_sampler = None
     ws = get_xla_world_size(is_tpu)
