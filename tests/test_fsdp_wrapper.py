@@ -77,6 +77,22 @@ def test_sft_cli_fsdp_flags():
         args = parse_args()
         assert args.fsdp is False
 
+    # Single static sequence length default and override
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(sys, "argv", ["train_sft.py", "--track", "with_tools"])
+        args = parse_args()
+        assert args.max_seq_len == 32768
+        assert args.xla_pallas is True
+        assert args.xla_spmd is False
+
+    # Backtrack sequence length override
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(sys, "argv", ["train_sft.py", "--track", "with_tools", "--max-seq-len", "24576", "--no-xla-pallas", "--xla-spmd"])
+        args = parse_args()
+        assert args.max_seq_len == 24576
+        assert args.xla_pallas is False
+        assert args.xla_spmd is True
+
 
 def test_grpo_cli_fsdp_flags():
     """Verify scripts/run_grpo.py parses --fsdp and --no-fsdp correctly."""

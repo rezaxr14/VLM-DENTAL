@@ -51,6 +51,7 @@ CANONICAL_TRACE_FILES = [
     "train_cot_traces_tufts_all_no_tools.jsonl",
     "train_cot_traces_unverified_tufts_all.jsonl",
     "train_cot_traces_unverified_tufts_all_no_tools.jsonl",
+    "trace_token_lengths.json",
 ]
 
 
@@ -184,16 +185,18 @@ def download_traces(
     # 1. Discover available remote files
     try:
         remote_files = list_repo_files(repo_id=repo_id, repo_type="dataset", token=t)
-        remote_jsonl = [f for f in remote_files if f.endswith(".jsonl")]
+        remote_manifest_files = [f for f in remote_files if f.endswith(".jsonl") or f == "trace_token_lengths.json" or f.endswith(".json")]
     except Exception as e:
         print(f"[ERROR] Could not inspect files in {repo_id}: {e}")
         return {}
 
-    target_files = files if files else remote_jsonl
+    target_files = files if files else [f for f in CANONICAL_TRACE_FILES if f in remote_manifest_files]
+    if not target_files:
+        target_files = remote_manifest_files
     results = {}
 
     for fname in target_files:
-        if fname not in remote_jsonl:
+        if fname not in remote_manifest_files:
             continue
         dest_file = target_path / fname
 

@@ -61,6 +61,7 @@ data/models/vllm_cache/
 
 # Synthetic Chain-of-Thought Traces (Completed traces hosted on Hugging Face: Reza-Nadimi/vlm-dental-traces)
 data/traces/*.jsonl
+data/traces/*.json
 data/traces/*.bak
 
 # Allow analysis charts and evaluation results to be tracked via Git

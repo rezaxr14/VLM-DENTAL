@@ -29,13 +29,15 @@ from dental_agent.tools.registry import ToolRegistry
 from dental_agent.agent.tool_dispatch import execute_tool_call
 
 
-def resolve_image_path(sample: dict[str, Any], data_dir: str | Path = "data") -> Optional[str]:
-    """Dynamically resolve local image path from sample record, robust to host-path divergence.
+_IMAGE_PATH_RESOLVE_CACHE: dict[tuple[str, str, str], str] = {}
 
-    Searches:
-    1. sample["image_path"] if existing locally
-    2. Standard dataset image directories in data/
-    3. Glob search by image_id
+
+def resolve_image_path(sample: dict[str, Any], data_dir: str | Path = "data") -> Optional[str]:
+    """Dynamically resolve image path across Kaggle, Hugging Face snapshots, and local directories.
+
+    Aligns directly with canonical Hugging Face dataset layouts and Kaggle mounts:
+    - DENTEX (Reza-Nadimi/dentex-train-images): images/{id}.png
+    - Tufts (Reza-Nadimi/tufts-train-images): Radiographs/{id}.JPG
     """
     raw_path = sample.get("image_path")
     if raw_path and os.path.isfile(raw_path):
@@ -46,60 +48,74 @@ def resolve_image_path(sample: dict[str, Any], data_dir: str | Path = "data") ->
         return None
 
     str_id = str(image_id)
+    ds_name = (sample.get("dataset") or "").lower().strip()
+    origin_file = str(sample.get("_origin_file", "")).lower()
+    if not ds_name:
+        if "tufts" in origin_file:
+            ds_name = "tufts"
+        elif "dentex" in origin_file:
+            ds_name = "dentex"
+
+    cache_key = (ds_name, str_id, str(data_dir))
+    if cache_key in _IMAGE_PATH_RESOLVE_CACHE:
+        return _IMAGE_PATH_RESOLVE_CACHE[cache_key]
+
     base = Path(data_dir)
+    candidates: list[Path] = []
+    k_base = Path("/kaggle/input") if os.path.exists("/kaggle/input") else None
 
-    # Common candidate locations across local, Kaggle, and Hugging Face snapshot structures
-    candidates = [
-        base / "images" / f"{str_id}.png",
-        base / "images" / f"{str_id}.jpg",
-        base / "dentex" / "images" / f"{str_id}.png",
-        base / "dentex" / "images" / f"{str_id}.jpg",
-        base / "dentex" / "train_images" / f"{str_id}.png",
-        base / "dentex" / f"{str_id}.png",
-        base / "train_images" / f"{str_id}.png",
-        base / "tufts" / "Radiographs" / f"{str_id}.jpg",
-        base / "tufts" / "Radiographs" / f"{str_id}.JPG",
-        base / "tufts" / "Radiographs" / f"{str_id}.png",
-        base / "tufts" / "radiographs" / f"{str_id}.jpg",
-        base / "tufts" / "radiographs" / f"{str_id}.JPG",
-        base / "tufts" / "radiographs" / f"{str_id}.png",
-        base / "tufts" / "images" / f"{str_id}.png",
-        base / "tufts" / "images" / f"{str_id}.jpg",
-        base / "images" / "dentex" / f"{str_id}.png",
-        base / "images" / "tufts" / f"{str_id}.png",
-        base / "images" / "healthy_tufts" / f"{str_id}.png",
-        base / "Radiographs" / f"{str_id}.jpg",
-        base / "Radiographs" / f"{str_id}.JPG",
-        base / "Radiographs" / f"{str_id}.png",
-    ]
-
-    # Check Kaggle input mount directory if on Kaggle platform
-    if os.path.exists("/kaggle/input"):
-        k_base = Path("/kaggle/input")
+    if ds_name == "dentex":
         candidates.extend([
-            k_base / "dentex" / "train_images" / f"{str_id}.png",
-            k_base / "dentex" / "images" / f"{str_id}.png",
-            k_base / "dentex-dataset" / "train_images" / f"{str_id}.png",
-            k_base / "dentex-dataset" / "images" / f"{str_id}.png",
-            k_base / "tufts" / "Radiographs" / f"{str_id}.JPG",
-            k_base / "tufts" / "Radiographs" / f"{str_id}.jpg",
-            k_base / "tufts-dataset" / "Radiographs" / f"{str_id}.JPG",
-            k_base / "tufts-dataset" / "Radiographs" / f"{str_id}.jpg",
+            base / "dentex" / "images" / f"{str_id}.png",
+            base / "dentex" / f"{str_id}.png",
+            base / "images" / f"{str_id}.png",
+        ])
+        if k_base:
+            candidates.extend([
+                k_base / "dentex" / "images" / f"{str_id}.png",
+                k_base / "dentex-panoramic" / "images" / f"{str_id}.png",
+                k_base / "datasets" / "rezanadimikj" / "dentex-panoramic" / "images" / f"{str_id}.png",
+            ])
+    elif ds_name == "tufts":
+        candidates.extend([
+            base / "tufts" / "Radiographs" / f"{str_id}.JPG",
+            base / "tufts" / "Radiographs" / f"{str_id}.jpg",
+            base / "Tufts" / "Radiographs" / f"{str_id}.JPG",
+            base / "Tufts" / "Radiographs" / f"{str_id}.jpg",
+            base / "tufts" / "images" / f"{str_id}.png",
+        ])
+        if k_base:
+            candidates.extend([
+                k_base / "tufts" / "Radiographs" / f"{str_id}.JPG",
+                k_base / "tufts" / "Radiographs" / f"{str_id}.jpg",
+                k_base / "tufts-panoramic" / "Radiographs" / f"{str_id}.JPG",
+                k_base / "tufts-panoramic" / "Radiographs" / f"{str_id}.jpg",
+                k_base / "datasets" / "rezanadimikj" / "tufts-panoramic" / "Radiographs" / f"{str_id}.JPG",
+            ])
+    else:
+        candidates.extend([
+            base / "images" / f"{str_id}.png",
+            base / "dentex" / "images" / f"{str_id}.png",
+            base / "tufts" / "Radiographs" / f"{str_id}.JPG",
+            base / "tufts" / "Radiographs" / f"{str_id}.jpg",
         ])
 
     for cand in candidates:
         if cand.is_file():
-            return str(cand)
+            res = str(cand)
+            _IMAGE_PATH_RESOLVE_CACHE[cache_key] = res
+            return res
 
-    # Fallback recursive search in datasets/ or data/
-    matches = list(base.glob(f"**/{str_id}.png")) + list(base.glob(f"**/{str_id}.jpg")) + list(base.glob(f"**/{str_id}.JPG"))
-    if matches:
-        return str(matches[0])
-
-    if os.path.exists("/kaggle/input"):
-        k_matches = list(Path("/kaggle/input").glob(f"**/{str_id}.png")) + list(Path("/kaggle/input").glob(f"**/{str_id}.jpg")) + list(Path("/kaggle/input").glob(f"**/{str_id}.JPG"))
-        if k_matches:
-            return str(k_matches[0])
+    # Glob fallback within respective dataset folder
+    search_root = base / ("tufts" if ds_name == "tufts" else "dentex")
+    if not search_root.exists():
+        search_root = base
+    pattern = f"**/{str_id}.*"
+    for match in search_root.glob(pattern):
+        if match.is_file() and match.suffix.lower() in (".png", ".jpg", ".jpeg"):
+            res = str(match)
+            _IMAGE_PATH_RESOLVE_CACHE[cache_key] = res
+            return res
 
     return None
 
@@ -204,6 +220,7 @@ class BucketedQwenVLCollator:
         self,
         processor: Any,
         track: str = "with_tools",
+        max_seq_len: int | None = None,
         custom_buckets: list[int] | None = None,
         dynamic_padding: bool = False,
     ) -> None:
@@ -211,6 +228,7 @@ class BucketedQwenVLCollator:
         self.tokenizer = processor.tokenizer
         self.track = track
         self.dynamic_padding = dynamic_padding
+        self.max_seq_len = max_seq_len
         if custom_buckets:
             self.buckets = sorted(custom_buckets)
         elif track == "no_tools":
@@ -233,9 +251,14 @@ class BucketedQwenVLCollator:
         if not batch:
             return {}
 
-        # Determine target sequence length: dynamic (GPU/CPU eager mode) vs static discrete buckets (Cloud TPU v5e-8 XLA)
+        # Determine target sequence length: dynamic (GPU/CPU eager mode) vs static uniform length (Cloud TPU v5e-8 XLA)
         max_batch_len = max(ex["input_ids"].shape[1] for ex in batch)
-        target_len = max_batch_len if self.dynamic_padding else self._snap_to_bucket(max_batch_len)
+        if self.dynamic_padding:
+            target_len = max_batch_len
+        elif self.max_seq_len:
+            target_len = self.max_seq_len
+        else:
+            target_len = self._snap_to_bucket(max_batch_len)
 
         padded_input_ids = []
         padded_attention_mask = []
@@ -354,23 +377,75 @@ class DentalSFTDataset(Dataset):
         processor: Any,
         track: str = "with_tools",
         data_dir: str | Path = "data",
+        max_seq_len: int | None = None,
+        token_lengths_manifest: str | Path | None = None,
     ) -> None:
         self.processor = processor
         self.track = track
         self.data_dir = data_dir
+        self.max_seq_len = max_seq_len
         self.records: list[dict[str, Any]] = []
         self.registry = ToolRegistry.create_default()
         self._crop_cache: dict[str, Image.Image] = {}
 
+        # Resolve pre-computed token lengths manifest for instant O(1) filtering on Kaggle/Colab
+        token_map: dict[str, int] = {}
+        manifest_candidates = []
+        if token_lengths_manifest:
+            manifest_candidates.append(Path(token_lengths_manifest))
+        manifest_candidates.extend([
+            Path(data_dir) / "traces" / "trace_token_lengths.json",
+            Path("data/traces/trace_token_lengths.json"),
+            Path("/kaggle/working/data/traces/trace_token_lengths.json"),
+        ])
+        for mc in manifest_candidates:
+            if mc.is_file():
+                try:
+                    with open(mc, "r", encoding="utf-8") as mf:
+                        m_data = json.load(mf)
+                        token_map = m_data.get("lengths_by_file_and_id", {})
+                        if not token_map:
+                            token_map = m_data.get("lengths_by_image_id", {})
+                    if token_map:
+                        break
+                except Exception:
+                    pass
+
+        raw_records: list[dict[str, Any]] = []
         paths = [data_path] if isinstance(data_path, (str, Path)) else list(data_path)
         for p in paths:
             p_obj = Path(p)
             if not p_obj.is_file():
                 raise FileNotFoundError(f"SFT trace file not found: {p_obj}")
+            fname = p_obj.name
             with open(p_obj, "r", encoding="utf-8") as f:
                 for line in f:
                     if line.strip():
-                        self.records.append(json.loads(line))
+                        r = json.loads(line)
+                        r["_origin_file"] = fname
+                        raw_records.append(r)
+
+        if max_seq_len is not None and token_map:
+            retained: list[dict[str, Any]] = []
+            filtered_count = 0
+            for r in raw_records:
+                rid = str(r.get("image_id", ""))
+                qkey = f"{r.get('_origin_file', '')}::{rid}"
+                tok_len = token_map.get(qkey)
+                if tok_len is None:
+                    tok_len = token_map.get(rid)
+                if tok_len is not None and tok_len > max_seq_len:
+                    filtered_count += 1
+                else:
+                    retained.append(r)
+            self.records = retained
+            pct = (len(retained) / max(len(raw_records), 1)) * 100
+            print(
+                f"[DATASET MASK] Evaluated {len(raw_records)} traces: retained {len(retained)} "
+                f"(<= {max_seq_len} tokens, {pct:.1f}%), filtered out {filtered_count} overlength traces."
+            )
+        else:
+            self.records = raw_records
 
     def __len__(self) -> int:
         return len(self.records)
@@ -574,6 +649,7 @@ def wrap_distributed_model(
     num_cores: int = 1,
     use_fsdp: bool = True,
     is_master: bool = True,
+    use_spmd: bool = False,
 ) -> Any:
     """Wrap model for distributed TPU v5e-8 or multi-GPU execution.
 
@@ -592,6 +668,22 @@ def wrap_distributed_model(
             if is_master:
                 print(f"[FSDP WARNING] torch_xla is not installed or available ({e}); skipping TPU placement.")
             return model
+
+        if num_cores > 1 and use_spmd:
+            try:
+                import torch_xla.distributed.spmd as xs
+                import torch_xla.runtime as xr
+                import numpy as np
+                num_devices = xr.global_device_count()
+                device_ids = np.arange(num_devices)
+                mesh = xs.Mesh(device_ids, (num_devices,), ("data",))
+                xs.set_global_mesh(mesh)
+                if is_master:
+                    print(f"[SPMD] Initialized GSPMD 1D mesh across {num_devices} TPU devices.")
+                return model.to(device)
+            except Exception as e:
+                if is_master:
+                    print(f"[SPMD WARNING] GSPMD setup failed ({e}); proceeding with standard FSDP sharding.")
 
         if num_cores > 1 and use_fsdp:
             try:
@@ -693,6 +785,8 @@ def train_sft(
     push_every_steps: int = 25,
     num_cores: int = 1,
     use_fsdp: bool = True,
+    use_spmd: bool = False,
+    max_seq_len: int = 32768,
 ) -> str:
     """Execute Stage 1 SFT on verified expert traces with conversational loss masking."""
     print(f"--- Starting Stage 1 SFT Training (Track={track}, Epochs={epochs}, LR={learning_rate}) ---")
@@ -708,14 +802,20 @@ def train_sft(
     except Exception:
         pass
 
-    model = wrap_distributed_model(model, is_tpu=is_tpu, num_cores=num_cores, use_fsdp=use_fsdp)
+    model = wrap_distributed_model(
+        model,
+        is_tpu=is_tpu,
+        num_cores=num_cores,
+        use_fsdp=use_fsdp,
+        use_spmd=use_spmd,
+    )
     model.train()
 
-    dataset = DentalSFTDataset(data_path, processor=processor, track=track)
+    dataset = DentalSFTDataset(data_path, processor=processor, track=track, max_seq_len=max_seq_len)
     if len(dataset) == 0:
         raise ValueError(f"SFT dataset at {data_path} is empty.")
 
-    collator = BucketedQwenVLCollator(processor, track=track)
+    collator = BucketedQwenVLCollator(processor, track=track, max_seq_len=max_seq_len)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, collate_fn=collator)
 
     optimizer = torch.optim.AdamW(

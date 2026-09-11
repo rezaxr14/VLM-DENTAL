@@ -56,7 +56,7 @@ DEFAULT_BUCKETS_WITH_TOOLS = [8192, 16384, 32768]
 DEFAULT_BUCKETS_NO_TOOLS = [1536, 2048, 2560, 3072, 8192]
 
 
-def setup_hardware(precision: str, rank: int = 0):
+def setup_hardware(precision: str, rank: int = 0, xla_pallas: bool = True):
     """Detect hardware and initialize device for worker rank."""
     is_tpu = False
     device = torch.device("cpu")
@@ -65,6 +65,19 @@ def setup_hardware(precision: str, rank: int = 0):
         # a single, controlled initialization of the PJRT TPU client.
         if "PJRT_DEVICE" not in os.environ:
             os.environ["PJRT_DEVICE"] = "TPU"
+
+        if xla_pallas:
+            xla_flags = os.environ.get("XLA_FLAGS", "")
+            for flag in ["--xla_tpu_enable_flash_attention=true", "--xla_tpu_flash_attention_max_seq_len=65536"]:
+                if flag.split("=")[0] not in xla_flags:
+                    xla_flags += f" {flag}"
+            os.environ["XLA_FLAGS"] = xla_flags.strip()
+
+            libtpu_args = os.environ.get("LIBTPU_INIT_ARGS", "")
+            if "--xla_tpu_enable_flash_attention" not in libtpu_args:
+                libtpu_args += " --xla_tpu_enable_flash_attention=true"
+                os.environ["LIBTPU_INIT_ARGS"] = libtpu_args.strip()
+
         import torch_xla.core.xla_model as xm
         device = xm.xla_device()
         is_tpu = True
@@ -75,6 +88,8 @@ def setup_hardware(precision: str, rank: int = 0):
 
         if xm.is_master_ordinal():
             print(f"[HARDWARE] Cloud TPU initialized: {device} ({xm.xla_device_hw(device)})")
+            if xla_pallas:
+                print("[HARDWARE] XLA TPU Pallas FlashAttention compilation flags injected.")
     except Exception as e:
         if torch.cuda.is_available():
             device = torch.device(f"cuda:{rank % torch.cuda.device_count()}")
@@ -151,7 +166,11 @@ def build_dummy_multimodal_batch(
 def run_warmup_worker(index: int, args: argparse.Namespace):
     """Worker process initializing persistent cache and pre-compiling target bucket graphs."""
     try:
-        device, compute_dtype, is_tpu = setup_hardware(args.precision, rank=index)
+        device, compute_dtype, is_tpu = setup_hardware(
+            args.precision,
+            rank=index,
+            xla_pallas=getattr(args, "xla_pallas", True),
+        )
 
         is_master = True
         if is_tpu:
@@ -251,13 +270,15 @@ def run_warmup_worker(index: int, args: argparse.Namespace):
             if is_master:
                 print(f"[CHECKPOINT WARNING] Could not enable checkpointing: {e}")
 
-        # Wrap model with FSDP
+        # Wrap model with FSDP or SPMD
+        use_spmd = getattr(args, "xla_spmd", False)
         model = wrap_distributed_model(
             model,
             is_tpu=is_tpu,
             num_cores=args.num_cores,
             use_fsdp=args.fsdp,
             is_master=is_master,
+            use_spmd=use_spmd,
         )
 
         # Host RAM reclamation: force glibc to release unmapped model-loading heap memory back to OS
@@ -272,15 +293,17 @@ def run_warmup_worker(index: int, args: argparse.Namespace):
         trainable_params = [p for p in model.parameters() if p.requires_grad]
         optimizer = torch.optim.AdamW(trainable_params, lr=args.learning_rate)
 
-        # Resolve target buckets to compile
+        # Resolve target sequence lengths to compile (Single static length by default, or explicit custom buckets)
         if args.buckets:
             target_buckets = sorted(args.buckets)
+        elif getattr(args, "max_seq_len", None):
+            target_buckets = [args.max_seq_len]
         elif args.track == "with_tools":
-            target_buckets = DEFAULT_BUCKETS_WITH_TOOLS
+            target_buckets = [32768]
         elif args.track == "no_tools":
-            target_buckets = DEFAULT_BUCKETS_NO_TOOLS
+            target_buckets = [8192]
         else:  # "both"
-            target_buckets = sorted(set(DEFAULT_BUCKETS_WITH_TOOLS + DEFAULT_BUCKETS_NO_TOOLS))
+            target_buckets = [32768]
 
         if is_master:
             print("=" * 70)
@@ -453,6 +476,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lora-dropout", type=float, default=0.05)
     parser.add_argument("--learning-rate", type=float, default=5e-5)
     parser.add_argument("--num-cores", type=int, default=8, help="Number of TPU cores (8 for Cloud TPU v5e-8)")
+    parser.add_argument(
+        "--max-seq-len",
+        type=int,
+        default=32768,
+        help="Single static sequence length to pre-compile (e.g. 32768, 24576, 16384)",
+    )
+    parser.add_argument(
+        "--xla-pallas",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable XLA TPU Pallas FlashAttention compilation flags (--xla_tpu_enable_flash_attention=true)",
+    )
+    parser.add_argument(
+        "--xla-spmd",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Enable PyTorch/XLA GSPMD sequence/mesh sharding",
+    )
     parser.add_argument(
         "--fsdp",
         action=argparse.BooleanOptionalAction,

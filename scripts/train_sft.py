@@ -167,15 +167,27 @@ def parse_args():
     parser.add_argument(
         "--max-seq-len",
         type=int,
-        default=None,
-        help="Maximum sequence length bucket ceiling (e.g. 40960, 49152) for collator",
+        default=32768,
+        help="Single static sequence length (default: 32768 for 32k, backtrack to 24576 or 16384 if needed)",
     )
     parser.add_argument(
         "--custom-buckets",
         type=int,
         nargs="+",
         default=None,
-        help="Custom sequence length buckets for collator",
+        help="Optional custom sequence length buckets for collator",
+    )
+    parser.add_argument(
+        "--xla-pallas",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable XLA TPU Pallas FlashAttention compilation flags (--xla_tpu_enable_flash_attention=true)",
+    )
+    parser.add_argument(
+        "--xla-spmd",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Enable PyTorch/XLA GSPMD sequence/mesh sharding",
     )
     parser.add_argument(
         "--fsdp",
@@ -265,7 +277,7 @@ def get_xla_world_size(is_tpu: bool = False) -> int:
     return 1
 
 
-def setup_hardware(precision: str, rank: int = 0):
+def setup_hardware(precision: str, rank: int = 0, xla_pallas: bool = True):
     """Detect hardware backend: Cloud TPU v5e-8 vs CUDA GPU vs CPU."""
     is_tpu = False
     device = None
@@ -274,6 +286,19 @@ def setup_hardware(precision: str, rank: int = 0):
         # a single, controlled initialization of the PJRT TPU client.
         if "PJRT_DEVICE" not in os.environ:
             os.environ["PJRT_DEVICE"] = "TPU"
+
+        if xla_pallas:
+            xla_flags = os.environ.get("XLA_FLAGS", "")
+            for flag in ["--xla_tpu_enable_flash_attention=true", "--xla_tpu_flash_attention_max_seq_len=65536"]:
+                if flag.split("=")[0] not in xla_flags:
+                    xla_flags += f" {flag}"
+            os.environ["XLA_FLAGS"] = xla_flags.strip()
+
+            libtpu_args = os.environ.get("LIBTPU_INIT_ARGS", "")
+            if "--xla_tpu_enable_flash_attention" not in libtpu_args:
+                libtpu_args += " --xla_tpu_enable_flash_attention=true"
+                os.environ["LIBTPU_INIT_ARGS"] = libtpu_args.strip()
+
         import torch_xla.core.xla_model as xm
         device = xm.xla_device()
         is_tpu = True
@@ -289,6 +314,8 @@ def setup_hardware(precision: str, rank: int = 0):
             
         if xm.is_master_ordinal():
             print(f"[HARDWARE] Initialized Cloud TPU device: {device} ({xm.xla_device_hw(device)}) | World Size: {get_xla_world_size(is_tpu)}")
+            if xla_pallas:
+                print("[HARDWARE] XLA TPU Pallas FlashAttention compilation flags injected.")
     except Exception as e:
         print(f"[HARDWARE WARNING] TPU backend initialization failed ({e}); checking CUDA/CPU.")
         if torch.cuda.is_available():
@@ -449,7 +476,11 @@ def run_training(index: int, args: argparse.Namespace):
     best_adapter_path = out_path / "best_adapter"
     path_in_repo = f"sft/{out_path.name}"
 
-    is_tpu, device, compute_dtype, active_precision = setup_hardware(args.precision, rank=index)
+    is_tpu, device, compute_dtype, active_precision = setup_hardware(
+        args.precision,
+        rank=index,
+        xla_pallas=getattr(args, "xla_pallas", True),
+    )
 
     is_master = True
     if is_tpu:
@@ -511,11 +542,22 @@ def run_training(index: int, args: argparse.Namespace):
 
     # For FSDP on multi-core TPU, load directly in float32 to avoid duplicate RAM spike from .float()
     load_dtype = torch.float32 if (is_tpu and args.fsdp and args.num_cores > 1) else compute_dtype
+
+    # Select attention implementation: FlashAttention-2 if CUDA Ampere+, otherwise sdpa
+    attn_impl = "sdpa"
+    if not is_tpu and torch.cuda.is_available():
+        try:
+            if torch.cuda.get_device_capability()[0] >= 8:
+                import flash_attn
+                attn_impl = "flash_attention_2"
+        except Exception:
+            attn_impl = "sdpa"
+
     load_kwargs: Dict[str, Any] = {
         "trust_remote_code": True,
         "dtype": load_dtype,
         "low_cpu_mem_usage": True,
-        "attn_implementation": "sdpa",
+        "attn_implementation": attn_impl,
     }
 
     if active_precision == "qlora":
@@ -618,6 +660,7 @@ def run_training(index: int, args: argparse.Namespace):
         num_cores=args.num_cores,
         use_fsdp=args.fsdp,
         is_master=is_master,
+        use_spmd=getattr(args, "xla_spmd", False),
     )
 
     # Host RAM reclamation: force glibc to release unmapped model-loading heap memory back to the Linux kernel
@@ -630,8 +673,14 @@ def run_training(index: int, args: argparse.Namespace):
     except Exception:
         pass
 
-    # Dataset & Bucketed Collator
-    full_dataset = DentalSFTDataset(resolved_traces, processor=processor, track=args.track, data_dir=args.data_dir)
+    # Dataset & Collator: pass max_seq_len for instant O(1) manifest filtering
+    full_dataset = DentalSFTDataset(
+        resolved_traces,
+        processor=processor,
+        track=args.track,
+        data_dir=args.data_dir,
+        max_seq_len=args.max_seq_len,
+    )
     val_size = max(int(len(full_dataset) * 0.05), 1) if len(full_dataset) >= 20 else 0
     train_size = len(full_dataset) - val_size
 
@@ -646,24 +695,18 @@ def run_training(index: int, args: argparse.Namespace):
         val_dataset = None
 
     if is_tpu:
-        custom_buckets = args.custom_buckets
-        if not custom_buckets and args.max_seq_len:
-            base_buckets = (
-                BucketedQwenVLCollator.BUCKETS_WITH_TOOLS
-                if args.track == "with_tools"
-                else BucketedQwenVLCollator.BUCKETS_NO_TOOLS
-            )
-            extended = [b for b in base_buckets if b <= args.max_seq_len]
-            if not extended or extended[-1] < args.max_seq_len:
-                extended.append(args.max_seq_len)
-            custom_buckets = extended
-
-        collator = BucketedQwenVLCollator(processor=processor, track=args.track, custom_buckets=custom_buckets, dynamic_padding=False)
+        collator = BucketedQwenVLCollator(
+            processor=processor,
+            track=args.track,
+            max_seq_len=args.max_seq_len,
+            custom_buckets=args.custom_buckets,
+            dynamic_padding=False,
+        )
         if is_master:
-            print(f"[COLLATOR] Active sequence length buckets: {collator.buckets} (max headroom: {collator.buckets[-1]})")
+            print(f"[COLLATOR] Static sequence length padding enabled: {collator.max_seq_len} tokens (Zero buckets, single XLA graph).")
     else:
-        # On GPU / CPU: dynamic sequence padding to longest item in each batch (eliminates 8192/16384 static bucket overhead)
-        collator = BucketedQwenVLCollator(processor=processor, track=args.track, dynamic_padding=True)
+        # On GPU / CPU: dynamic sequence padding to longest item in each batch (eliminates static bucket overhead)
+        collator = BucketedQwenVLCollator(processor=processor, track=args.track, max_seq_len=args.max_seq_len, dynamic_padding=True)
         if is_master:
             print("[COLLATOR] Dynamic sequence padding enabled (GPU eager mode: batch-adaptive length, zero static bucket overhead).")
 

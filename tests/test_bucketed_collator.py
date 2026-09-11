@@ -143,3 +143,79 @@ def test_dynamic_padding_collator():
     assert collated["labels"].shape == (1, 350)
     assert collated["attention_mask"].shape == (1, 350)
 
+
+def test_single_static_max_seq_len_padding():
+    """Verify that specifying max_seq_len pads all batches directly to that static length."""
+    mock_processor = MagicMock()
+    mock_processor.tokenizer.pad_token_id = 0
+
+    collator = BucketedQwenVLCollator(mock_processor, max_seq_len=100)
+    assert collator.max_seq_len == 100
+
+    seq_len = 42
+    input_ids = torch.arange(1, seq_len + 1, dtype=torch.long).unsqueeze(0)
+    labels = input_ids.clone()
+    attention_mask = torch.ones((1, seq_len), dtype=torch.long)
+
+    batch = [{"input_ids": input_ids, "labels": labels, "attention_mask": attention_mask}]
+    collated = collator(batch)
+
+    # Must be padded directly to max_seq_len (100)
+    assert collated["input_ids"].shape == (1, 100)
+    assert collated["labels"].shape == (1, 100)
+    assert collated["attention_mask"].shape == (1, 100)
+    assert (collated["attention_mask"][0, :seq_len] == 1).all()
+    assert (collated["attention_mask"][0, seq_len:] == 0).all()
+
+
+def test_dataset_token_lengths_manifest_masking(tmp_path):
+    """Verify that DentalSFTDataset filters overlength traces using the pre-computed token manifest."""
+    import json
+    from dental_agent.training.sft import DentalSFTDataset
+
+    # Create dummy traces file with 3 samples
+    traces_file = tmp_path / "test_traces.jsonl"
+    with open(traces_file, "w", encoding="utf-8") as f:
+        f.write(json.dumps({"image_id": "img_short", "messages": []}) + "\n")
+        f.write(json.dumps({"image_id": "img_medium", "messages": []}) + "\n")
+        f.write(json.dumps({"image_id": "img_overlength", "messages": []}) + "\n")
+
+    # Create dummy token lengths manifest
+    manifest_file = tmp_path / "trace_token_lengths.json"
+    manifest_data = {
+        "lengths_by_image_id": {
+            "img_short": 5000,
+            "img_medium": 15000,
+            "img_overlength": 35000,
+        }
+    }
+    with open(manifest_file, "w", encoding="utf-8") as f:
+        json.dump(manifest_data, f)
+
+    mock_processor = MagicMock()
+    mock_processor.tokenizer.pad_token_id = 0
+
+    # Test with max_seq_len = 32768 (img_overlength should be filtered out)
+    ds_32k = DentalSFTDataset(
+        data_path=str(traces_file),
+        processor=mock_processor,
+        max_seq_len=32768,
+        token_lengths_manifest=str(manifest_file),
+    )
+    assert len(ds_32k) == 2
+    remaining_ids = [r["image_id"] for r in ds_32k.records]
+    assert "img_short" in remaining_ids
+    assert "img_medium" in remaining_ids
+    assert "img_overlength" not in remaining_ids
+
+    # Test backtrack to max_seq_len = 10000 (only img_short should remain)
+    ds_10k = DentalSFTDataset(
+        data_path=str(traces_file),
+        processor=mock_processor,
+        max_seq_len=10000,
+        token_lengths_manifest=str(manifest_file),
+    )
+    assert len(ds_10k) == 1
+    assert ds_10k.records[0]["image_id"] == "img_short"
+
+
