@@ -27,12 +27,18 @@ from typing import Any, Dict, List
 for _var in ["TPU_PROCESS_ADDRESSES", "TPU_PROCESS_COUNT", "CLOUD_TPU_TASK_ID", "PJRT_DEVICE"]:
     os.environ.pop(_var, None)
 
-# Cap OpenXLA compiler thread concurrency to prevent multi-process heap explosion on 96-vCPU hosts
-os.environ.setdefault("XLA_FLAGS", "--xla_cpu_multi_thread_eigen=false")
-os.environ.setdefault("OMP_NUM_THREADS", "4")
-os.environ.setdefault("TF_NUM_INTRAOP_THREADS", "4")
-os.environ.setdefault("TF_NUM_INTEROP_THREADS", "4")
-os.environ.setdefault("OPENBLAS_NUM_THREADS", "4")
+# Defensive scrubbing: strip any invalid flags inherited from parent Jupyter notebook environments
+for _flag_var in ["XLA_FLAGS", "LIBTPU_INIT_ARGS"]:
+    if _flag_var in os.environ:
+        cleaned = " ".join([
+            f for f in os.environ[_flag_var].split()
+            if not f.startswith("--xla_tpu_enable_flash_attention")
+            and not f.startswith("--xla_tpu_flash_attention_max_seq_len")
+        ]).strip()
+        if cleaned:
+            os.environ[_flag_var] = cleaned
+        else:
+            os.environ.pop(_flag_var, None)
 
 import torch
 from PIL import Image
