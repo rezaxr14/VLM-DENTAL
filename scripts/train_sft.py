@@ -526,9 +526,18 @@ def run_training(index: int, args: argparse.Namespace):
     elif is_master and is_tpu:
         print("[XLA CACHE] No persistent compilation cache specified or detected; continuing with normal on-the-fly compilation.")
 
-    # Stagger worker process initialization to prevent simultaneous 8-way CPU RAM surge
+    # Strict serialized loading across ranks: only ONE worker loads the 18 GB weights from disk
+    # at a time. Once sharded via FSDP, memory drops to ~2.2 GB before the next rank starts.
+    # This keeps total host CPU RAM below 28 GB at all times on Kaggle.
     if is_tpu and args.num_cores > 1:
-        time.sleep(index * 1.5)
+        lock_dir = Path("/tmp/xla_sft_locks")
+        lock_dir.mkdir(parents=True, exist_ok=True)
+        my_turn_file = lock_dir / f"rank_{index}.done"
+        prev_turn_file = lock_dir / f"rank_{index - 1}.done"
+        
+        if index > 0:
+            while not prev_turn_file.exists():
+                time.sleep(1.0)
 
     # Load processor and model
     from transformers import AutoProcessor
@@ -538,7 +547,7 @@ def run_training(index: int, args: argparse.Namespace):
 
     ModelClass = get_model_classes()
 
-    # For FSDP on multi-core TPU, load directly in float32 to avoid duplicate RAM spike from .float()
+    # PyTorch/XLA FSDP strictly requires master parameters in torch.float32 for sharding
     load_dtype = torch.float32 if (is_tpu and args.fsdp and args.num_cores > 1) else compute_dtype
 
     # Select attention implementation: FlashAttention-2 if CUDA Ampere+, otherwise sdpa
@@ -670,6 +679,13 @@ def run_training(index: int, args: argparse.Namespace):
             print("[MEMORY] glibc malloc_trim(0) invoked: released unmapped host CPU loading buffers back to OS.")
     except Exception:
         pass
+
+    # Signal that this rank has finished loading & sharding, allowing the next worker to start loading
+    if is_tpu and args.num_cores > 1:
+        try:
+            my_turn_file.touch()
+        except Exception:
+            pass
 
     # Dataset & Collator: pass max_seq_len for instant O(1) manifest filtering
     full_dataset = DentalSFTDataset(

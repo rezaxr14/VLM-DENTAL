@@ -40,6 +40,12 @@ for _flag_var in ["XLA_FLAGS", "LIBTPU_INIT_ARGS"]:
         else:
             os.environ.pop(_flag_var, None)
 
+# Cap compiler and runtime thread concurrency to prevent multi-process heap explosion across 8 workers
+os.environ.setdefault("OMP_NUM_THREADS", "4")
+os.environ.setdefault("TF_NUM_INTRAOP_THREADS", "4")
+os.environ.setdefault("TF_NUM_INTEROP_THREADS", "4")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "4")
+
 import torch
 from PIL import Image
 
@@ -190,9 +196,19 @@ def run_warmup_worker(index: int, args: argparse.Namespace):
                 if is_master:
                     print(f"[XLA CACHE WARNING] Could not initialize XLA persistent cache: {e}")
 
-        # Stagger worker process initialization to prevent simultaneous 8-way CPU RAM / disk surge
+        # Strict serialized loading across ranks: only ONE worker loads the 18 GB weights from disk
+        # at a time. Once sharded via FSDP, memory drops to ~2.2 GB before the next rank starts.
+        # This keeps total host CPU RAM below 28 GB at all times on Kaggle.
         if is_tpu and args.num_cores > 1:
-            time.sleep(index * 2.0)
+            lock_dir = Path("/tmp/xla_warmup_locks")
+            lock_dir.mkdir(parents=True, exist_ok=True)
+            my_turn_file = lock_dir / f"rank_{index}.done"
+            prev_turn_file = lock_dir / f"rank_{index - 1}.done"
+            
+            if index > 0:
+                # Wait until the previous rank finishes loading and sharding
+                while not prev_turn_file.exists():
+                    time.sleep(1.0)
 
         # Load processor
         from transformers import AutoProcessor
@@ -202,6 +218,7 @@ def run_warmup_worker(index: int, args: argparse.Namespace):
 
         ModelClass = get_model_classes()
 
+        # PyTorch/XLA FSDP strictly requires master parameters in torch.float32 for sharding
         load_dtype = torch.float32 if (is_tpu and args.fsdp and args.num_cores > 1) else compute_dtype
         load_kwargs: Dict[str, Any] = {
             "trust_remote_code": True,
@@ -211,7 +228,8 @@ def run_warmup_worker(index: int, args: argparse.Namespace):
         }
 
         if is_master:
-            print(f"[MODEL] Loading '{args.model_id}' for AOT graph compilation...")
+            prec_name = "float32 (FSDP master weights)" if load_dtype == torch.float32 else "bfloat16"
+            print(f"[MODEL] Loading '{args.model_id}' ({prec_name}, serialized rank-by-rank loading active)...")
         try:
             model = ModelClass.from_pretrained(args.model_id, **load_kwargs)
         except TypeError:
@@ -288,6 +306,13 @@ def run_warmup_worker(index: int, args: argparse.Namespace):
                 print("[MEMORY] glibc malloc_trim(0) invoked: released unmapped host CPU loading buffers back to OS.")
         except Exception:
             pass
+
+        # Signal that this rank has finished loading & sharding, allowing the next worker to start loading
+        if is_tpu and args.num_cores > 1:
+            try:
+                my_turn_file.touch()
+            except Exception:
+                pass
 
         trainable_params = [p for p in model.parameters() if p.requires_grad]
         optimizer = torch.optim.AdamW(trainable_params, lr=args.learning_rate)
