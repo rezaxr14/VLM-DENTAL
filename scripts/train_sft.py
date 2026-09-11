@@ -68,6 +68,8 @@ from dental_agent.training.sft import (
     DentalSFTDataset,
     BucketedQwenVLCollator,
     wrap_distributed_model,
+    setup_spmd_mesh,
+    wrap_spmd_model,
     unwrap_peft_model,
 )
 from dental_agent.model.backbone import get_model_classes
@@ -196,9 +198,11 @@ def parse_args():
     )
     parser.add_argument(
         "--xla-spmd",
+        "--spmd",
+        dest="xla_spmd",
         action=argparse.BooleanOptionalAction,
         default=False,
-        help="Enable PyTorch/XLA GSPMD sequence/mesh sharding",
+        help="Use SPMD-based FSDPv2 (single process, shared device mesh) instead of legacy xmp.spawn",
     )
     parser.add_argument(
         "--fsdp",
@@ -293,8 +297,11 @@ def setup_hardware(precision: str, rank: int = 0, xla_pallas: bool = True, xla_s
     is_tpu = False
     device = None
     try:
-        # If SPMD is requested, set XLA_USE_SPMD before PJRT device initialization
+        # If SPMD is requested, enable SPMD in the runtime before PJRT device initialization
         if xla_spmd:
+            import torch_xla.runtime as xr
+            if hasattr(xr, "use_spmd"):
+                xr.use_spmd()
             os.environ["XLA_USE_SPMD"] = "1"
 
         # Set PJRT_DEVICE right before the first xla_model import to ensure
@@ -674,14 +681,18 @@ def run_training(index: int, args: argparse.Namespace):
         if is_master:
             print(f"[MEMORY WARNING] Could not enable gradient checkpointing: {e}")
 
-    model = wrap_distributed_model(
-        model,
-        is_tpu=is_tpu,
-        num_cores=args.num_cores,
-        use_fsdp=args.fsdp,
-        is_master=is_master,
-        use_spmd=getattr(args, "xla_spmd", False),
-    )
+    spmd_mesh = None
+    if use_spmd and args.fsdp:
+        spmd_mesh = setup_spmd_mesh(num_cores=args.num_cores)
+        model = wrap_spmd_model(model, mesh=spmd_mesh, is_master=is_master)
+    else:
+        model = wrap_distributed_model(
+            model,
+            is_tpu=is_tpu,
+            num_cores=args.num_cores,
+            use_fsdp=args.fsdp,
+            is_master=is_master,
+        )
 
     # Host RAM reclamation: force glibc to release unmapped model-loading heap memory back to the Linux kernel
     import gc, ctypes
@@ -739,7 +750,11 @@ def run_training(index: int, args: argparse.Namespace):
 
     train_sampler = None
     ws = get_xla_world_size(is_tpu)
-    if is_tpu and ws > 1 and not use_spmd:
+    if use_spmd:
+        global_batch_size = args.batch_size * args.num_cores
+        train_dataloader = DataLoader(train_dataset, batch_size=global_batch_size, shuffle=True, collate_fn=collator)
+        val_dataloader = DataLoader(val_dataset, batch_size=global_batch_size, shuffle=False, collate_fn=collator) if val_dataset else None
+    elif is_tpu and ws > 1:
         train_sampler = torch.utils.data.distributed.DistributedSampler(
             train_dataset,
             num_replicas=ws,
@@ -747,10 +762,10 @@ def run_training(index: int, args: argparse.Namespace):
             shuffle=True,
         )
         train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, sampler=train_sampler, collate_fn=collator)
+        val_dataloader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, collate_fn=collator) if (val_dataset and is_master) else None
     else:
         train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collator)
-
-    val_dataloader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, collate_fn=collator) if (val_dataset and is_master) else None
+        val_dataloader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, collate_fn=collator) if (val_dataset and is_master) else None
 
     optimizer = torch.optim.AdamW(
         [p for p in model.parameters() if p.requires_grad],
@@ -881,6 +896,14 @@ def run_training(index: int, args: argparse.Namespace):
             # before backward, keeping lazy tensor graph execution clean.
             num_valid = int((batch["labels"] != -100).sum().item())
             inputs = {k: v.to(device) for k, v in batch.items()}
+            if use_spmd and spmd_mesh is not None:
+                import torch_xla.distributed.spmd as xs
+                for v in inputs.values():
+                    if hasattr(v, "dim") and v.dim() > 0:
+                        try:
+                            xs.mark_sharding(v, spmd_mesh, ("fsdp",) + (None,) * (v.dim() - 1))
+                        except Exception:
+                            pass
             outputs = model(**inputs)
 
             if num_valid > 0:
@@ -896,7 +919,9 @@ def run_training(index: int, args: argparse.Namespace):
             if (step + 1) % args.gradient_accumulation_steps == 0 or (step + 1) == len(train_dataloader):
                 # Normalize accumulated gradients by total valid tokens across the window
                 if accum_valid_tokens > 0:
-                    if is_tpu and get_xla_world_size(is_tpu) > 1:
+                    if use_spmd:
+                        scale = 1.0 / max(float(accum_valid_tokens), 1.0)
+                    elif is_tpu and get_xla_world_size(is_tpu) > 1:
                         token_t = torch.tensor([accum_valid_tokens], dtype=torch.float32, device=device)
                         reduce_op = getattr(xm, "REDUCE_SUM", "sum")
                         global_tokens = xm.all_reduce(reduce_op, token_t).item()

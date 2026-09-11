@@ -68,6 +68,8 @@ from dental_agent.training.sft import (
     BucketedQwenVLCollator,
     build_conversational_labels,
     wrap_distributed_model,
+    setup_spmd_mesh,
+    wrap_spmd_model,
 )
 
 DEFAULT_BUCKETS_WITH_TOOLS = [8192, 16384, 32768]
@@ -79,8 +81,11 @@ def setup_hardware(precision: str, rank: int = 0, xla_pallas: bool = True, xla_s
     is_tpu = False
     device = torch.device("cpu")
     try:
-        # If SPMD is requested, set XLA_USE_SPMD before PJRT device initialization
+        # If SPMD is requested, enable SPMD in the runtime before PJRT device initialization
         if xla_spmd:
+            import torch_xla.runtime as xr
+            if hasattr(xr, "use_spmd"):
+                xr.use_spmd()
             os.environ["XLA_USE_SPMD"] = "1"
 
         # Set PJRT_DEVICE right before the first xla_model import to ensure
@@ -299,16 +304,20 @@ def run_warmup_worker(index: int, args: argparse.Namespace):
             if is_master:
                 print(f"[CHECKPOINT WARNING] Could not enable checkpointing: {e}")
 
-        # Wrap model with FSDP or SPMD
+        # Wrap model with FSDP or SPMD (matching training pipeline)
         use_spmd = getattr(args, "xla_spmd", False)
-        model = wrap_distributed_model(
-            model,
-            is_tpu=is_tpu,
-            num_cores=args.num_cores,
-            use_fsdp=args.fsdp,
-            is_master=is_master,
-            use_spmd=use_spmd,
-        )
+        spmd_mesh = None
+        if use_spmd and args.fsdp:
+            spmd_mesh = setup_spmd_mesh(num_cores=args.num_cores)
+            model = wrap_spmd_model(model, mesh=spmd_mesh, is_master=is_master)
+        else:
+            model = wrap_distributed_model(
+                model,
+                is_tpu=is_tpu,
+                num_cores=args.num_cores,
+                use_fsdp=args.fsdp,
+                is_master=is_master,
+            )
 
         # Host RAM reclamation: force glibc to release unmapped model-loading heap memory back to OS
         gc.collect()
@@ -367,6 +376,14 @@ def run_warmup_worker(index: int, args: argparse.Namespace):
                 device=device,
                 include_image=include_images,
             )
+            if use_spmd and spmd_mesh is not None:
+                import torch_xla.distributed.spmd as xs
+                for v in dummy_batch.values():
+                    if hasattr(v, "dim") and v.dim() > 0:
+                        try:
+                            xs.mark_sharding(v, spmd_mesh, ("fsdp",) + (None,) * (v.dim() - 1))
+                        except Exception:
+                            pass
 
             if is_master:
                 t_str = time.strftime("%H:%M:%S")
@@ -526,9 +543,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--xla-spmd",
+        "--spmd",
+        dest="xla_spmd",
         action=argparse.BooleanOptionalAction,
         default=False,
-        help="Enable PyTorch/XLA GSPMD sequence/mesh sharding",
+        help="Compile using SPMD-based FSDPv2 (single process, shared mesh) instead of legacy xmp.spawn",
     )
     parser.add_argument(
         "--fsdp",

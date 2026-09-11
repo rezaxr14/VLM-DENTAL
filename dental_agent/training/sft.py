@@ -672,50 +672,8 @@ def wrap_distributed_model(
 
         if num_cores > 1 and use_spmd:
             try:
-                import os
-                import numpy as np
-                import torch_xla.distributed.spmd as xs
-                import torch_xla.runtime as xr
-
-                os.environ["XLA_USE_SPMD"] = "1"
-
-                # Resolve true global TPU device count across host (8 cores on TPU v5e-8)
-                num_devs = num_cores
-                if hasattr(xr, "addressable_device_count"):
-                    try:
-                        addr_cnt = xr.addressable_device_count()
-                        if addr_cnt > 1:
-                            num_devs = addr_cnt
-                    except Exception:
-                        pass
-
-                device_ids = np.arange(num_devs)
-                mesh = xs.Mesh(device_ids, (num_devs,), ("data",))
-                xs.set_global_mesh(mesh)
-                if is_master:
-                    print(f"[SPMD] Initialized GSPMD 1D mesh across {num_devs} TPU devices.")
-
-                model = model.to(device)
-
-                # Shard parameter tensors across the TPU devices so each core only holds ~2.3 GB HBM
-                sharded_count = 0
-                for name, p in model.named_parameters():
-                    try:
-                        if p.ndim >= 2 and p.shape[0] % num_devs == 0:
-                            xs.mark_sharding(p, mesh, ("data",) + (None,) * (p.ndim - 1))
-                            sharded_count += 1
-                        elif p.ndim >= 2 and p.shape[1] % num_devs == 0:
-                            xs.mark_sharding(p, mesh, (None, "data") + (None,) * (p.ndim - 2))
-                            sharded_count += 1
-                        elif p.ndim == 1 and p.shape[0] % num_devs == 0:
-                            xs.mark_sharding(p, mesh, ("data",))
-                            sharded_count += 1
-                    except Exception:
-                        pass
-
-                if is_master:
-                    print(f"[SPMD] Sharded {sharded_count} parameter tensors across {num_devs} TPU cores via xs.mark_sharding.")
-                return model
+                mesh = setup_spmd_mesh(num_cores=num_cores)
+                return wrap_spmd_model(model, mesh=mesh, is_master=is_master)
             except Exception as e:
                 if is_master:
                     print(f"[SPMD ERROR] GSPMD setup failed: {e}")
@@ -803,6 +761,104 @@ def wrap_distributed_model(
     # CUDA / CPU device placement
     if torch.cuda.is_available() and not hasattr(model, "hf_device_map"):
         return model.to("cuda")
+    return model
+
+
+def setup_spmd_mesh(num_cores: int = 8):
+    """Build and register the global SPMD device mesh.
+
+    Must be called after torch_xla.runtime.use_spmd() but before any model/tensor
+    touches a device. A 1D mesh is used: all num_cores devices along a single
+    'fsdp' axis (pure sharded-data-parallel, no separate tensor/model-parallel axis).
+    Returns the constructed Mesh.
+    """
+    import os
+    import numpy as np
+    import torch_xla.runtime as xr
+    import torch_xla.distributed.spmd as xs
+
+    os.environ["XLA_USE_SPMD"] = "1"
+    if hasattr(xr, "global_runtime_device_count"):
+        num_devices = xr.global_runtime_device_count()
+    elif hasattr(xr, "addressable_device_count"):
+        num_devices = xr.addressable_device_count()
+    else:
+        num_devices = num_cores
+    if num_devices <= 1:
+        num_devices = num_cores
+
+    device_ids = np.arange(num_devices)
+    mesh = xs.Mesh(device_ids, (num_devices, 1), ("fsdp", "model"))
+    xs.set_global_mesh(mesh)
+    return mesh
+
+
+def wrap_spmd_model(
+    model: Any,
+    mesh: Any,
+    is_master: bool = True,
+) -> Any:
+    """Wrap model with SPMD-based FSDPv2 (SpmdFullyShardedDataParallel).
+
+    SPMD runs as a SINGLE process controlling all TPU cores through one shared
+    device mesh; the compiler produces one sharded program, compiled once, with sharding
+    and cross-chip communication inserted automatically.
+    """
+    import torch_xla.distributed.spmd as xs
+    try:
+        from torch_xla.experimental.spmd_fully_sharded_data_parallel import (
+            SpmdFullyShardedDataParallel as FSDPv2,
+        )
+    except ImportError:
+        if is_master:
+            print("[SPMD NOTICE] SpmdFullyShardedDataParallel not available; returning model.")
+        return model
+
+    if next(model.parameters()).dtype != torch.float32:
+        model = model.float()
+
+    def shard_output(output: Any, mesh: Any) -> None:
+        real_output = output.logits if hasattr(output, "logits") else output
+        try:
+            xs.mark_sharding(real_output, mesh, ("fsdp", None, None))
+        except Exception:
+            pass
+
+    auto_wrap_policy = None
+    try:
+        from peft.utils.other import fsdp_auto_wrap_policy
+        raw_policy = fsdp_auto_wrap_policy(model)
+        if raw_policy is not None:
+            def xla_policy(module, recurse, unwrapped_params=0, **kwargs):
+                try:
+                    return raw_policy(module=module, recurse=recurse, nonwrapped_numel=unwrapped_params)
+                except TypeError:
+                    try:
+                        return raw_policy(module, recurse, unwrapped_params)
+                    except TypeError:
+                        return raw_policy(module=module, recurse=recurse)
+            auto_wrap_policy = xla_policy
+    except Exception as e:
+        if is_master:
+            print(f"[SPMD FSDPv2] PEFT auto_wrap_policy detection failed ({e}); wrapping as a single unit.")
+
+    wrap_kwargs: dict[str, Any] = {
+        "mesh": mesh,
+        "shard_output": shard_output,
+        "compute_dtype": torch.bfloat16,
+        "buffer_dtype": torch.bfloat16,
+    }
+    if auto_wrap_policy is not None:
+        wrap_kwargs["auto_wrap_policy"] = auto_wrap_policy
+
+    model = FSDPv2(model, **wrap_kwargs)
+
+    if is_master:
+        mesh_shape_str = str(getattr(mesh, "shape", getattr(mesh, "get_shape", lambda: "")()))
+        print(
+            f"[SPMD FSDPv2] Wrapped model across {mesh_shape_str}-chip mesh ('fsdp' axis). "
+            f"Single-process SPMD execution -- no xmp.spawn, no per-process redundant compilation."
+        )
     return model
 
 
