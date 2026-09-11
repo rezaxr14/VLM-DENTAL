@@ -27,6 +27,13 @@ from typing import Any, Dict, List
 for _var in ["TPU_PROCESS_ADDRESSES", "TPU_PROCESS_COUNT", "CLOUD_TPU_TASK_ID", "PJRT_DEVICE"]:
     os.environ.pop(_var, None)
 
+# Cap OpenXLA compiler thread concurrency to prevent multi-process heap explosion on 96-vCPU hosts
+os.environ.setdefault("XLA_FLAGS", "--xla_cpu_multi_thread_eigen=false")
+os.environ.setdefault("OMP_NUM_THREADS", "4")
+os.environ.setdefault("TF_NUM_INTRAOP_THREADS", "4")
+os.environ.setdefault("TF_NUM_INTEROP_THREADS", "4")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "4")
+
 import torch
 from PIL import Image
 
@@ -153,13 +160,12 @@ def run_warmup_worker(index: int, args: argparse.Namespace):
 
         # Initialize persistent XLA compilation cache BEFORE any model execution
         cache_base = Path(args.cache_dir).resolve()
-        rank_cache_dir = cache_base / f"rank_{index}"
-        rank_cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_base.mkdir(parents=True, exist_ok=True)
 
         if is_tpu:
             try:
                 import torch_xla.runtime as xr
-                xr.initialize_cache(str(rank_cache_dir), readonly=False)
+                xr.initialize_cache(str(cache_base), readonly=False)
                 if is_master:
                     print(f"[XLA CACHE] Initialized persistent compilation cache at: {cache_base}")
             except Exception as e:
@@ -289,9 +295,19 @@ def run_warmup_worker(index: int, args: argparse.Namespace):
             model.train()
             outputs = model(**dummy_batch)
             loss = outputs.loss
+            # Free logits lazy tensor handle and input tensors immediately before backward
+            del outputs
+            del dummy_batch
             loss.backward()
 
             torch.nn.utils.clip_grad_norm_(trainable_params, 1.0)
+
+            # Flush host CPU memory right before xm.mark_step triggers compilation
+            gc.collect()
+            try:
+                ctypes.CDLL("libc.so.6").malloc_trim(0)
+            except Exception:
+                pass
 
             if is_master:
                 t_str = time.strftime("%H:%M:%S")
@@ -309,7 +325,7 @@ def run_warmup_worker(index: int, args: argparse.Namespace):
                 optimizer.step()
 
             optimizer.zero_grad(set_to_none=True)
-            del dummy_batch, outputs, loss
+            del loss
 
             # Reclaim host memory between bucket compilations
             gc.collect()
@@ -350,6 +366,16 @@ def run_warmup_worker(index: int, args: argparse.Namespace):
             with open(meta_file, "w", encoding="utf-8") as f:
                 json.dump(meta, f, indent=2)
             print(f"\n[METADATA] Generated Kaggle dataset metadata at: {meta_file}")
+
+            # Create rank symlinks for full backward compatibility with any script expecting rank_{r}
+            for r in range(args.num_cores):
+                r_dir = cache_base / f"rank_{r}"
+                if not r_dir.exists():
+                    try:
+                        r_dir.symlink_to(".", target_is_directory=True)
+                    except Exception:
+                        pass
+
             print(f"[KAGGLE CLI] To upload to Kaggle Datasets, run:")
             print(f"  kaggle datasets create -p {cache_base} -u --dir-mode tar")
             print(f"  (or `kaggle datasets version -p {cache_base} -m 'Update cache' --dir-mode tar`)")

@@ -28,6 +28,13 @@ from typing import Any, Dict, List, Optional, Tuple
 for _var in ["TPU_PROCESS_ADDRESSES", "TPU_PROCESS_COUNT", "CLOUD_TPU_TASK_ID", "PJRT_DEVICE"]:
     os.environ.pop(_var, None)
 
+# Cap OpenXLA compiler thread concurrency to prevent multi-process heap explosion on 96-vCPU hosts
+os.environ.setdefault("XLA_FLAGS", "--xla_cpu_multi_thread_eigen=false")
+os.environ.setdefault("OMP_NUM_THREADS", "4")
+os.environ.setdefault("TF_NUM_INTRAOP_THREADS", "4")
+os.environ.setdefault("TF_NUM_INTEROP_THREADS", "4")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "4")
+
 # NOTE: PJRT_DEVICE is set lazily inside setup_hardware(), NOT here.
 # Setting it before `import torch` causes torch_xla's torch plugin to auto-initialize
 # the PJRT TPU client at import time. Then when setup_hardware() explicitly calls
@@ -442,7 +449,7 @@ def run_training(index: int, args: argparse.Namespace):
         try:
             import torch_xla.runtime as xr
             rank_cache = cache_path / f"rank_{index}"
-            target_cache = rank_cache if rank_cache.is_dir() else cache_path
+            target_cache = rank_cache if (rank_cache.is_dir() and any(rank_cache.iterdir())) else cache_path
             xr.initialize_cache(str(target_cache), readonly=is_readonly)
             if is_master:
                 mode_str = "read-only" if is_readonly else "writable"
@@ -730,10 +737,14 @@ def run_training(index: int, args: argparse.Namespace):
             outputs = model(**inputs)
 
             if num_valid > 0:
-                batch_loss_sum = outputs.loss * num_valid
+                batch_loss = outputs.loss
+                del outputs  # Free logits lazy tensor handle immediately
+                batch_loss_sum = batch_loss * num_valid
                 batch_loss_sum.backward()
                 accum_loss_sum += batch_loss_sum.item()
                 accum_valid_tokens += num_valid
+            else:
+                del outputs
 
             if (step + 1) % args.gradient_accumulation_steps == 0 or (step + 1) == len(train_dataloader):
                 # Normalize accumulated gradients by total valid tokens across the window
