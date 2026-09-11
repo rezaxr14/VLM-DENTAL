@@ -814,8 +814,8 @@ def wrap_spmd_model(
             print("[SPMD NOTICE] SpmdFullyShardedDataParallel not available; returning model.")
         return model
 
-    if next(model.parameters()).dtype != torch.float32:
-        model = model.float()
+    # Under SPMD, the model stays in its native compute precision (bfloat16, ~18 GB),
+    # avoiding the 36 GB float32 allocation required by legacy FSDPv1.
 
     def shard_output(output: Any, mesh: Any) -> None:
         real_output = output.logits if hasattr(output, "logits") else output
@@ -844,14 +844,20 @@ def wrap_spmd_model(
 
     wrap_kwargs: dict[str, Any] = {
         "mesh": mesh,
-        "shard_output": shard_output,
-        "compute_dtype": torch.bfloat16,
-        "buffer_dtype": torch.bfloat16,
     }
+    if shard_output is not None:
+        wrap_kwargs["shard_output"] = shard_output
     if auto_wrap_policy is not None:
         wrap_kwargs["auto_wrap_policy"] = auto_wrap_policy
 
-    model = FSDPv2(model, **wrap_kwargs)
+    try:
+        model = FSDPv2(model, **wrap_kwargs)
+    except TypeError as te:
+        err_str = str(te)
+        for kw in ["shard_output", "auto_wrap_policy"]:
+            if kw in err_str and kw in wrap_kwargs:
+                wrap_kwargs.pop(kw, None)
+        model = FSDPv2(model, **wrap_kwargs)
 
     if is_master:
         mesh_shape_str = str(getattr(mesh, "shape", getattr(mesh, "get_shape", lambda: "")()))
