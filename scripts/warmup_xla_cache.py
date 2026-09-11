@@ -242,7 +242,8 @@ def run_warmup_worker(index: int, args: argparse.Namespace):
         except Exception:
             pass
 
-        optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
+        trainable_params = [p for p in model.parameters() if p.requires_grad]
+        optimizer = torch.optim.AdamW(trainable_params, lr=args.learning_rate)
 
         # Resolve target buckets to compile
         if args.buckets:
@@ -261,6 +262,7 @@ def run_warmup_worker(index: int, args: argparse.Namespace):
             print(f"* Attention Impl : {args.attn_implementation}")
             print(f"* TPU Cores      : {args.num_cores}")
             print(f"* Cache Output   : {cache_base}")
+            print(f"* Trainable Params: {len(trainable_params)} tensors (~80M LoRA parameters)")
             print("=" * 70)
 
         # Compile buckets sequentially with memory flushing
@@ -269,7 +271,8 @@ def run_warmup_worker(index: int, args: argparse.Namespace):
 
         for idx, b_len in enumerate(target_buckets, 1):
             if is_master:
-                print(f"\n[AOT COMPILATION {idx}/{len(target_buckets)}] Starting warmup for bucket {b_len} tokens...")
+                t_str = time.strftime("%H:%M:%S")
+                print(f"\n[{t_str}] [AOT COMPILATION {idx}/{len(target_buckets)}] Preparing bucket {b_len} tokens...")
 
             t0 = time.time()
             dummy_batch = build_dummy_multimodal_batch(
@@ -279,10 +282,20 @@ def run_warmup_worker(index: int, args: argparse.Namespace):
                 include_image=include_images,
             )
 
+            if is_master:
+                t_str = time.strftime("%H:%M:%S")
+                print(f"[{t_str}] [AOT {idx}/{len(target_buckets)}] Tracing forward & backward pass...")
+
             model.train()
             outputs = model(**dummy_batch)
             loss = outputs.loss
             loss.backward()
+
+            torch.nn.utils.clip_grad_norm_(trainable_params, 1.0)
+
+            if is_master:
+                t_str = time.strftime("%H:%M:%S")
+                print(f"[{t_str}] [AOT {idx}/{len(target_buckets)}] Graph traced. Triggering XLA compilation & execution (xm.mark_step)...")
 
             # Align optimizer step with FSDP execution pattern
             if is_tpu:
@@ -311,7 +324,8 @@ def run_warmup_worker(index: int, args: argparse.Namespace):
 
             elapsed = time.time() - t0
             if is_master:
-                print(f"[AOT COMPILATION {idx}/{len(target_buckets)}] Bucket {b_len} compiled and cached in {elapsed:.1f}s.")
+                t_str = time.strftime("%H:%M:%S")
+                print(f"[{t_str}] [AOT COMPILATION {idx}/{len(target_buckets)}] Bucket {b_len} compiled and cached in {elapsed:.1f}s.")
                 results.append({"bucket": b_len, "compile_seconds": round(elapsed, 1)})
 
         # Master ordinal creates Kaggle dataset metadata and summary
