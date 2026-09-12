@@ -93,6 +93,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Automatically upload the generated manifest to Hugging Face Hub",
     )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Strict no-fallback mode: abort (raise) on any trace encode failure "
+        "instead of writing the text+1772-per-image estimate. Required for 10K gating.",
+    )
     return parser.parse_args()
 
 
@@ -298,6 +304,13 @@ def main():
                 enc = ds[s_idx]
                 exact_tokens = int(enc["input_ids"].shape[1])
             except Exception as e:
+                if getattr(args, "strict", False):
+                    # Strict no-fallback mode: images were mandated, so any encode
+                    # failure aborts instead of writing an estimate into the manifest.
+                    raise RuntimeError(
+                        f"[STRICT] Exact encode failed for {tf.name}::{ds_name}::{rec_id}: {e}. "
+                        "Aborting (no text+1772 estimate allowed)."
+                    ) from e
                 print(f"  [WARNING] Error encoding sample {s_idx} ({rec_id}): {e}; falling back to estimate.", flush=True)
                 # Fallback estimation: encode text + 1772 tokens per image
                 raw_msgs = rec.get("messages", [])
