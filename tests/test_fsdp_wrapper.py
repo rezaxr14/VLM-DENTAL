@@ -81,7 +81,7 @@ def test_sft_cli_fsdp_flags():
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(sys, "argv", ["train_sft.py", "--track", "with_tools"])
         args = parse_args()
-        assert args.max_seq_len == 32768
+        assert args.max_seq_len == 10240
         assert args.xla_pallas is True
         assert args.xla_spmd is False
 

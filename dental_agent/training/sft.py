@@ -214,7 +214,7 @@ class BucketedQwenVLCollator:
     4. Padding tokens masked with `labels = -100`.
     """
 
-    BUCKETS_WITH_TOOLS = [8192, 16384, 32768]
+    BUCKETS_WITH_TOOLS = [10240]
     BUCKETS_NO_TOOLS = [1536, 2048, 2560, 3072, 8192]
 
     def __init__(
@@ -852,12 +852,14 @@ def wrap_spmd_model(
 
     try:
         model = FSDPv2(model, **wrap_kwargs)
-    except TypeError as te:
-        err_str = str(te)
-        for kw in ["shard_output", "auto_wrap_policy"]:
-            if kw in err_str and kw in wrap_kwargs:
-                wrap_kwargs.pop(kw, None)
-        model = FSDPv2(model, **wrap_kwargs)
+    except TypeError:
+        # Stepwise fallback: try without auto_wrap_policy, then without shard_output
+        wrap_kwargs.pop("auto_wrap_policy", None)
+        try:
+            model = FSDPv2(model, **wrap_kwargs)
+        except TypeError:
+            wrap_kwargs.pop("shard_output", None)
+            model = FSDPv2(model, **wrap_kwargs)
 
     if is_master:
         mesh_shape_str = str(getattr(mesh, "shape", getattr(mesh, "get_shape", lambda: "")()))
@@ -884,7 +886,7 @@ def train_sft(
     num_cores: int = 1,
     use_fsdp: bool = True,
     use_spmd: bool = False,
-    max_seq_len: int = 32768,
+    max_seq_len: int = 10240,
 ) -> str:
     """Execute Stage 1 SFT on verified expert traces with conversational loss masking."""
     print(f"--- Starting Stage 1 SFT Training (Track={track}, Epochs={epochs}, LR={learning_rate}) ---")

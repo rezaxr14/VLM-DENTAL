@@ -20,16 +20,14 @@ def test_bucketed_collator_snapping_and_right_padding():
     mock_processor.tokenizer.pad_token_id = 0
 
     collator_tools = BucketedQwenVLCollator(mock_processor, track="with_tools")
-    assert collator_tools.buckets == [8192, 16384, 32768]
+    assert collator_tools.buckets == [10240]
 
-    # Test snapping logic up to 32768 headroom
-    assert collator_tools._snap_to_bucket(1000) == 8192
-    assert collator_tools._snap_to_bucket(8192) == 8192
-    assert collator_tools._snap_to_bucket(8193) == 16384
-    assert collator_tools._snap_to_bucket(16384) == 16384
-    assert collator_tools._snap_to_bucket(20000) == 32768
-    assert collator_tools._snap_to_bucket(32768) == 32768
-    assert collator_tools._snap_to_bucket(40000) == 32768
+    # Test snapping logic up to 10240 headroom
+    assert collator_tools._snap_to_bucket(1000) == 10240
+    assert collator_tools._snap_to_bucket(8192) == 10240
+    assert collator_tools._snap_to_bucket(10240) == 10240
+    assert collator_tools._snap_to_bucket(20000) == 10240
+    assert collator_tools._snap_to_bucket(40000) == 10240
 
     collator_no_tools = BucketedQwenVLCollator(mock_processor, track="no_tools")
     assert collator_no_tools.buckets == [1536, 2048, 2560, 3072, 8192]

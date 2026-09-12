@@ -25,10 +25,11 @@ import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-# Permanently suppress torch_xla / tensorflow conflict warnings
+# Permanently suppress torch_xla / tensorflow conflict and deprecation warnings
 warnings.filterwarnings("ignore", category=UserWarning, message=".*tensorflow.*can conflict with.*torch-xla.*")
 warnings.filterwarnings("ignore", category=UserWarning, module="torch_xla.*")
-os.environ.setdefault("PYTHONWARNINGS", "ignore::UserWarning")
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="torch_xla.*")
+os.environ.setdefault("PYTHONWARNINGS", "ignore::UserWarning,ignore::DeprecationWarning")
 
 # Clear conflicting legacy TPU variables and PJRT_DEVICE on Kaggle/Colab
 for _var in ["TPU_PROCESS_ADDRESSES", "TPU_PROCESS_COUNT", "CLOUD_TPU_TASK_ID", "PJRT_DEVICE"]:
@@ -180,8 +181,8 @@ def parse_args():
     parser.add_argument(
         "--max-seq-len",
         type=int,
-        default=32768,
-        help="Single static sequence length (default: 32768 for 32k, backtrack to 24576 or 16384 if needed)",
+        default=10240,
+        help="Single static sequence length (default: 10240 for single-graph TPU/GPU training)",
     )
     parser.add_argument(
         "--custom-buckets",
@@ -314,8 +315,12 @@ def setup_hardware(precision: str, rank: int = 0, xla_pallas: bool = True, xla_s
         if xla_pallas and rank == 0:
             print("[ATTENTION] TPU attention acceleration active via PyTorch SDPA lowering.")
 
+        import torch_xla
         import torch_xla.core.xla_model as xm
-        device = xm.xla_device()
+        try:
+            device = torch_xla.device()
+        except (AttributeError, Exception):
+            device = xm.xla_device()
         is_tpu = True
         
         # torch.utils.checkpoint's fork_rng() calls torch.get_device_module("xla")
@@ -323,7 +328,6 @@ def setup_hardware(precision: str, rank: int = 0, xla_pallas: bool = True, xla_s
         # lookup is just getattr(torch, "xla", None). XLA has no torch.xla submodule,
         # so it raises. Registering torch_xla here satisfies that existence check;
         # preserve_rng_state=False means its actual methods never get called.
-        import torch_xla
         if not hasattr(torch, "xla"):
             torch._register_device_module("xla", torch_xla)
             
@@ -387,7 +391,7 @@ def upload_checkpoint_to_hf(checkpoint_dir: Path, hf_repo: str, step: int, epoch
         print(f"[HF-HUB WARNING] Failed to upload checkpoint to {hf_repo}: {e}")
 
 
-def evaluate_loss(model: torch.nn.Module, val_loader: DataLoader, device: torch.device, is_tpu: bool) -> float:
+def evaluate_loss(model: torch.nn.Module, val_loader: DataLoader, device: torch.device, is_tpu: bool, spmd_mesh: Any = None) -> float:
     """Compute validation loss on held-out 5% validation set."""
     model.eval()
     total_val_loss = 0.0
@@ -395,6 +399,14 @@ def evaluate_loss(model: torch.nn.Module, val_loader: DataLoader, device: torch.
     with torch.no_grad():
         for batch in val_loader:
             inputs = {k: v.to(device) for k, v in batch.items()}
+            if spmd_mesh is not None:
+                import torch_xla.distributed.spmd as xs
+                for v in inputs.values():
+                    if hasattr(v, "dim") and v.dim() > 0:
+                        try:
+                            xs.mark_sharding(v, spmd_mesh, ("fsdp",) + (None,) * (v.dim() - 1))
+                        except Exception:
+                            pass
             outputs = model(**inputs)
             total_val_loss += outputs.loss.item()
             val_batches += 1
@@ -970,7 +982,7 @@ def run_training(index: int, args: argparse.Namespace):
                     # Step-interval evaluation on held-out validation set
                     eval_at_steps = args.eval_strategy in ("steps", "both")
                     if eval_at_steps and val_dataloader and args.eval_every_steps > 0 and total_steps % args.eval_every_steps == 0:
-                        val_loss = evaluate_loss(model, val_dataloader, device, is_tpu)
+                        val_loss = evaluate_loss(model, val_dataloader, device, is_tpu, spmd_mesh=spmd_mesh)
                         log_entry["val_loss"] = val_loss
                         if val_loss < best_val_loss:
                             best_val_loss = val_loss
@@ -990,7 +1002,7 @@ def run_training(index: int, args: argparse.Namespace):
         # Evaluate validation loss at every epoch boundary regardless of step-interval,
         # ensuring best_adapter is always compared at the true epoch completion point.
         if is_master and val_dataloader and args.eval_strategy in ("epoch", "both"):
-            val_loss = evaluate_loss(model, val_dataloader, device, is_tpu)
+            val_loss = evaluate_loss(model, val_dataloader, device, is_tpu, spmd_mesh=spmd_mesh)
             print(f"\n[EPOCH {epoch} EVALUATION] val_loss = {val_loss:.4f} (previous best = {best_val_loss:.4f})")
             epoch_log = {"epoch": epoch, "step": total_steps, "epoch_end_val_loss": val_loss}
             if val_loss < best_val_loss:
@@ -1007,7 +1019,7 @@ def run_training(index: int, args: argparse.Namespace):
 
         # Multi-core TPU synchronization barrier: ensure master finishes
         # epoch-end validation and checkpoint saving before workers proceed.
-        if is_tpu and args.num_cores > 1:
+        if is_tpu and args.num_cores > 1 and not use_spmd:
             import torch_xla.core.xla_model as xm
             xm.rendezvous(f"epoch_end_{epoch}")
 

@@ -84,6 +84,11 @@ def parse_args() -> argparse.Namespace:
         help="Optional specific trace JSONL file paths to process",
     )
     parser.add_argument(
+        "--recompute",
+        action="store_true",
+        help="Force recomputation of all traces instead of resuming from existing manifest",
+    )
+    parser.add_argument(
         "--upload-hf",
         action="store_true",
         help="Automatically upload the generated manifest to Hugging Face Hub",
@@ -116,8 +121,29 @@ def save_manifest(
         "32768": int(np.sum(arr <= 32768)),
         "24576": int(np.sum(arr <= 24576)),
         "16384": int(np.sum(arr <= 16384)),
+        "10240": int(np.sum(arr <= 10240)),
         "8192": int(np.sum(arr <= 8192)),
     }
+
+    from collections import defaultdict
+    by_file = defaultdict(list)
+    for k, v in lengths_by_file_and_id.items():
+        fn = k.split("::")[0]
+        by_file[fn].append(v)
+
+    file_stats = {}
+    for fn, f_lens in sorted(by_file.items()):
+        f_arr = np.array(f_lens)
+        file_stats[fn] = {
+            "count": int(len(f_arr)),
+            "min": int(np.min(f_arr)),
+            "p50": int(np.percentile(f_arr, 50)),
+            "p90": int(np.percentile(f_arr, 90)),
+            "max": int(np.max(f_arr)),
+            "le_10240": int(np.sum(f_arr <= 10240)),
+            "le_8192": int(np.sum(f_arr <= 8192)),
+        }
+
     manifest = {
         "_meta": {
             "model_id": model_id,
@@ -125,6 +151,7 @@ def save_manifest(
             "total_traces": len(all_lengths),
             "stats": stats,
             "compliance": compliance,
+            "file_stats": file_stats,
         },
         "lengths_by_image_id": lengths_by_image_id,
         "lengths_by_file_and_id": lengths_by_file_and_id,
@@ -132,7 +159,7 @@ def save_manifest(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2)
-    return {"stats": stats, "compliance": compliance}
+    return {"stats": stats, "compliance": compliance, "file_stats": file_stats}
 
 
 def main():
@@ -201,7 +228,7 @@ def main():
     all_lengths: List[int] = []
 
     out_path = Path(args.output_file)
-    if out_path.is_file():
+    if out_path.is_file() and not args.recompute:
         try:
             with open(out_path, "r", encoding="utf-8") as f:
                 existing_manifest = json.load(f)
@@ -232,11 +259,36 @@ def main():
         for s_idx in range(n_samples):
             rec = ds.records[s_idx]
             rec_id = str(rec.get("image_id", s_idx))
-            qualified_key = f"{tf.name}::{rec_id}"
+            ds_name = str(rec.get("dataset", "default"))
+            qualified_key = f"{tf.name}::{ds_name}::{rec_id}"
+            image_key = f"{ds_name}::{rec_id}"
 
             if qualified_key in lengths_by_file_and_id:
                 exact_tokens = lengths_by_file_and_id[qualified_key]
-                lengths_by_image_id[rec_id] = exact_tokens
+                lengths_by_image_id[image_key] = exact_tokens
+                all_lengths.append(exact_tokens)
+                total_processed += 1
+                continue
+
+            # Fallback 1: Check legacy un-namespaced key for single-dataset files
+            legacy_key = f"{tf.name}::{rec_id}"
+            if tf.name not in ("train_cot_traces.jsonl", "train_cot_traces_no_tools.jsonl") and legacy_key in lengths_by_file_and_id:
+                exact_tokens = lengths_by_file_and_id[legacy_key]
+                lengths_by_image_id[image_key] = exact_tokens
+                lengths_by_file_and_id[qualified_key] = exact_tokens
+                all_lengths.append(exact_tokens)
+                total_processed += 1
+                continue
+
+            # Fallback 2: Check matching record in the cohort split file
+            cohort_fn = f"train_cot_traces_{ds_name}.jsonl" if "no_tools" not in tf.name else f"train_cot_traces_{ds_name}_no_tools.jsonl"
+            cohort_k1 = f"{cohort_fn}::{ds_name}::{rec_id}"
+            cohort_k2 = f"{cohort_fn}::{rec_id}"
+            found_cohort_val = lengths_by_file_and_id.get(cohort_k1) or lengths_by_file_and_id.get(cohort_k2)
+            if found_cohort_val is not None:
+                exact_tokens = found_cohort_val
+                lengths_by_image_id[image_key] = exact_tokens
+                lengths_by_file_and_id[qualified_key] = exact_tokens
                 all_lengths.append(exact_tokens)
                 total_processed += 1
                 continue
@@ -265,20 +317,20 @@ def main():
                 t_tokens = len(processor.tokenizer.encode(text_content, add_special_tokens=False))
                 exact_tokens = t_tokens + max(img_cnt, 1) * 1772
 
-            lengths_by_image_id[rec_id] = exact_tokens
+            lengths_by_image_id[image_key] = exact_tokens
             lengths_by_file_and_id[qualified_key] = exact_tokens
             all_lengths.append(exact_tokens)
             total_processed += 1
 
             if (s_idx + 1) % 50 == 0 or (s_idx + 1) == n_samples:
                 print(f"  Processed {s_idx + 1}/{n_samples} traces (sample {rec_id} = {exact_tokens} tokens)...", flush=True)
-                save_manifest(out_path, args.model_id, all_lengths, lengths_by_image_id, lengths_by_file_and_id)
+                save_manifest(out_path, args.model_id, list(lengths_by_file_and_id.values()), lengths_by_image_id, lengths_by_file_and_id)
 
         # Checkpoint save after completing each trace file
-        save_manifest(out_path, args.model_id, all_lengths, lengths_by_image_id, lengths_by_file_and_id)
-        print(f"  [CHECKPOINT] Manifest updated at {out_path} ({len(all_lengths)} traces total).", flush=True)
+        save_manifest(out_path, args.model_id, list(lengths_by_file_and_id.values()), lengths_by_image_id, lengths_by_file_and_id)
+        print(f"  [CHECKPOINT] Manifest updated at {out_path} ({len(lengths_by_file_and_id)} traces total).", flush=True)
 
-    res = save_manifest(out_path, args.model_id, all_lengths, lengths_by_image_id, lengths_by_file_and_id)
+    res = save_manifest(out_path, args.model_id, list(lengths_by_file_and_id.values()), lengths_by_image_id, lengths_by_file_and_id)
     stats = res.get("stats", {})
     compliance = res.get("compliance", {})
 

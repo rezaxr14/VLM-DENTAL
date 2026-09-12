@@ -152,20 +152,18 @@ def test_dental_sft_dataset_dynamic_tool_image_injection():
 
 
 def test_collator_bucket_snapping_headroom():
-    """Verify that BucketedQwenVLCollator snaps to calibrated buckets up to 32,768."""
+    """Verify that BucketedQwenVLCollator snaps to calibrated buckets up to 10,240."""
     processor = DummyProcessor()
     collator = BucketedQwenVLCollator(processor=processor, track="with_tools")
 
-    assert collator.buckets[-1] == 32768
+    assert collator.buckets[-1] == 10240
     assert 65536 not in collator.buckets
 
-    assert collator._snap_to_bucket(3000) == 8192
-    assert collator._snap_to_bucket(7500) == 8192
-    assert collator._snap_to_bucket(10000) == 16384
-    assert collator._snap_to_bucket(15000) == 16384
-    assert collator._snap_to_bucket(20000) == 32768
-    assert collator._snap_to_bucket(30000) == 32768
-    assert collator._snap_to_bucket(35000) == 32768
+    assert collator._snap_to_bucket(3000) == 10240
+    assert collator._snap_to_bucket(7500) == 10240
+    assert collator._snap_to_bucket(10000) == 10240
+    assert collator._snap_to_bucket(15000) == 10240
+    assert collator._snap_to_bucket(20000) == 10240
 
     collator_no_tools = BucketedQwenVLCollator(processor=processor, track="no_tools")
     assert collator_no_tools.buckets == [1536, 2048, 2560, 3072, 8192]

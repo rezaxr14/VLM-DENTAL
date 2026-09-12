@@ -24,10 +24,11 @@ import warnings
 from pathlib import Path
 from typing import Any, Dict, List
 
-# Permanently suppress torch_xla / tensorflow conflict warnings
+# Permanently suppress torch_xla / tensorflow conflict and deprecation warnings
 warnings.filterwarnings("ignore", category=UserWarning, message=".*tensorflow.*can conflict with.*torch-xla.*")
 warnings.filterwarnings("ignore", category=UserWarning, module="torch_xla.*")
-os.environ.setdefault("PYTHONWARNINGS", "ignore::UserWarning")
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="torch_xla.*")
+os.environ.setdefault("PYTHONWARNINGS", "ignore::UserWarning,ignore::DeprecationWarning")
 
 # Clear conflicting legacy TPU variables and PJRT_DEVICE on Kaggle/Colab
 for _var in ["TPU_PROCESS_ADDRESSES", "TPU_PROCESS_COUNT", "CLOUD_TPU_TASK_ID", "PJRT_DEVICE"]:
@@ -72,7 +73,7 @@ from dental_agent.training.sft import (
     wrap_spmd_model,
 )
 
-DEFAULT_BUCKETS_WITH_TOOLS = [8192, 16384, 32768]
+DEFAULT_BUCKETS_WITH_TOOLS = [10240]
 DEFAULT_BUCKETS_NO_TOOLS = [1536, 2048, 2560, 3072, 8192]
 
 
@@ -98,11 +99,14 @@ def setup_hardware(precision: str, rank: int = 0, xla_pallas: bool = True, xla_s
         if xla_pallas and rank == 0:
             print("[ATTENTION] TPU attention acceleration active via PyTorch SDPA lowering.")
 
+        import torch_xla
         import torch_xla.core.xla_model as xm
-        device = xm.xla_device()
+        try:
+            device = torch_xla.device()
+        except (AttributeError, Exception):
+            device = xm.xla_device()
         is_tpu = True
 
-        import torch_xla
         if not hasattr(torch, "xla"):
             torch._register_device_module("xla", torch_xla)
 
@@ -344,11 +348,11 @@ def run_warmup_worker(index: int, args: argparse.Namespace):
         elif getattr(args, "max_seq_len", None):
             target_buckets = [args.max_seq_len]
         elif args.track == "with_tools":
-            target_buckets = [32768]
+            target_buckets = [10240]
         elif args.track == "no_tools":
             target_buckets = [8192]
         else:  # "both"
-            target_buckets = [32768]
+            target_buckets = [10240]
 
         if is_master:
             print("=" * 70)
@@ -532,8 +536,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-seq-len",
         type=int,
-        default=32768,
-        help="Single static sequence length to pre-compile (e.g. 32768, 24576, 16384)",
+        default=10240,
+        help="Single static sequence length to pre-compile (e.g. 10240)",
     )
     parser.add_argument(
         "--xla-pallas",
