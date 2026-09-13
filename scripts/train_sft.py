@@ -391,7 +391,116 @@ def upload_checkpoint_to_hf(checkpoint_dir: Path, hf_repo: str, step: int, epoch
         print(f"[HF-HUB WARNING] Failed to upload checkpoint to {hf_repo}: {e}")
 
 
-def evaluate_loss(model: torch.nn.Module, val_loader: DataLoader, device: torch.device, is_tpu: bool, spmd_mesh: Any = None) -> float:
+def log_xla_memory(stage: str, device: Any = None, is_master: bool = True) -> None:
+    """Log current physical/virtual HBM usage from PyTorch/XLA."""
+    if not is_master:
+        return
+    try:
+        import torch_xla.core.xla_model as xm
+        d = device or xm.xla_device()
+        info = xm.get_memory_info(d)
+        used_gib = info.get("bytes_used", 0) / (1024 ** 3)
+        limit_gib = info.get("bytes_limit", 0) / (1024 ** 3)
+        print(f"[XLA MEMORY | {stage}] HBM Used: {used_gib:.2f} GiB / {limit_gib:.2f} GiB (raw: {info})", flush=True)
+    except Exception:
+        pass
+
+
+def freeze_and_guard_vision_tower(model: torch.nn.Module, train_merger: bool = False, is_master: bool = True) -> None:
+    """Freezes vision encoder parameters and wraps forward execution in torch.no_grad()."""
+    visual = getattr(model, "visual", None)
+    if visual is None and hasattr(model, "model"):
+        visual = getattr(model.model, "visual", None)
+
+    if visual is None:
+        return
+
+    # 1. Freeze all visual parameters
+    frozen_count = 0
+    trained_count = 0
+    for name, param in visual.named_parameters():
+        if train_merger and "merger" in name:
+            param.requires_grad = True
+            trained_count += param.numel()
+        else:
+            param.requires_grad = False
+            frozen_count += param.numel()
+
+    # 2. Wrap forward execution in torch.no_grad()
+    if not train_merger:
+        orig_forward = visual.forward
+        def no_grad_visual_forward(*args, **kwargs):
+            with torch.no_grad():
+                return orig_forward(*args, **kwargs)
+        visual.forward = no_grad_visual_forward
+        if is_master:
+            print(f"[VISION GUARD] Whole vision tower wrapped in torch.no_grad() ({frozen_count:,} frozen params, 0 saved activations).")
+    elif hasattr(visual, "blocks"):
+        for blk in visual.blocks:
+            orig_blk_forward = blk.forward
+            def make_no_grad(f):
+                def wrapped(*args, **kwargs):
+                    with torch.no_grad():
+                        return f(*args, **kwargs)
+                return wrapped
+            blk.forward = make_no_grad(orig_blk_forward)
+        if is_master:
+            print(f"[VISION GUARD] 27 vision transformer blocks wrapped in torch.no_grad() ({frozen_count:,} frozen params). Merger trainable ({trained_count:,} params).")
+
+
+def apply_spmd_input_sharding(inputs: Dict[str, Any], spmd_mesh: Any, num_cores: int = 8) -> None:
+    """Shard inputs cleanly across SPMD mesh, guarding against dimension mismatches and KeyError."""
+    if spmd_mesh is None:
+        return
+    import torch_xla.distributed.spmd as xs
+
+    # 1. Shard standard batch-sequence tensors along dim 0
+    for key in ["input_ids", "attention_mask", "labels", "mm_token_type_ids"]:
+        tensor = inputs.get(key)
+        if tensor is not None and hasattr(tensor, "dim") and tensor.dim() > 0:
+            if tensor.shape[0] % num_cores == 0:
+                xs.mark_sharding(tensor, spmd_mesh, ("fsdp",) + (None,) * (tensor.dim() - 1))
+            else:
+                xs.mark_sharding(tensor, spmd_mesh, (None,) * tensor.dim())
+
+    # 2. Multimodal tensors: pixel_values and image_grid_thw
+    pixel_values = inputs.get("pixel_values")
+    image_grid_thw = inputs.get("image_grid_thw")
+    input_ids = inputs.get("input_ids")
+
+    # Cheap assertion for 19-slot static budget: if 29952 patches per sample, verify exactly 19 images
+    if pixel_values is not None and input_ids is not None and pixel_values.shape[0] == input_ids.shape[0] * 29952:
+        assert image_grid_thw is not None and image_grid_thw.shape[0] == input_ids.shape[0] * 19, (
+            f"Corrupted image slot budget: pixel_values has {pixel_values.shape[0]} patches "
+            f"({input_ids.shape[0]} * 29952), but image_grid_thw has {getattr(image_grid_thw, 'shape', None)} instead of {input_ids.shape[0] * 19}"
+        )
+
+    if pixel_values is not None and hasattr(pixel_values, "dim") and pixel_values.dim() > 0:
+        if input_ids is not None:
+            batch_sz = input_ids.shape[0]
+            if pixel_values.shape[0] % batch_sz == 0:
+                xs.mark_sharding(pixel_values, spmd_mesh, ("fsdp", None))
+            else:
+                xs.mark_sharding(pixel_values, spmd_mesh, (None, None))
+        elif pixel_values.shape[0] % num_cores == 0:
+            xs.mark_sharding(pixel_values, spmd_mesh, ("fsdp", None))
+        else:
+            xs.mark_sharding(pixel_values, spmd_mesh, (None, None))
+
+    if image_grid_thw is not None and hasattr(image_grid_thw, "dim") and image_grid_thw.dim() > 0:
+        if input_ids is not None:
+            batch_sz = input_ids.shape[0]
+            if image_grid_thw.shape[0] % batch_sz == 0:
+                xs.mark_sharding(image_grid_thw, spmd_mesh, ("fsdp", None))
+            else:
+                xs.mark_sharding(image_grid_thw, spmd_mesh, (None, None))
+        elif image_grid_thw.shape[0] % num_cores == 0:
+            xs.mark_sharding(image_grid_thw, spmd_mesh, ("fsdp", None))
+        else:
+            xs.mark_sharding(image_grid_thw, spmd_mesh, (None, None))
+
+
+def evaluate_loss(model: torch.nn.Module, val_loader: DataLoader, device: torch.device, is_tpu: bool, spmd_mesh: Any = None, num_cores: int = 8) -> float:
     """Compute validation loss on held-out 5% validation set."""
     model.eval()
     total_val_loss = 0.0
@@ -400,13 +509,7 @@ def evaluate_loss(model: torch.nn.Module, val_loader: DataLoader, device: torch.
         for batch in val_loader:
             inputs = {k: v.to(device) for k, v in batch.items()}
             if spmd_mesh is not None:
-                import torch_xla.distributed.spmd as xs
-                for v in inputs.values():
-                    if hasattr(v, "dim") and v.dim() > 0:
-                        try:
-                            xs.mark_sharding(v, spmd_mesh, ("fsdp",) + (None,) * (v.dim() - 1))
-                        except Exception:
-                            pass
+                apply_spmd_input_sharding(inputs, spmd_mesh, num_cores=num_cores)
             outputs = model(**inputs)
             total_val_loss += outputs.loss.item()
             val_batches += 1
@@ -693,6 +796,10 @@ def run_training(index: int, args: argparse.Namespace):
         if is_master:
             print(f"[MEMORY WARNING] Could not enable gradient checkpointing: {e}")
 
+    # Vision Guard: Freeze visual blocks and isolate forward under torch.no_grad()
+    train_merger = (args.lora_target_vision == "projector")
+    freeze_and_guard_vision_tower(model, train_merger=train_merger, is_master=is_master)
+
     spmd_mesh = None
     if use_spmd and args.fsdp:
         spmd_mesh = setup_spmd_mesh(num_cores=args.num_cores)
@@ -705,6 +812,8 @@ def run_training(index: int, args: argparse.Namespace):
             use_fsdp=args.fsdp,
             is_master=is_master,
         )
+
+    log_xla_memory("Post-Model Initialization & Sharding", is_master=is_master)
 
     # Host RAM reclamation: force glibc to release unmapped model-loading heap memory back to the Linux kernel
     import gc, ctypes
@@ -909,14 +1018,15 @@ def run_training(index: int, args: argparse.Namespace):
             num_valid = int((batch["labels"] != -100).sum().item())
             inputs = {k: v.to(device) for k, v in batch.items()}
             if use_spmd and spmd_mesh is not None:
-                import torch_xla.distributed.spmd as xs
-                for v in inputs.values():
-                    if hasattr(v, "dim") and v.dim() > 0:
-                        try:
-                            xs.mark_sharding(v, spmd_mesh, ("fsdp",) + (None,) * (v.dim() - 1))
-                        except Exception:
-                            pass
+                apply_spmd_input_sharding(inputs, spmd_mesh, num_cores=args.num_cores)
+
+            if is_master and step == 0:
+                log_xla_memory("Step 0 Pre-Forward", device=device, is_master=is_master)
+
             outputs = model(**inputs)
+
+            if is_master and step == 0:
+                log_xla_memory("Step 0 Post-Forward", device=device, is_master=is_master)
 
             if num_valid > 0:
                 batch_loss = outputs.loss
@@ -925,6 +1035,9 @@ def run_training(index: int, args: argparse.Namespace):
                 batch_loss_sum.backward()
                 accum_loss_sum += batch_loss_sum.item()
                 accum_valid_tokens += num_valid
+
+                if is_master and step == 0:
+                    log_xla_memory("Step 0 Post-Backward", device=device, is_master=is_master)
             else:
                 del outputs
 

@@ -71,6 +71,9 @@ from dental_agent.training.sft import (
     wrap_distributed_model,
     setup_spmd_mesh,
     wrap_spmd_model,
+    log_xla_memory,
+    freeze_and_guard_vision_tower,
+    apply_spmd_input_sharding,
 )
 
 DEFAULT_BUCKETS_WITH_TOOLS = [10240]
@@ -130,6 +133,7 @@ def build_dummy_multimodal_batch(
     processor: Any,
     device: torch.device,
     include_image: bool = True,
+    batch_size: int = 1,
 ) -> Dict[str, torch.Tensor]:
     """Construct a synthetic batch matching real multimodal conversations snapped to bucket_len.
 
@@ -180,7 +184,7 @@ def build_dummy_multimodal_batch(
 
     # Snap cleanly to bucket_len using the production BucketedQwenVLCollator
     collator = BucketedQwenVLCollator(processor=processor, custom_buckets=[bucket_len])
-    collated = collator([sample])
+    collated = collator([sample] * batch_size)
 
     # Move tensors to the target hardware device
     batch = {k: v.to(device) for k, v in collated.items()}
@@ -308,6 +312,10 @@ def run_warmup_worker(index: int, args: argparse.Namespace):
             if is_master:
                 print(f"[CHECKPOINT WARNING] Could not enable checkpointing: {e}")
 
+        # Vision Guard: Freeze visual blocks and isolate forward under torch.no_grad()
+        train_merger = (args.lora_target_vision == "projector")
+        freeze_and_guard_vision_tower(model, train_merger=train_merger, is_master=is_master)
+
         # Wrap model with FSDP or SPMD (matching training pipeline)
         use_spmd = getattr(args, "xla_spmd", False)
         spmd_mesh = None
@@ -322,6 +330,8 @@ def run_warmup_worker(index: int, args: argparse.Namespace):
                 use_fsdp=args.fsdp,
                 is_master=is_master,
             )
+
+        log_xla_memory("Post-Model Initialization & Sharding", is_master=is_master)
 
         # Host RAM reclamation: force glibc to release unmapped model-loading heap memory back to OS
         gc.collect()
@@ -368,10 +378,11 @@ def run_warmup_worker(index: int, args: argparse.Namespace):
         results: List[Dict[str, Any]] = []
         include_images = True  # Both tracks process dental panoramic images
 
+        warmup_batch_size = args.num_cores if use_spmd else 1
         for idx, b_len in enumerate(target_buckets, 1):
             if is_master:
                 t_str = time.strftime("%H:%M:%S")
-                print(f"\n[{t_str}] [AOT COMPILATION {idx}/{len(target_buckets)}] Preparing bucket {b_len} tokens...")
+                print(f"\n[{t_str}] [AOT COMPILATION {idx}/{len(target_buckets)}] Preparing bucket {b_len} tokens (batch_size={warmup_batch_size})...")
 
             t0 = time.time()
             dummy_batch = build_dummy_multimodal_batch(
@@ -379,15 +390,12 @@ def run_warmup_worker(index: int, args: argparse.Namespace):
                 processor=processor,
                 device=device,
                 include_image=include_images,
+                batch_size=warmup_batch_size,
             )
             if use_spmd and spmd_mesh is not None:
-                import torch_xla.distributed.spmd as xs
-                for v in dummy_batch.values():
-                    if hasattr(v, "dim") and v.dim() > 0:
-                        try:
-                            xs.mark_sharding(v, spmd_mesh, ("fsdp",) + (None,) * (v.dim() - 1))
-                        except Exception:
-                            pass
+                apply_spmd_input_sharding(dummy_batch, spmd_mesh, num_cores=args.num_cores)
+
+            log_xla_memory(f"AOT Bucket {b_len} Pre-Forward", is_master=is_master)
 
             if is_master:
                 t_str = time.strftime("%H:%M:%S")
@@ -399,7 +407,12 @@ def run_warmup_worker(index: int, args: argparse.Namespace):
             # Free logits lazy tensor handle and input tensors immediately before backward
             del outputs
             del dummy_batch
+
+            log_xla_memory(f"AOT Bucket {b_len} Post-Forward", is_master=is_master)
+
             loss.backward()
+
+            log_xla_memory(f"AOT Bucket {b_len} Post-Backward", is_master=is_master)
 
             torch.nn.utils.clip_grad_norm_(trainable_params, 1.0)
 
