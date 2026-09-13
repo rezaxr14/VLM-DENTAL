@@ -13,15 +13,21 @@ from dental_agent.config import ProjectConfig, ModelConfig
 def get_model_classes():
     """Dynamically import vision-language / multimodal model classes with graceful fallback."""
     try:
-        from transformers import AutoModelForImageTextToText as ModelClass
+        from transformers import AutoModelForMultimodalLM as ModelClass
     except ImportError:
         try:
-            from transformers import Qwen2_5_VLForConditionalGeneration as ModelClass
+            from transformers import Qwen3_5ForConditionalGeneration as ModelClass
         except ImportError:
             try:
-                from transformers import AutoModelForVision2Seq as ModelClass
+                from transformers import AutoModelForImageTextToText as ModelClass
             except ImportError:
-                from transformers import AutoModelForCausalLM as ModelClass
+                try:
+                    from transformers import AutoModelForVision2Seq as ModelClass
+                except ImportError:
+                    try:
+                        from transformers import AutoModelForCausalLM as ModelClass
+                    except ImportError:
+                        from transformers import Qwen2_5_VLForConditionalGeneration as ModelClass
     return ModelClass
 
 

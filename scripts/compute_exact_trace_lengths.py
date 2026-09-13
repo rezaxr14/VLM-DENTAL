@@ -199,31 +199,31 @@ def main():
 
     print(f"\n[PROCESSOR] Loading processor for model '{args.model_id}'...", flush=True)
     processor = None
+
+    # 1. First check local Qwen 3.5 repository snapshot or HF cache snapshots to eliminate network latency
+    candidate_paths = [
+        repo_root / "data" / "qwen3_5_tokenizer",
+        Path("data/qwen3_5_tokenizer"),
+    ]
     import glob
-    from transformers import AutoTokenizer, Qwen2VLImageProcessor, Qwen2VLVideoProcessor, Qwen2_5_VLProcessor
+    candidate_paths.extend([Path(p) for p in glob.glob(str(Path.home() / ".cache/huggingface/hub/models--Qwen--Qwen3.5-9B/snapshots/*"))])
+    candidate_paths.extend([Path(p) for p in glob.glob("C:/Users/*/.cache/huggingface/hub/models--Qwen--Qwen3.5-9B/snapshots/*")])
 
-    # 1. First check local HF cache snapshots to avoid 429 rate limits and eliminate network latency
-    local_snaps = glob.glob(str(Path.home() / ".cache/huggingface/hub/models--Qwen--Qwen2.5-VL-7B-Instruct/snapshots/*"))
-    if not local_snaps:
-        local_snaps = glob.glob("C:/Users/*/.cache/huggingface/hub/models--Qwen--Qwen2.5-VL-7B-Instruct/snapshots/*")
-
-    if local_snaps:
-        try:
-            snap_path = local_snaps[0]
-            print(f"  [PROCESSOR] Found local Qwen snapshot at: {snap_path}", flush=True)
-            tok = AutoTokenizer.from_pretrained(snap_path, local_files_only=True)
-            img_proc = Qwen2VLImageProcessor()
-            vid_proc = Qwen2VLVideoProcessor()
-            processor = Qwen2_5_VLProcessor(image_processor=img_proc, tokenizer=tok, video_processor=vid_proc)
-            if not getattr(processor, "chat_template", None) and getattr(tok, "chat_template", None):
-                processor.chat_template = tok.chat_template
-            print(f"  [PROCESSOR] Successfully instantiated processor from local snapshot!", flush=True)
-        except Exception as e:
-            print(f"  [PROCESSOR] Local snapshot loading failed ({e}); falling back to AutoProcessor...", flush=True)
-            processor = None
+    for cp in candidate_paths:
+        if cp.is_dir() and (cp / "tokenizer.json").is_file():
+            try:
+                print(f"  [PROCESSOR] Found local Qwen 3.5 snapshot at: {cp}", flush=True)
+                from transformers import AutoProcessor
+                processor = AutoProcessor.from_pretrained(str(cp), local_files_only=True, trust_remote_code=True)
+                print(f"  [PROCESSOR] Successfully instantiated {processor.__class__.__name__} from local snapshot!", flush=True)
+                break
+            except Exception as e:
+                print(f"  [PROCESSOR] Local snapshot loading from {cp} failed ({e}); checking next...", flush=True)
+                processor = None
 
     # 2. Fallback to standard AutoProcessor if local snapshot not found
     if processor is None:
+        from transformers import AutoProcessor
         processor = AutoProcessor.from_pretrained(args.model_id, trust_remote_code=True)
 
     if hasattr(processor, "tokenizer") and processor.tokenizer.pad_token_id is None:

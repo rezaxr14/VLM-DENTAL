@@ -17,14 +17,24 @@ import json
 from PIL import Image
 import torch
 from peft import PeftModel
-from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
+from transformers import AutoProcessor
+try:
+    from transformers import AutoModelForMultimodalLM as ModelClass
+except ImportError:
+    try:
+        from transformers import AutoModelForImageTextToText as ModelClass
+    except ImportError:
+        try:
+            from transformers import Qwen3_5ForConditionalGeneration as ModelClass
+        except ImportError:
+            from transformers import Qwen2_5_VLForConditionalGeneration as ModelClass
 
 MODEL_ID = "{model_id}"
 ADAPTER_PATH = "{adapter_path}"
 
 def load_standalone_agent(device: str = "cuda" if torch.cuda.is_available() else "cpu"):
     processor = AutoProcessor.from_pretrained(MODEL_ID, trust_remote_code=True)
-    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+    model = ModelClass.from_pretrained(
         MODEL_ID,
         torch_dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16,
         device_map="auto" if device == "cuda" else None,
@@ -46,7 +56,7 @@ if __name__ == "__main__":
 
 def export_standalone_agent_module(
     output_path: str | Path = "standalone_agent.py",
-    model_id: str = "Qwen/Qwen3-VL-8B-Instruct",
+    model_id: str = "Qwen/Qwen3.5-9B",
     adapter_path: str | Path | None = "checkpoints/grpo-final",
 ) -> Path:
     """Generate and write a standalone single-file agent runner module."""
@@ -65,7 +75,7 @@ def export_standalone_agent_module(
 @click.command()
 @click.option("--output", "-o", default="standalone_agent.py", help="Output python file path.")
 @click.option("--adapter", "-a", default="checkpoints/grpo-final", help="Path to LoRA adapter weights.")
-@click.option("--model-id", default="Qwen/Qwen3-VL-8B-Instruct", help="Base HuggingFace model ID.")
+@click.option("--model-id", default="Qwen/Qwen3.5-9B", help="Base HuggingFace model ID.")
 def main(output: str, adapter: str, model_id: str) -> None:
     export_standalone_agent_module(output_path=output, model_id=model_id, adapter_path=adapter)
 

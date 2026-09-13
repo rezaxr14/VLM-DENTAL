@@ -42,6 +42,7 @@ data/tufts/
 data/yolo_*/
 data/sample_images/
 data/tool_verification/
+data/qwen3_5_tokenizer/
 data/*.parquet
 data/*.zip
 *.zip
