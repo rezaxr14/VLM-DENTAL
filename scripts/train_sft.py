@@ -182,7 +182,9 @@ def parse_args():
         "--max-seq-len",
         type=int,
         default=10240,
-        help="Single static sequence length (default: 10240 for single-graph TPU/GPU training)",
+        help="Single static sequence length (default: 10240). With --pad-vision-to-slots every sample is "
+             "text + 7,488 static vision tokens, so the default is auto-raised to 16384 (logged) unless you pass a "
+             "larger value explicitly.",
     )
     parser.add_argument(
         "--custom-buckets",
@@ -190,6 +192,21 @@ def parse_args():
         nargs="+",
         default=None,
         help="Optional custom sequence length buckets for collator",
+    )
+    parser.add_argument(
+        "--canonical-resize",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Show the model canonical-sized views (FULL 1536x768 / CROP 256x384 / COMPARE 512x384); tools still run "
+             "on the native image. Default: on for TPU, off for GPU/CPU (native resolution).",
+    )
+    parser.add_argument(
+        "--pad-vision-to-slots",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="TPU only: pad vision inputs to the static [5 FULL, 10 CROP, 4 COMPARE] budget (pixel_values "
+             "[29952,1536], image_grid_thw [19,3]) so XLA compiles one graph. Needs --canonical-resize and a "
+             "--max-seq-len that fits text + 7488 vision tokens. Default: on for TPU, off elsewhere.",
     )
     parser.add_argument(
         "--xla-pallas",
@@ -618,6 +635,30 @@ def run_training(index: int, args: argparse.Namespace):
         import torch_xla.core.xla_model as xm
         is_master = xm.is_master_ordinal()
 
+    # TPU-only defaults; GPU/CPU stay on native resolution + dynamic padding with zero XLA code touched.
+    canonical_resize = args.canonical_resize if args.canonical_resize is not None else is_tpu
+    pad_vision_to_slots = args.pad_vision_to_slots if args.pad_vision_to_slots is not None else is_tpu
+    if pad_vision_to_slots and not canonical_resize:
+        raise SystemExit("--pad-vision-to-slots requires --canonical-resize (static slots assume canonical image sizes).")
+    if pad_vision_to_slots and args.max_seq_len == 10240:
+        # 10240 leaves only 2,752 tokens of text next to the 7,488 static vision tokens (real traces carry 3-9k).
+        args.max_seq_len = 16384
+        if is_master:
+            print("[CONFIG] --pad-vision-to-slots: raising --max-seq-len 10240 -> 16384 "
+                  "(text + 7,488 static vision tokens). Pass an explicit larger value to override.")
+    if pad_vision_to_slots:
+        from dental_agent.utils.canonical import TOTAL_VISION_TOKENS
+        if args.max_seq_len <= TOTAL_VISION_TOKENS:
+            raise SystemExit(
+                f"--max-seq-len {args.max_seq_len} cannot hold the static {TOTAL_VISION_TOKENS} vision tokens plus text."
+            )
+    if is_tpu:
+        from dental_agent.training.xla_patches import install_xla_solve_triangular_shim
+        installed = install_xla_solve_triangular_shim()
+        if is_master:
+            print(f"[XLA] solve_triangular matmul shim {'installed' if installed else 'already active'}; "
+                  f"canonical_resize={canonical_resize} pad_vision_to_slots={pad_vision_to_slots}")
+
     if is_master:
         print("======================================================================")
         print(f"VLM-DENTAL: STAGE 1 SFT TRAINING ({args.track.upper()} - {args.stage.upper()})")
@@ -839,6 +880,8 @@ def run_training(index: int, args: argparse.Namespace):
         track=args.track,
         data_dir=args.data_dir,
         max_seq_len=args.max_seq_len,
+        canonical_resize=canonical_resize,
+        pad_vision_to_slots=pad_vision_to_slots,
     )
     val_size = max(int(len(full_dataset) * 0.05), 1) if len(full_dataset) >= 20 else 0
     train_size = len(full_dataset) - val_size
@@ -860,6 +903,7 @@ def run_training(index: int, args: argparse.Namespace):
             max_seq_len=args.max_seq_len,
             custom_buckets=args.custom_buckets,
             dynamic_padding=False,
+            pad_vision_to_slots=pad_vision_to_slots,
         )
         if is_master:
             print(f"[COLLATOR] Static sequence length padding enabled: {collator.max_seq_len} tokens (Zero buckets, single XLA graph).")

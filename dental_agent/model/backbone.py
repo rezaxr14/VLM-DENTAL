@@ -183,22 +183,69 @@ def estimate_grpo_memory(
     }
 
 
-def safe_process_vision_info(messages: list[dict[str, Any]]) -> Tuple[Any, Any]:
-    """Safely call qwen_vl_utils.process_vision_info handling both 2-tuple and 3-tuple returns.
+def _extract_pil_images(messages: list[dict[str, Any]]) -> list[Any]:
+    """Collect PIL images from message content in document order (no resizing)."""
+    from PIL import Image
 
-    In newer versions of qwen_vl_utils, process_vision_info returns:
-    tuple[list[Image] | None, list[Tensor | list[Image]] | None, dict[str, Any] | None].
-    Direct unpacking into 2 values causes Pyrefly / runtime bad-unpacking errors.
-    This helper guarantees a clean (image_inputs, video_inputs) 2-tuple return.
+    images: list[Any] = []
+    for msg in messages:
+        content = msg.get("content") if isinstance(msg, dict) else None
+        if not isinstance(content, list):
+            continue
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "image":
+                img = item.get("image", item.get("image_url"))
+                if isinstance(img, Image.Image):
+                    images.append(img if img.mode == "RGB" else img.convert("RGB"))
+                else:
+                    return []  # non-PIL source (path/url/base64): defer to qwen_vl_utils
+    return images
+
+
+def safe_process_vision_info(messages: list[dict[str, Any]]) -> Tuple[Any, Any]:
+    """Return a clean ``(image_inputs, video_inputs)`` 2-tuple for ``processor(...)``.
+
+    Fast path (all images are already PIL, which is always true in SFT/GRPO here):
+    return them untouched. This deliberately bypasses ``qwen_vl_utils``, whose
+    ``process_vision_info`` defaults to ``image_patch_size=14`` (resize factor 28) and would
+    resample our canonical 32-aligned images (e.g. 1536x768 -> 1540x756) before the HF
+    processor resamples them a second time.
+
+    Fallback (paths/URLs/base64): call ``qwen_vl_utils`` with ``image_patch_size=16`` when the
+    installed version supports it. Failures are surfaced (warning) instead of silently
+    returning ``(None, None)`` for messages that do contain images.
     """
+    pil_images = _extract_pil_images(messages)
+    if pil_images:
+        return pil_images, None
+
+    has_image = any(
+        isinstance(m, dict)
+        and isinstance(m.get("content"), list)
+        and any(isinstance(i, dict) and i.get("type") == "image" for i in m["content"])
+        for m in messages
+    )
+    if not has_image:
+        return None, None
+
     try:
         from qwen_vl_utils import process_vision_info
-        vision_res = process_vision_info(messages)
+
+        try:
+            vision_res = process_vision_info(messages, image_patch_size=16)
+        except TypeError:  # older qwen_vl_utils without image_patch_size
+            vision_res = process_vision_info(messages)
         if isinstance(vision_res, (tuple, list)):
             image_inputs = vision_res[0] if len(vision_res) > 0 else None
             video_inputs = vision_res[1] if len(vision_res) > 1 else None
             return image_inputs, video_inputs
-        return None, None
-    except Exception:
-        return None, None
+    except Exception as exc:  # noqa: BLE001
+        import warnings
 
+        warnings.warn(
+            f"safe_process_vision_info: could not load images via qwen_vl_utils ({exc!r}); "
+            "returning (None, None) although the messages contain images.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    return None, None

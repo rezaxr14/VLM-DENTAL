@@ -67,6 +67,9 @@ from dental_agent.evaluation.metrics import (
 )
 from dental_agent.evaluation.reporting import generate_summary_table, generate_markdown_report
 from dental_agent.utils.serialization import to_jsonable
+from dental_agent.utils.canonical import (
+    ENV_CANONICAL_RESIZE, family_for_tool, resolve_canonical_resize, to_canonical,
+)
 from PIL import Image
 
 # ---------------------------------------------------------------------------
@@ -213,6 +216,9 @@ def run_no_tools_eval(
     """
     from dental_agent.model.inference import generate_agent_reply
 
+    if resolve_canonical_resize(None):
+        image = to_canonical(image, "FULL")  # same view the SFT/GRPO policy was trained on
+
     messages = [
         {
             "role": "system",
@@ -255,12 +261,16 @@ def run_with_tools_eval(
 
     system_prompt = build_agent_system_prompt(registry.format_tool_descriptions(), dataset=dataset)
 
+    # Tools execute on the NATIVE `image` (bbox args are native pixels); the model is shown canonical views.
+    canonical = resolve_canonical_resize(None)
+    view_image = to_canonical(image, "FULL") if canonical else image
+
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system_prompt},
         {
             "role": "user",
             "content": [
-                {"type": "image", "image": image},
+                {"type": "image", "image": view_image},
                 {
                     "type": "text",
                     "text": f"Analyze this panoramic X-ray (image_id={image_id}). "
@@ -341,6 +351,8 @@ def run_with_tools_eval(
                 tool_call_count += 1
 
                 if isinstance(result, Image.Image):
+                    if canonical:
+                        result = to_canonical(result, family_for_tool(tool_name))
                     observations.append({"type": "image", "image": result})
                     observations.append({"type": "text", "text": f"[Tool Result: {tool_name} returned an image]"})
                 else:
@@ -686,12 +698,23 @@ def parse_args() -> argparse.Namespace:
         help="Numerical precision for model inference",
     )
     parser.add_argument("--config", "-c", default=None, help="Path to config YAML")
+    parser.add_argument(
+        "--canonical-resize",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Show every evaluated condition canonical image views (FULL 1536x768 / CROP 256x384 / COMPARE 512x384). "
+             "Use the SAME setting the evaluated checkpoint was trained with; report base-model baselines under both "
+             "settings if they are compared against a canonical-trained model.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     load_env()
+    if args.canonical_resize is not None:
+        os.environ[ENV_CANONICAL_RESIZE] = "1" if args.canonical_resize else "0"
+    print(f"[EVAL] canonical_resize={resolve_canonical_resize(None)}")
 
     # Load dataset
     print(f"\n[DATA] Loading {args.dataset.upper()} dataset (split='{args.split}')...")

@@ -161,3 +161,10 @@ If the User asks you to build a new feature or fix a bug:
 4. **Notebooks:** Use `VLM_Dental_Colab_YOLO.ipynb` for dataset prep and YOLO training. Use `VLM_Dental_Colab_TraceGen.ipynb` for trace synthesis. Use `VLM_Dental_Colab_SFT.ipynb` and `VLM_Dental_Colab_GRPO.ipynb` strictly for Phase 3 VLM training.
 
 Godspeed, Agent.
+
+## Canonical Vision Inputs & TPU Static Slots (read before touching sft.py / loop.py / grpo.py)
+
+- The model sees **canonical views**; **tools run on the native image** (bbox args are native pixels). Geometry lives only in `dental_agent/utils/canonical.py`.
+- TPU SFT defaults to `canonical_resize=True` and `pad_vision_to_slots=True` (19 static slots, 7,488 vision tokens ⇒ `--max-seq-len 16384`). GPU/CPU keep native resolution + dynamic padding. GRPO and evaluation must use the same view mode as the SFT checkpoint (`--canonical-resize` / `DENTAL_CANONICAL_RESIZE`).
+- The token-length manifest records its resolution mode and per-trace vision-token counts; regenerate it per mode (`scripts/compute_exact_trace_lengths.py --canonical-resize`). A mismatched manifest is ignored with a warning.
+- Full design, decisions, verification and open items: `docs/CANONICAL_VISION_AND_TPU_PIPELINE.md`.

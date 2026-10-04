@@ -73,6 +73,12 @@ def parse_args():
         default=True,
         help="Enable PyTorch/XLA FSDP parameter sharding across TPU cores to fit 9B BF16 model within 16 GB HBM (default: True on multi-core TPU)",
     )
+    parser.add_argument(
+        "--canonical-resize",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Roll out with canonical image views; must match the SFT stage's --canonical-resize setting.",
+    )
     return parser.parse_args()
 
 
@@ -136,6 +142,7 @@ def main():
             path_in_repo_prefix=path_in_repo_prefix,
             num_cores=args.num_cores,
             use_fsdp=args.fsdp,
+            canonical_resize=args.canonical_resize,
         )
 
         elapsed = time.time() - start_time

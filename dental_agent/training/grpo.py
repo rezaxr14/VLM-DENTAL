@@ -196,10 +196,14 @@ def collect_grpo_group_batched_no_tools(
     ground_truth: list[dict[str, Any]],
     group_size: int = 4,
     temperature: float = 0.7,
+    canonical_resize: bool | None = None,
 ) -> tuple[list[dict], list[float], list[torch.Tensor], list[torch.Tensor]]:
     """Sample K candidate trajectories simultaneously in ONE batched forward pass (Track B)."""
     row = images_df[images_df["id"] == image_id].iloc[0]
     base_image = Image.open(row["local_path"]).convert("RGB")
+    from dental_agent.utils.canonical import resolve_canonical_resize, to_canonical
+    if resolve_canonical_resize(canonical_resize):
+        base_image = to_canonical(base_image, "FULL")
 
     prompt_messages = [
         {"role": "system", "content": NO_TOOLS_SYSTEM_PROMPT},
@@ -291,6 +295,7 @@ def collect_grpo_group_batched_with_tools(
     registry: ToolRegistry,
     group_size: int = 4,
     max_tool_calls: int = 50,
+    canonical_resize: bool | None = None,
 ) -> tuple[list[dict], list[float], list[torch.Tensor], list[torch.Tensor]]:
     """Sample K candidate multi-turn trajectories with workstation tools (Track A)."""
     trajectories, rewards, old_log_probs_list, masks_list = [], [], [], []
@@ -306,6 +311,7 @@ def collect_grpo_group_batched_with_tools(
             registry=registry,
             max_tool_calls=max_tool_calls,
             verbose=False,
+            canonical_resize=canonical_resize,
         )
         traj_dict = traj.to_dict() if hasattr(traj, "to_dict") else traj
         reward, _ = combine_reward(traj_dict, ground_truth, max_tool_calls=max_tool_calls)
@@ -336,6 +342,7 @@ def collect_grpo_group(
     group_size: int = 4,
     max_tool_calls: int = 50,
     track: str = "with_tools",
+    canonical_resize: bool | None = None,
 ) -> tuple[list[dict], list[float], list[torch.Tensor], list[torch.Tensor]]:
     """Unified group rollout entrypoint supporting Track A and Track B."""
     if track == "no_tools":
@@ -346,6 +353,7 @@ def collect_grpo_group(
             images_df=images_df,
             ground_truth=ground_truth,
             group_size=group_size,
+            canonical_resize=canonical_resize,
         )
     else:
         if registry is None:
@@ -359,6 +367,7 @@ def collect_grpo_group(
             registry=registry,
             group_size=group_size,
             max_tool_calls=max_tool_calls,
+            canonical_resize=canonical_resize,
         )
 
 
@@ -380,6 +389,7 @@ def grpo_step(
     clip_eps: float = 0.2,
     kl_beta: float = 0.04,
     running_ema_baseline: float = 0.0,
+    canonical_resize: bool | None = None,
 ) -> tuple[dict[str, Any], float]:
     """One GRPO update cycle over on-policy sampled groups."""
     if registry is None:
@@ -402,6 +412,7 @@ def grpo_step(
             group_size=group_size,
             max_tool_calls=max_tool_calls,
             track=track,
+            canonical_resize=canonical_resize,
         )
         advantages, current_baseline = compute_group_advantages(
             rewards=rewards,
@@ -588,6 +599,7 @@ def train_grpo(
     path_in_repo_prefix: str | None = None,
     num_cores: int = 1,
     use_fsdp: bool = True,
+    canonical_resize: bool | None = None,
 ) -> str:
     """Execute Stage 2 GRPO policy optimization with dual-adapter reference and group advantage normalization."""
     from peft import PeftModel, LoraConfig
@@ -666,6 +678,7 @@ def train_grpo(
             clip_eps=eps,
             kl_beta=beta,
             running_ema_baseline=current_baseline,
+            canonical_resize=canonical_resize,
         )
         log_grpo_step(stats, extra={"step": step, "image_id": int(img_id)})
         print(f"[GRPO Step {step}/{total_steps}] mean_reward={stats['mean_reward']:.3f} kl={stats['kl_divergence']:.4f}")

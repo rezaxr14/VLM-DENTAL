@@ -163,6 +163,14 @@ def main() -> None:
         default=True,
         help="Enable PyTorch/XLA FSDP parameter sharding across TPU cores to fit 9B BF16 model within 16 GB HBM (default: True on multi-core TPU)",
     )
+    parser.add_argument(
+        "--canonical-resize",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Roll out with canonical image views (FULL 1536x768 / CROP 256x384 / COMPARE 512x384). MUST match the "
+             "SFT run that produced --sft-stage (train_sft.py --canonical-resize), otherwise the policy is optimised "
+             "on a different image distribution than it was fine-tuned on. Default: DENTAL_CANONICAL_RESIZE env or off.",
+    )
     args = parser.parse_args()
 
     is_tpu = False
@@ -277,6 +285,7 @@ def run_worker(index: int, args: argparse.Namespace):
         path_in_repo_prefix=path_in_repo_prefix,
         num_cores=args.num_cores,
         use_fsdp=args.fsdp,
+        canonical_resize=args.canonical_resize,
     )
 
 

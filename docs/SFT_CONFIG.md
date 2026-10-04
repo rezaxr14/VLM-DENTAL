@@ -115,13 +115,19 @@ Rather than freezing the entire vision stack or fine-tuning early ViT blocks:
 ### 5.1 Static Discrete Buckets & 16,384 Headroom
 Dynamic sequence lengths cause continuous XLA graph recompilations (30–120s stalls per shape). `BucketedQwenVLCollator` rounds sequences up to the nearest static boundary:
 
-- **Track A (`with_tools`)**: `[4096, 6144, 8192, 12288, 16384]` (accommodating full multi-turn tool observation reasoning traces with real vision patch tokens up to Rule 19's 16,384 limit, with active overlength warning diagnostics)
-- **Track B (`no_tools`)**: `[1536, 2048, 2560, 3072]`
+- **Track A (`with_tools`)**: `[10240]` — a single static length (one XLA graph); `--max-seq-len` overrides it (16,384 on TPU with static vision slots, §5.3).
+- **Track B (`no_tools`)**: `[1536, 2048, 2560, 3072, 8192]`
+
+(Values are `BucketedQwenVLCollator.BUCKETS_WITH_TOOLS` / `BUCKETS_NO_TOOLS` in `dental_agent/training/sft.py`; this section previously listed an older bucket set.)
 
 ### 5.2 Right-Padding Invariant for 3D MRoPE
 Qwen2.5/3.5-VL incorporates 3D Rotary Position Embeddings (temporal, vertical, horizontal). Left-padding shifts token positions, shifting the temporal origin $t=0$ for visual patches and corrupting spatial reasoning.
 - **Collator Invariant**: Strictly enforce `padding_side = "right"` using `tokenizer.pad_token_id`.
 - Padding positions are assigned `labels = -100` and masked out of attention.
+
+### 5.3 Canonical Vision Views & Static Vision-Slot Padding (TPU)
+
+On TPU the collator additionally pads every sample to a static `[5 FULL, 10 CROP, 4 COMPARE]` vision budget (`pixel_values [29952, 1536]`, `image_grid_thw [19, 3]`, 7,488 vision tokens) so XLA compiles exactly one graph. Because each sample then occupies `text + 7,488` tokens, **padded mode requires `--max-seq-len 16384`** (the 10,240 default is auto-raised, with a log line, only when `--pad-vision-to-slots` is active). Padded overlength sequences raise rather than truncate. On GPU/CPU none of this applies (native resolution, dynamic padding). Design, decisions, verification and limitations: `docs/CANONICAL_VISION_AND_TPU_PIPELINE.md`.
 
 ---
 

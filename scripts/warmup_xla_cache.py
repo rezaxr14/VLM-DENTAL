@@ -134,6 +134,7 @@ def build_dummy_multimodal_batch(
     device: torch.device,
     include_image: bool = True,
     batch_size: int = 1,
+    pad_vision_to_slots: bool = False,
 ) -> Dict[str, torch.Tensor]:
     """Construct a synthetic batch matching real multimodal conversations snapped to bucket_len.
 
@@ -142,8 +143,10 @@ def build_dummy_multimodal_batch(
     and `image_grid_thw` 1:1, preventing tensor dimension mismatch crashes in Qwen VL.
     """
     if include_image:
-        # Use a neutral 512x512 dummy image (matching standard dental dummy image)
-        dummy_img = Image.new("RGB", (512, 512), color=(128, 128, 128))
+        # Slot-padded mode must reproduce the TRAINING shapes exactly (canonical FULL image + static
+        # 19-slot padding), otherwise the AOT cache is compiled for a graph training never uses.
+        dummy_size = (1536, 768) if pad_vision_to_slots else (512, 512)
+        dummy_img = Image.new("RGB", dummy_size, color=(128, 128, 128))
         messages = [
             {"role": "system", "content": "You are an expert dental radiologist AI."},
             {
@@ -183,7 +186,12 @@ def build_dummy_multimodal_batch(
     sample["labels"] = labels
 
     # Snap cleanly to bucket_len using the production BucketedQwenVLCollator
-    collator = BucketedQwenVLCollator(processor=processor, custom_buckets=[bucket_len])
+    collator = BucketedQwenVLCollator(
+        processor=processor,
+        custom_buckets=[bucket_len],
+        max_seq_len=bucket_len if pad_vision_to_slots else None,
+        pad_vision_to_slots=pad_vision_to_slots and include_image,
+    )
     collated = collator([sample] * batch_size)
 
     # Move tensors to the target hardware device
@@ -205,6 +213,13 @@ def run_warmup_worker(index: int, args: argparse.Namespace):
         if is_tpu:
             import torch_xla.core.xla_model as xm
             is_master = xm.is_master_ordinal()
+
+        pad_vision_to_slots = args.pad_vision_to_slots if args.pad_vision_to_slots is not None else is_tpu
+        if pad_vision_to_slots and getattr(args, "max_seq_len", None) == 10240:
+            args.max_seq_len = 16384  # mirror train_sft.py so the AOT cache matches the training graph
+        if is_tpu:
+            from dental_agent.training.xla_patches import install_xla_solve_triangular_shim
+            install_xla_solve_triangular_shim()
 
         # Initialize persistent XLA compilation cache BEFORE any model execution
         cache_base = Path(args.cache_dir).resolve()
@@ -391,6 +406,7 @@ def run_warmup_worker(index: int, args: argparse.Namespace):
                 device=device,
                 include_image=include_images,
                 batch_size=warmup_batch_size,
+                pad_vision_to_slots=pad_vision_to_slots,
             )
             if use_spmd and spmd_mesh is not None:
                 apply_spmd_input_sharding(dummy_batch, spmd_mesh, num_cores=args.num_cores)
@@ -507,6 +523,13 @@ def parse_args() -> argparse.Namespace:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
+        "--pad-vision-to-slots",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Compile the static 19-slot vision graph (pixel_values [29952,1536], image_grid_thw [19,3]) that "
+             "train_sft.py uses on TPU. Default: on for TPU, off elsewhere. Must match the training flag.",
+    )
+    parser.add_argument(
         "--model-id",
         type=str,
         default=os.environ.get("MODEL_NAME", "Qwen/Qwen3.5-9B"),
@@ -550,7 +573,8 @@ def parse_args() -> argparse.Namespace:
         "--max-seq-len",
         type=int,
         default=10240,
-        help="Single static sequence length to pre-compile (e.g. 10240)",
+        help="Single static sequence length to pre-compile (default 10240; auto-raised to 16384 with "
+             "--pad-vision-to-slots, mirroring train_sft.py). MUST equal the training run's effective --max-seq-len.",
     )
     parser.add_argument(
         "--xla-pallas",

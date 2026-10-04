@@ -65,6 +65,12 @@ def parse_args() -> argparse.Namespace:
         help="Model ID or local path for tokenizer/processor",
     )
     parser.add_argument(
+        "--canonical-resize",
+        action="store_true",
+        help="Measure lengths with canonical-sized views (FULL/CROP/COMPARE), matching train_sft.py --canonical-resize. "
+             "The manifest records the mode; DentalSFTDataset ignores a manifest whose mode differs from its own.",
+    )
+    parser.add_argument(
         "--data-dir",
         type=str,
         default=os.environ.get("DENTAL_AGENT_DATA_DIR", "data"),
@@ -108,6 +114,8 @@ def save_manifest(
     all_lengths: List[int],
     lengths_by_image_id: Dict[str, int],
     lengths_by_file_and_id: Dict[str, int],
+    canonical_resize: bool = False,
+    vision_tokens_by_file_and_id: Dict[str, int] | None = None,
 ) -> Dict[str, Any]:
     if not all_lengths:
         return {}
@@ -159,8 +167,11 @@ def save_manifest(
             "compliance": compliance,
             "file_stats": file_stats,
         },
+        "canonical_resize": bool(canonical_resize),
         "lengths_by_image_id": lengths_by_image_id,
         "lengths_by_file_and_id": lengths_by_file_and_id,
+        # Number of <|image_pad|> tokens inside each total; lets the dataset compute slot-padded lengths.
+        "vision_tokens_by_file_and_id": dict(vision_tokens_by_file_and_id or {}),
     }
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
@@ -231,18 +242,35 @@ def main():
 
     lengths_by_image_id: Dict[str, int] = {}
     lengths_by_file_and_id: Dict[str, int] = {}
+    vision_by_key: Dict[str, int] = {}
     all_lengths: List[int] = []
+
+    def _image_token_id() -> int | None:
+        tid = getattr(processor, "image_token_id", None)
+        if not isinstance(tid, int):
+            tid = getattr(processor.tokenizer, "image_token_id", None)
+        if not isinstance(tid, int):
+            try:
+                tid = processor.tokenizer.convert_tokens_to_ids("<|image_pad|>")
+            except Exception:
+                tid = None
+        return tid if isinstance(tid, int) and tid > 0 else None
 
     out_path = Path(args.output_file)
     if out_path.is_file() and not args.recompute:
         try:
             with open(out_path, "r", encoding="utf-8") as f:
                 existing_manifest = json.load(f)
+                if bool(existing_manifest.get("canonical_resize", False)) != bool(args.canonical_resize):
+                    raise ValueError("existing manifest was measured with a different canonical_resize mode")
                 lengths_by_image_id = existing_manifest.get("lengths_by_image_id", {})
                 lengths_by_file_and_id = existing_manifest.get("lengths_by_file_and_id", {})
+                vision_by_key = dict(existing_manifest.get("vision_tokens_by_file_and_id", {}))
+                if lengths_by_file_and_id and not vision_by_key:
+                    raise ValueError("existing manifest has no vision-token counts; recomputing")
                 print(f"[RESUME] Loaded {len(lengths_by_file_and_id)} pre-computed traces from {out_path}", flush=True)
         except Exception:
-            pass
+            lengths_by_image_id, lengths_by_file_and_id, vision_by_key = {}, {}, {}
 
     total_processed = 0
 
@@ -257,6 +285,7 @@ def main():
             track=track,
             data_dir=str(data_dir),
             max_seq_len=None,
+            canonical_resize=args.canonical_resize,
         )
 
         n_samples = len(ds)
@@ -282,6 +311,8 @@ def main():
                 exact_tokens = lengths_by_file_and_id[legacy_key]
                 lengths_by_image_id[image_key] = exact_tokens
                 lengths_by_file_and_id[qualified_key] = exact_tokens
+                if legacy_key in vision_by_key:
+                    vision_by_key[qualified_key] = vision_by_key[legacy_key]
                 all_lengths.append(exact_tokens)
                 total_processed += 1
                 continue
@@ -295,6 +326,10 @@ def main():
                 exact_tokens = found_cohort_val
                 lengths_by_image_id[image_key] = exact_tokens
                 lengths_by_file_and_id[qualified_key] = exact_tokens
+                for ck in (cohort_k1, cohort_k2):
+                    if ck in vision_by_key:
+                        vision_by_key[qualified_key] = vision_by_key[ck]
+                        break
                 all_lengths.append(exact_tokens)
                 total_processed += 1
                 continue
@@ -303,6 +338,9 @@ def main():
                 # __getitem__ executes authentic tools, applies chat template, and calls processor
                 enc = ds[s_idx]
                 exact_tokens = int(enc["input_ids"].shape[1])
+                _tid = _image_token_id()
+                if _tid is not None:
+                    vision_by_key[qualified_key] = int((enc["input_ids"] == _tid).sum().item())
             except Exception as e:
                 if getattr(args, "strict", False):
                     # Strict no-fallback mode: images were mandated, so any encode
@@ -337,13 +375,13 @@ def main():
 
             if (s_idx + 1) % 50 == 0 or (s_idx + 1) == n_samples:
                 print(f"  Processed {s_idx + 1}/{n_samples} traces (sample {rec_id} = {exact_tokens} tokens)...", flush=True)
-                save_manifest(out_path, args.model_id, list(lengths_by_file_and_id.values()), lengths_by_image_id, lengths_by_file_and_id)
+                save_manifest(out_path, args.model_id, list(lengths_by_file_and_id.values()), lengths_by_image_id, lengths_by_file_and_id, args.canonical_resize, vision_by_key)
 
         # Checkpoint save after completing each trace file
-        save_manifest(out_path, args.model_id, list(lengths_by_file_and_id.values()), lengths_by_image_id, lengths_by_file_and_id)
+        save_manifest(out_path, args.model_id, list(lengths_by_file_and_id.values()), lengths_by_image_id, lengths_by_file_and_id, args.canonical_resize, vision_by_key)
         print(f"  [CHECKPOINT] Manifest updated at {out_path} ({len(lengths_by_file_and_id)} traces total).", flush=True)
 
-    res = save_manifest(out_path, args.model_id, list(lengths_by_file_and_id.values()), lengths_by_image_id, lengths_by_file_and_id)
+    res = save_manifest(out_path, args.model_id, list(lengths_by_file_and_id.values()), lengths_by_image_id, lengths_by_file_and_id, args.canonical_resize, vision_by_key)
     stats = res.get("stats", {})
     compliance = res.get("compliance", {})
 

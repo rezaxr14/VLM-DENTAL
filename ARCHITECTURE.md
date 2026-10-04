@@ -42,6 +42,8 @@ This is the heart of the project containing all reusable logic. It is imported b
   - **Verify**: `verify_pending()` → reads unverified traces, runs cross-family verification via `ProviderPool`, promotes passing traces to `train_cot_traces.jsonl`.
   - Also contains `build_trace_example()` (canonical per-image pipeline) and `run_aim1_batch()` (batch wrapper with retry).
 - `sft.py`: **The supervised trainer.** Takes the generated JSONL traces and base model architecture, formats them using a multi-modal collator, and outputs fine-tuned Qwen model weights.
+  - Vision inputs: `DentalSFTDataset(canonical_resize=...)` shows canonical views (tools still run on the native image); `BucketedQwenVLCollator(pad_vision_to_slots=...)` pads to the static 19-slot vision budget on TPU. See `docs/CANONICAL_VISION_AND_TPU_PIPELINE.md`.
+- `xla_patches.py`: **TPU-only shims (no import-time side effects).** `install_xla_solve_triangular_shim()` replaces `torch.linalg.solve_triangular` (unit-lower case, XLA tensors only) with a matmul product expansion so Qwen3.5's Gated-DeltaNet layers shard under GSPMD.
 - `grpo.py`: **The RL algorithm.** Takes the SFT model weights and new training data, implements Group Relative Policy Optimization (computing KL-divergence penalties and dual-adapter memory swapping), and outputs highly-optimized RL model weights.
 - `detector.py`: **Faster R-CNN detector architecture (torchvision, not YOLO/Ultralytics).** Originally built both to train an FDI-position grounding detector (backing a `locate_abnormal_teeth` tool) and to supply a reusable detector architecture for the diagnosis-baseline comparison. The former use was removed entirely -- the project decided the agent finds and corrects abnormal-tooth grounding via `locate_tooth` (the actual, live YOLO detector -- trained by `scripts/train_grounding_tool.py`, a *different* file despite the similar subject matter) + `nudge_crop`'s self-correction loop, not a second learned detector backend. What remains here (`build_stage0_detector`, `detection_collate_fn`, the dataset classes, `compute_iou`) is kept because `dental_agent/evaluation/diagnosis_baseline.py` reuses it for the paper's "prior supervised detector" comparison baseline. See this module's own docstring and `roadmap.md`'s changelog for the full removal reasoning.
 - `rewards.py`: **Training feedback connector.** Takes the current policy outputs during RL training, routes them through the reward functions, and outputs the loss gradients.
@@ -85,6 +87,7 @@ This is the heart of the project containing all reusable logic. It is imported b
 - `figures.py`: **Case study generator.** Extracts intermediate tool crops (e.g., `turn2_locate.png`, `turn5_zoom_nudged.png`) to visually prove self-correction in the paper.
 
 ### `dental_agent/utils/` (Shared Helpers)
+- `canonical.py`: **Canonical vision geometry (single source of truth).** FULL/CROP/COMPARE sizes, grid/patch/token math, the `[5,10,4]` static slot budget, tool→family map, `to_canonical()`, and `resolve_canonical_resize()` (explicit flag > `DENTAL_CANONICAL_RESIZE` env > off). Torch-free.
 - `serialization.py`: **JSON Encoder.** Takes complex Python objects (like PIL Images or numpy arrays), safely encodes them, and outputs standard JSON-compatible strings.
 - `persistence.py`: **The cacher.** Takes intermediate pipeline results, saves them to disk to survive Colab crashes, and outputs loaded data upon restart.
 - `environment.py`: **The config loader.** Takes `.env` files, parses them, and outputs secure environment variables for the system.
@@ -125,6 +128,8 @@ These are the executable scripts you run from the terminal. They wire the core p
   - `--dataset_path PATH`: Path to traces JSONL (default: `data/traces/train_cot_traces.jsonl`).
   - `--output_dir PATH`: Where to save weights.
   - `--batch_size N`, `--epochs N`: Training hyperparameters.
+- **`compute_exact_trace_lengths.py`** / **`census_vision_slots.py`**: **(Phase 3 prep)** Per-trace exact token lengths (manifest records `canonical_resize` and per-trace vision-token counts) and a model-free census of vision shapes / slot-budget coverage / slot-padded length fit. Run both once per resolution mode before SFT (`VLM_Dental_Colab_SFT.ipynb` §5a does this).
+- **`warmup_xla_cache.py`**: AOT XLA cache warmup; compiles the *same* canonical, 19-slot graph that `train_sft.py` uses on TPU.
 - **`run_grpo.py`**: **(Phase 5)** Takes the SFT model adapter and training dataset, runs GRPO reinforcement learning, and outputs the final optimized agent weights.
 - **`run_eval.py`**: **(Phase 4)** Takes a trained model and test set, runs the evaluation pipelines, and outputs final accuracy metrics.
 
