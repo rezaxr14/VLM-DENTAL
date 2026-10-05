@@ -37,6 +37,7 @@ from dental_agent.config import load_config
 from dental_agent.data.dentex import load_dentex_dataset
 from dental_agent.data.tufts import load_tufts_dataset
 from dental_agent.training.grpo import train_grpo
+from dental_agent.utils.canonical import SLOT_BUDGET, parse_slot_budget, slot_totals
 
 
 def upload_checkpoint_to_hf(checkpoint_dir: Path, hf_repo: str, step: int):
@@ -164,12 +165,47 @@ def main() -> None:
         help="Enable PyTorch/XLA FSDP parameter sharding across TPU cores to fit 9B BF16 model within 16 GB HBM (default: True on multi-core TPU)",
     )
     parser.add_argument(
+        "--spmd",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Single-process SPMD (FSDPv2 over one device mesh). Default: on. --no-spmd selects legacy xmp.spawn, "
+             "which loads one full model copy per process and exhausts host RAM on v5e-8.",
+    )
+    parser.add_argument(
+        "--pad-vision-to-slots",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Run every policy-gradient forward at the SFT static shapes (padded to --max-seq-len and --vision-slots; "
+             "one rollout per core) so XLA compiles ONE update graph. Requires --canonical-resize and --max-seq-len.",
+    )
+    parser.add_argument(
+        "--max-seq-len",
+        type=int,
+        default=None,
+        help="Static sequence length of the policy update (use the SFT value, e.g. 16384). Required with "
+             "--pad-vision-to-slots. Rollouts that do not fit are excluded from the update and reported.",
+    )
+    parser.add_argument(
+        "--vision-slots",
+        type=int,
+        nargs=3,
+        metavar=("FULL", "CROP", "COMPARE"),
+        default=[SLOT_BUDGET["FULL"], SLOT_BUDGET["CROP"], SLOT_BUDGET["COMPARE"]],
+        help="Static slot budget (must equal the SFT run's --vision-slots).",
+    )
+    parser.add_argument(
+        "--triangular-shim",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Matmul replacement for torch.linalg.solve_triangular on XLA (--no-triangular-shim = native solver).",
+    )
+    parser.add_argument(
         "--canonical-resize",
         action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Roll out with canonical image views (FULL 1536x768 / CROP 256x384 / COMPARE 512x384). MUST match the "
-             "SFT run that produced --sft-stage (train_sft.py --canonical-resize), otherwise the policy is optimised "
-             "on a different image distribution than it was fine-tuned on. Default: DENTAL_CANONICAL_RESIZE env or off.",
+        default=False,
+        help="Roll out with aspect-preserving canonical views (FULL 1536x768 / CROP 256x384 / COMPARE 512x384). MUST "
+             "match the SFT run that produced --sft-stage (train_sft.py --canonical-resize), otherwise the policy is "
+             "optimised on a different image distribution than it was fine-tuned on.",
     )
     args = parser.parse_args()
 
@@ -180,7 +216,7 @@ def main() -> None:
     except ImportError:
         pass
 
-    if is_tpu and args.num_cores > 1:
+    if is_tpu and args.num_cores > 1 and not args.spmd:
         try:
             try:
                 import torch_xla.distributed.xla_multiprocessing as xmp
@@ -208,12 +244,28 @@ def run_worker(index: int, args: argparse.Namespace):
     try:
         if "PJRT_DEVICE" not in os.environ:
             os.environ["PJRT_DEVICE"] = "TPU"
+        if args.spmd:
+            import torch_xla.runtime as xr
+            if hasattr(xr, "use_spmd"):
+                xr.use_spmd()  # must precede the first device initialisation
+            os.environ["XLA_USE_SPMD"] = "1"
         import torch_xla.core.xla_model as xm
         is_tpu = True
         device = xm.xla_device()
         is_master = xm.is_master_ordinal()
     except Exception:
         is_master = True
+
+    if args.pad_vision_to_slots and not args.canonical_resize:
+        raise SystemExit("--pad-vision-to-slots requires --canonical-resize.")
+    if args.pad_vision_to_slots and args.max_seq_len is None:
+        raise SystemExit("--pad-vision-to-slots requires --max-seq-len (use the SFT value, e.g. 16384).")
+    slot_budget = parse_slot_budget(*args.vision_slots)
+    if args.pad_vision_to_slots and args.max_seq_len <= slot_totals(slot_budget)["tokens"]:
+        raise SystemExit(f"--max-seq-len {args.max_seq_len} cannot hold the static vision tokens of --vision-slots.")
+    if args.triangular_shim:
+        from dental_agent.training.xla_patches import install_xla_solve_triangular_shim
+        install_xla_solve_triangular_shim()
 
     # Auto-resolve SFT reference directory per track and sft-stage
     resolved_sft_dir = resolve_sft_reference(
@@ -249,8 +301,8 @@ def run_worker(index: int, args: argparse.Namespace):
     else:
         images_df, annots_df, categories_df = load_dentex_dataset(cfg.data.data_dir)
 
-    # If multi-core TPU, partition dataset among replicas
-    if is_tpu and args.num_cores > 1:
+    # Legacy xmp.spawn only: each process owns a shard of the images. SPMD is one process driving every core.
+    if is_tpu and args.num_cores > 1 and not args.spmd:
         images_df = images_df.iloc[index::args.num_cores].reset_index(drop=True)
 
     if is_master:
@@ -264,7 +316,7 @@ def run_worker(index: int, args: argparse.Namespace):
         print(f"* Dataset     : {args.dataset}")
         print(f"* KL Beta     : {args.kl_beta}")
         print(f"* Learning Rate: {args.lr}")
-        print(f"* Replicas    : {args.num_cores} device cores")
+        print(f"* Replicas    : {args.num_cores} device cores ({'SPMD single process' if args.spmd else 'xmp.spawn'})")
         print("======================================================================")
 
     train_grpo(
@@ -286,6 +338,10 @@ def run_worker(index: int, args: argparse.Namespace):
         num_cores=args.num_cores,
         use_fsdp=args.fsdp,
         canonical_resize=args.canonical_resize,
+        use_spmd=args.spmd,
+        max_seq_len=args.max_seq_len,
+        pad_vision_to_slots=args.pad_vision_to_slots,
+        slot_budget=slot_budget,
     )
 
 

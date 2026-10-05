@@ -65,6 +65,7 @@ from dental_agent.config import load_env
 load_env(_repo_root / ".env")
 
 from dental_agent.model.backbone import get_model_classes, safe_process_vision_info
+from dental_agent.utils.canonical import CANONICAL_SIZES, SLOT_BUDGET, parse_slot_budget, slot_totals
 from dental_agent.training.sft import (
     BucketedQwenVLCollator,
     build_conversational_labels,
@@ -135,6 +136,7 @@ def build_dummy_multimodal_batch(
     include_image: bool = True,
     batch_size: int = 1,
     pad_vision_to_slots: bool = False,
+    slot_budget: Dict[str, int] | None = None,
 ) -> Dict[str, torch.Tensor]:
     """Construct a synthetic batch matching real multimodal conversations snapped to bucket_len.
 
@@ -143,9 +145,9 @@ def build_dummy_multimodal_batch(
     and `image_grid_thw` 1:1, preventing tensor dimension mismatch crashes in Qwen VL.
     """
     if include_image:
-        # Slot-padded mode must reproduce the TRAINING shapes exactly (canonical FULL image + static
-        # 19-slot padding), otherwise the AOT cache is compiled for a graph training never uses.
-        dummy_size = (1536, 768) if pad_vision_to_slots else (512, 512)
+        # Slot-padded mode must reproduce the TRAINING shapes exactly (canonical FULL image + the static
+        # --vision-slots padding), otherwise the AOT cache is compiled for a graph training never uses.
+        dummy_size = CANONICAL_SIZES["FULL"] if pad_vision_to_slots else (512, 512)
         dummy_img = Image.new("RGB", dummy_size, color=(128, 128, 128))
         messages = [
             {"role": "system", "content": "You are an expert dental radiologist AI."},
@@ -191,6 +193,7 @@ def build_dummy_multimodal_batch(
         custom_buckets=[bucket_len],
         max_seq_len=bucket_len if pad_vision_to_slots else None,
         pad_vision_to_slots=pad_vision_to_slots and include_image,
+        slot_budget=slot_budget,
     )
     collated = collator([sample] * batch_size)
 
@@ -214,12 +217,21 @@ def run_warmup_worker(index: int, args: argparse.Namespace):
             import torch_xla.core.xla_model as xm
             is_master = xm.is_master_ordinal()
 
-        pad_vision_to_slots = args.pad_vision_to_slots if args.pad_vision_to_slots is not None else is_tpu
-        if pad_vision_to_slots and getattr(args, "max_seq_len", None) == 10240:
-            args.max_seq_len = 16384  # mirror train_sft.py so the AOT cache matches the training graph
-        if is_tpu:
+        pad_vision_to_slots = args.pad_vision_to_slots
+        slot_budget = parse_slot_budget(*args.vision_slots)
+        static_vision_tokens = slot_totals(slot_budget)["tokens"]
+        if pad_vision_to_slots and args.max_seq_len <= static_vision_tokens:
+            raise SystemExit(
+                f"--max-seq-len {args.max_seq_len} cannot hold the {static_vision_tokens} static vision tokens of "
+                f"--vision-slots {args.vision_slots} plus any text."
+            )
+        if args.triangular_shim:
             from dental_agent.training.xla_patches import install_xla_solve_triangular_shim
             install_xla_solve_triangular_shim()
+        if is_master:
+            print(f"[CONFIG] spmd={args.xla_spmd} fsdp={args.fsdp} pad_vision_to_slots={pad_vision_to_slots} "
+                  f"vision_slots={args.vision_slots} max_seq_len={args.max_seq_len} "
+                  f"triangular_shim={args.triangular_shim}")
 
         # Initialize persistent XLA compilation cache BEFORE any model execution
         cache_base = Path(args.cache_dir).resolve()
@@ -407,6 +419,7 @@ def run_warmup_worker(index: int, args: argparse.Namespace):
                 include_image=include_images,
                 batch_size=warmup_batch_size,
                 pad_vision_to_slots=pad_vision_to_slots,
+                slot_budget=slot_budget,
             )
             if use_spmd and spmd_mesh is not None:
                 apply_spmd_input_sharding(dummy_batch, spmd_mesh, num_cores=args.num_cores)
@@ -525,9 +538,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--pad-vision-to-slots",
         action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Compile the static 19-slot vision graph (pixel_values [29952,1536], image_grid_thw [19,3]) that "
-             "train_sft.py uses on TPU. Default: on for TPU, off elsewhere. Must match the training flag.",
+        default=False,
+        help="Compile the static vision-slot graph that train_sft.py --pad-vision-to-slots trains on. Must match the "
+             "training command exactly (together with --vision-slots and --max-seq-len).",
+    )
+    parser.add_argument(
+        "--vision-slots",
+        type=int,
+        nargs=3,
+        metavar=("FULL", "CROP", "COMPARE"),
+        default=[SLOT_BUDGET["FULL"], SLOT_BUDGET["CROP"], SLOT_BUDGET["COMPARE"]],
+        help="Static slot budget (must match train_sft.py --vision-slots).",
+    )
+    parser.add_argument(
+        "--triangular-shim",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Install the matmul replacement for torch.linalg.solve_triangular before compiling "
+             "(--no-triangular-shim compiles the native solver, to compare HBM use).",
     )
     parser.add_argument(
         "--model-id",
@@ -573,8 +601,8 @@ def parse_args() -> argparse.Namespace:
         "--max-seq-len",
         type=int,
         default=10240,
-        help="Single static sequence length to pre-compile (default 10240; auto-raised to 16384 with "
-             "--pad-vision-to-slots, mirroring train_sft.py). MUST equal the training run's effective --max-seq-len.",
+        help="Single static sequence length to pre-compile. MUST equal the training run's --max-seq-len "
+             "(never adjusted automatically).",
     )
     parser.add_argument(
         "--xla-pallas",
@@ -587,8 +615,8 @@ def parse_args() -> argparse.Namespace:
         "--spmd",
         dest="xla_spmd",
         action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Compile using SPMD-based FSDPv2 (single process, shared mesh) instead of legacy xmp.spawn",
+        default=True,
+        help="Compile using SPMD-based FSDPv2 (single process, shared mesh). Default: on. --no-spmd = legacy xmp.spawn.",
     )
     parser.add_argument(
         "--fsdp",

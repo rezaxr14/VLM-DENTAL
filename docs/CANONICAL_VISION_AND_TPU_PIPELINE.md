@@ -1,6 +1,6 @@
 # Canonical Vision Inputs, Static Vision-Slot Padding & the TPU Training Path
 
-**Status:** implemented in the working tree, unit-tested on CPU, **not yet run on TPU hardware** (see §9).
+**Status:** implemented in the working tree, unit-tested on CPU (176 tests pass), checked against the real 880-trace corpus, **not yet run on TPU hardware** (§9). Hardware: **Cloud TPU v5e-8** (8 chips x 16 GB HBM, 330 GiB host RAM). **Revision 2** (this document supersedes the first draft where they differ: letterbox, no hidden defaults, GRPO on SPMD, duplicate-image fix).
 **Scope:** Stage 1 SFT, Stage 2 GRPO rollouts, evaluation, AOT XLA warmup, token-length manifest.
 **Companion docs:** `docs/SFT_CONFIG.md` (§5 collator), `docs/GRPO_CONFIG.md`, `AGENTS.md`, `roadmap.md`.
 
@@ -53,8 +53,8 @@ the collator and the census. Arithmetic invariants are `assert`ed at import time
 | 5 | **Stale length manifest.** `trace_token_lengths.json` was measured at native resolution. Reusing it under canonical resize filters the wrong traces. | High | Manifest records `canonical_resize`; a mismatched manifest is ignored with a warning (§5). |
 | 6 | **AOT warmup compiled the wrong graph** (512×512 dummy image, no slot padding) — the cache would never be hit by training. | High | Warmup builds the identical canonical + 19-slot batch. |
 | 7 | **GRPO / evaluation not covered.** SFT on canonical views then GRPO/eval on native views is a train/test distribution shift that would invalidate any paper comparison. | High | `canonical_resize` plumbed through rollouts, `run_grpo*.py`, and `evaluate_models.py` (§4 D7). |
-| 8 | **"Zero-compromise GPU path" via `is_tpu` toggles** conflicts with the standing decision that a GPU path would be a *separate* clean build with no shared backend-switching. | Medium | We added **no GPU code**: every new flag defaults off outside TPU, and GPU/CPU run exactly the pre-existing native + dynamic-padding code. The pre-existing `is_tpu` collator branch was already in the repo. Revisit if you want a hard split. |
-| 9 | **Hardware naming inconsistency.** Code/notebooks say Cloud TPU **v5e-8**; project notes say Kaggle **TPU v3-8**. Both are 8 × 16 GB, so the memory math is unaffected, but the paper must name the hardware that was actually used. | Medium | **[open]** — confirm and fix naming. |
+| 8 | **"Zero-compromise GPU path" via `is_tpu` toggles** conflicts with the standing decision that a GPU path would be a *separate* clean build with no shared backend-switching. | Medium | Revision 2 removes every TPU-dependent default: all behaviour is chosen by explicit flags, and the notebooks pass each value verbatim (§4 D8). |
+| 9 | **Hardware naming.** Notes said Kaggle v3-8. | Medium | Confirmed **v5e-8**; docs and memory corrected. |
 | 10 | **Unverifiable evidence.** The 67.6 % / 54.5 % / 224-token reconciliation is arithmetically correct (see §8) but its scripts (`scratch/*.py`) are not in the repo, and the 91-shape census was not reproducible. | Low | Added `scripts/census_vision_slots.py` so the numbers regenerate from the committed traces. |
 
 ## 4. Decisions
@@ -65,28 +65,41 @@ confirm or overrule.**
 - **D1 — Views, not data.** The model sees canonical views; tools run on native images; ground-truth coordinates stay
   in native pixel space. The model never emits pixel coordinates itself (every bbox comes from a tool), so the
   view/coordinate scale difference is harmless and consistent between SFT, GRPO and eval.
-- **D2 — One module for geometry** (`canonical.py`); no constants duplicated elsewhere.
-- **D3 — Sequence length 16,384 in padded (TPU) mode; unchanged elsewhere.** `--max-seq-len` keeps its 10,240 CLI
-  default (pinned by an existing test and AGENTS.md Rules 14/19); the TPU path raises it to 16,384 only when
-  `--pad-vision-to-slots` is active and the value is still the default. Never lowered. *Trade-off:* every step runs a
-  16,384-token sequence (~1.6× the LLM tokens of a 10,240 graph) regardless of trace size. A tiered budget (a few
-  slot tiers → a few graphs) is the obvious optimization if throughput, not compile count, becomes the bottleneck; it
-  needs the census output to size the tiers, so it is deferred rather than guessed.
+- **D2 — One module for geometry** (`canonical.py`); sizes live only there, the slot budget is a CLI value (`--vision-slots`) that defaults to it.
+- **D3 — `--max-seq-len 16384`, set explicitly, never adjusted.** Padded mode makes every sample `text + static vision
+  tokens` (7,488 for `--vision-slots 5 10 4`), so the notebook passes 16384 (text capacity 8,896). The earlier
+  "auto-raise 10240 -> 16384" was removed: a hidden rewrite of a user-visible number. The only check left is a hard
+  error when the length cannot hold the static vision tokens. *Measured on the 880 with-tools traces (uploaded
+  manifest + census):* a single 16,384 graph keeps 812 and drops 68 (7.7 %); 18,432 keeps 864; 20,480 keeps 877. The
+  dropped traces are not random: 7.8 findings/trace vs 4.5, 22.9 turns vs 11.9, so 16k removes the hardest
+  multi-finding cases (evaluate stratified by finding count). Only ~51 % of each 16,384 sequence is real tokens;
+  tiered budgets (e.g. 3 graphs at 10,240/14,336/20,480: 3 drops, ~84 % of the compute) are the fallback if
+  HBM/throughput forces it. Kept at 16k per instruction until the first hardware measurement.
 - **D4 — Fail loudly instead of degrading.** Padded mode raises on: non-canonical grids, over-budget slots,
   overlength sequences. `safe_process_vision_info` warns (instead of silently returning `(None, None)`) when images
   are present but cannot be loaded.
-- **D5 — Plain LANCZOS stretch, no letterbox (kept as specified).** This is the project's settled spec, but it is a
-  methodological limitation for CROP/COMPARE (§10): `zoom_crop` boxes are near-square while CROP is 2:3. A
-  letterbox variant is the recommended ablation; it was *not* implemented to avoid a mid-stream spec change.
+- **D5 — Aspect-preserving letterbox (replaces the stretch).** `to_canonical` scales uniformly (LANCZOS) to the
+  largest size that fits the canvas and centres it on a constant black canvas (`LETTERBOX_FILL`); nothing is cropped
+  and token counts are unchanged because the canvas is fixed. The previous stretch distorted near-square `zoom_crop`
+  boxes up to 1.73x (vertical vs horizontal) when mapped onto the 2:3 CROP canvas. Canvas occupied by content:
+  FULL 95 % (2872x1504), CROP 58-92 % (252x248 -> 66 %, 300x260 -> 58 %), COMPARE ~76 % (420x240). No information is
+  lost: a small crop is upscaled either way, so letterboxing only spends otherwise-redundant tokens on black bars.
+  Not measurable without GPU: whether the black bars change accuracy (expected neutral; compare against a stretch
+  ablation if the paper needs the claim). Nothing was trained with the old stretch, so there is no legacy to keep.
 - **D6 — XLA shim patches `torch.linalg.solve_triangular`, not the model function.** Copying upstream's function body
   would drift with `transformers`. The shim intercepts only `left=True, upper=False, unitriangular=True` on `xla`
   tensors and uses a log-depth matmul product expansion (6 factors for chunk size 64) instead of upstream's 63-step
   in-place loop. CPU/CUDA behaviour is untouched.
-- **D7 — One resolver for "canonical or not".** `resolve_canonical_resize(value)`: explicit argument wins, else
-  `DENTAL_CANONICAL_RESIZE`, else off. Training/GRPO/eval entrypoints expose `--canonical-resize`; library callers
-  that don't pass it (ablations, sweep, judge, batch runner) inherit the env var, so a whole eval run is consistent.
-- **D8 — Defaults.** TPU: `canonical_resize=True`, `pad_vision_to_slots=True`. GPU/CPU: both off. GRPO/eval default
-  off unless the env var/flag says otherwise (they must be set to match the SFT checkpoint — a notebook cell does it).
+- **D7 — No hidden state.** The `DENTAL_CANONICAL_RESIZE` environment variable and `resolve_canonical_resize()` were
+  removed. `canonical_resize` is an explicit parameter everywhere (`run_agent`, GRPO rollouts, `evaluate_models.py`,
+  launchers). Library callers that do not pass it (ablations, sweep helpers, judge, batch runner) stay at native
+  resolution; wire them explicitly before using them to evaluate a canonical-trained checkpoint.
+- **D8 — Defaults and flags (one flag per behaviour, no overlapping pairs).** Plain defaults, identical on every
+  backend: `--spmd` **on** (legacy `xmp.spawn` holds one full model copy per process and exhausts the 330 GiB host
+  RAM), `--fsdp` on, `--canonical-resize` off, `--pad-vision-to-slots` off, `--vision-slots 5 10 4`,
+  `--triangular-shim` on, `--max-seq-len 10240`. The notebooks set every one of them as a literal at the top of the
+  cell and pass it verbatim, so the notebook command line is the complete description of the run. Contradictory
+  combinations fail fast with a message (`--pad-vision-to-slots` without `--canonical-resize`; `--spmd --no-fsdp`).
 - **D9 — Fix, don't preserve, the manifest-key bug** (§5): correctness of the length filter outranks backward
   compatibility with a filter that never matched.
 
@@ -107,6 +120,17 @@ confirm or overrule.**
 | `notebooks/VLM_Dental_Colab_SFT.ipynb` | Defined the missing `TARGET_SEQ_LEN`; `CANONICAL_RESIZE`/`PAD_VISION_TO_SLOTS` flags passed to warmup+train; new §5a cell (recompute manifest + census); stale "native resolution, no downsampling" text corrected. |
 | `notebooks/VLM_Dental_Colab_GRPO.ipynb` | `CANONICAL_RESIZE` flag (must match SFT) passed to `run_grpo.py` / sweep. |
 | `tests/test_canonical_pipeline.py` *(new)* | 15 tests (see §7). |
+
+**Revision 2 additions**
+
+| File | Change |
+|------|--------|
+| `dental_agent/utils/canonical.py` | Letterbox `to_canonical`, `content_fraction`, `parse_slot_budget`, `slot_totals`; env resolver removed. |
+| `dental_agent/training/sft.py` | k-th image of a tool <-> k-th call of that tool (see §5.3); `slot_budget` parameter on dataset/collator; bounded LRU view cache; `padded_length()`; budget-independent shape invariant in the collator. |
+| `scripts/train_sft.py`, `scripts/warmup_xla_cache.py` | `--spmd` default on; `--vision-slots`; `--triangular-shim/--no-triangular-shim` (A/B for the OOM question); no auto-raise; startup `[CONFIG]` line echoing every setting; hardcoded 29952/19 check removed. |
+| `dental_agent/training/grpo.py`, `scripts/run_grpo.py`, `scripts/run_grpo_sweep.py` | SPMD single-process GRPO (§5.4); static-shape policy update; persistent optimizer; sweep accepts `--model-id` (the notebook already passed it, the launcher rejected it). |
+| `notebooks/*` | Literal config cells; every flag passed verbatim; the generated commands are parsed by the real CLIs in the test-suite harness. |
+| `tests/test_grpo_static_path.py` *(new)* | Static update == per-trajectory update (grads match to 1e-5); filler rows inert; one shape for any length; CLI flags. |
 
 ### 5.1 Static slot padding — exact mechanics
 
@@ -134,29 +158,61 @@ real M-RoPE positions; `labels=-100` gives zero loss/gradient; the vision tower 
 * **Padded-length semantics.** In padded mode a trace occupies `text + 7,488` tokens, not its raw length. The
   manifest now stores each trace's vision-token count so the filter computes `raw − vision + 7,488`.
 
+### 5.3 Duplicate tool images (pre-existing data bug, fixed)
+
+When one assistant turn called a tool several times (three `zoom_crop`s), the dataset looked up the *first* call named
+`zoom_crop` for every image, rendering N identical crops while the assistant text discussed N different teeth. Counted
+on the 880 uploaded traces (raw JSON, no images needed): **679 of 3,490 observation images (19.5 %) in 341 of 880
+traces (38.8 %)** were built from the wrong call (545 `zoom_crop`, 134 `contralateral_compare`). Result order equals
+call order in 2,406 of 2,450 image-bearing turns. Fix: the k-th image of a tool uses the k-th call of that tool
+(`test_n_zoom_crops_in_one_turn_render_n_distinct_images`). The remaining 50 images sit behind assistant messages whose
+JSON does not parse; they fall back to a default crop and now raise a counted warning (`unresolved_tool_images`).
+**Consequence:** every earlier SFT result trained on these duplicated crops; re-run before quoting any number.
+
+### 5.4 GRPO on SPMD
+
+* **Launch/wrap:** `--spmd` (default) = one process, `xr.use_spmd()` before the first device touch, FSDPv2 over the
+  8-core mesh, no data partitioning across processes. `--no-spmd` keeps the legacy path.
+* **Rollouts:** `model.generate` runs on the inner module (shares the same sharded parameters).
+* **Policy update at static shapes:** with `--pad-vision-to-slots --max-seq-len N` each update forward uses the SFT
+  collator, so one compiled graph serves every trajectory; `rows_per_forward = num_cores` (one rollout per core);
+  missing rows are inert copies with `labels = -100`. Old log-probs are recomputed with the same shapes (no
+  variable-shape forward during collection). Rollouts that do not fit `N` are excluded from the update and counted in
+  `n_dropped_overlength`. Numerical equivalence with the per-trajectory loop is tested.
+* **Optimizer bug fixed:** `grpo_step` built a fresh AdamW on every image, wiping the Adam moments each step. It is now
+  created once per run. This changes GRPO dynamics; earlier GRPO runs are not comparable.
+* **Not solved:** `generate()` itself still produces dynamically shaped graphs on XLA (growing KV cache, varying prompt
+  lengths). Static *update* shapes remove the training recompiles, not the decode recompiles; this needs a
+  static-cache/bucketed decoding design and hardware to validate (§9).
+
 ## 6. Runbook
 
+Every command below is what the notebooks generate; nothing is implied by a default.
+
 ```bash
-# 0. (once per resolution mode) lengths + census — CPU only, needs traces + images
+# 0. (once per resolution mode) lengths + census -- CPU only
 python scripts/compute_exact_trace_lengths.py --canonical-resize --recompute
 python scripts/census_vision_slots.py data/traces/train_cot_traces_dentex.jsonl \
-    --manifest data/traces/trace_token_lengths.json --seq-lens 10240 16384
+    --manifest data/traces/trace_token_lengths.json --seq-lens 10240 16384 --vision-slots 5 10 4
 
-# 1. AOT warmup (TPU) — must equal the training graph
-python scripts/warmup_xla_cache.py --spmd --fsdp --max-seq-len 16384 --pad-vision-to-slots
+# 1. AOT warmup (TPU) -- must equal the training graph; run twice to A/B the solver (HBM / OOM)
+python scripts/warmup_xla_cache.py --spmd --fsdp --max-seq-len 16384 --pad-vision-to-slots \
+    --vision-slots 5 10 4 --triangular-shim          # then again with --no-triangular-shim
 
-# 2. SFT (TPU: canonical + padded are the defaults)
-python scripts/train_sft.py --spmd --fsdp --max-seq-len 16384 --canonical-resize --pad-vision-to-slots ...
+# 2. SFT
+python scripts/train_sft.py --spmd --fsdp --max-seq-len 16384 --canonical-resize --pad-vision-to-slots \
+    --vision-slots 5 10 4 --triangular-shim ...
 
-# 3. GRPO — rollouts must see the same views as SFT
-python scripts/run_grpo.py --canonical-resize ...
+# 3. GRPO -- same view/shape flags as the SFT run that produced --sft-stage
+python scripts/run_grpo.py --spmd --fsdp --canonical-resize --pad-vision-to-slots --max-seq-len 16384 \
+    --vision-slots 5 10 4 --triangular-shim ...
 
-# 4. Evaluation — same views as the evaluated checkpoint
+# 4. Evaluation -- same view flag as the evaluated checkpoint
 python scripts/evaluate_models.py --canonical-resize ...
 ```
 
-GPU/CPU: run the same scripts without those flags — native resolution, `dynamic_padding=True`, no XLA code imported.
-Notebook equivalents are the `CANONICAL_RESIZE` / `PAD_VISION_TO_SLOTS` cells.
+The warmup prints HBM before/after forward and backward (`[XLA MEMORY | ...]`); the A/B is the difference between the
+two runs. Each script echoes a `[CONFIG] ...` line at startup.
 
 ## 7. Verification evidence
 
@@ -189,33 +245,30 @@ verified arithmetic]**
 
 ## 9. Open items (honest list)
 
-1. **No TPU run yet [open].** Not verified: that GSPMD shards the shim cleanly, that HBM fits at 16,384, that XLA
-   compiles exactly once, that `save_pretrained` gathers sharded parameters under SPMD (already on the horizon list).
-   First hardware check: `warmup_xla_cache.py --spmd --max-seq-len 16384` must not raise `RESOURCE_EXHAUSTED`; if it does,
-   the fallback is tiered slot budgets (D3), **not** fewer cores or a lower token ceiling (standing rules).
-2. **GRPO on TPU is not solved by this change.** Rollouts use HF `generate` with growing, dynamically-shaped inputs and
-   still launch through legacy `xmp.spawn`; static slot padding addresses the *SFT training graph* only. The canonical
-   plumbing makes GRPO *consistent* with SFT; it does not make it TPU-efficient.
-3. **`--spmd` default.** `train_sft.py` defaults `--spmd` to **False** at this commit although project notes record it
-   defaulting to True after patch 0004; the notebook passes it explicitly. Confirm patch 0004 fully landed.
-4. **Census numbers (91 shapes, 100 % coverage, length fit) not reproduced here** — run `census_vision_slots.py`.
-5. **Hardware naming** (v5e-8 vs v3-8) — fix in code comments, docs and the paper.
-6. **Runs predating the manifest-key fix** may have trained on truncated targets (§5.2).
-7. **`docs/SFT_RESULTS.md` memory figures** (e.g. "~6.86 GB … under native resolution") are historical measurements taken before canonical resizing and slot padding; re-measure on the new graph before quoting them.
-8. Still outstanding from before: regenerate the 18 Tufts no-tools traces; zero-shot evaluation notebook; Tunisia loader.
+1. **No TPU run yet.** Unverified: GSPMD sharding of the shim, HBM fit at 16,384, single compilation, `save_pretrained`
+   under SPMD. First check: warmup with and without `--triangular-shim`; the HBM difference answers whether removing the
+   native triangular solver is what fixes the OOM. If 16,384 does not fit, use tiers (D3), not fewer cores.
+2. **GRPO decode shapes.** Update shapes are static; `generate()` shapes are not (§5.4). Needs a static-cache design
+   plus hardware. Until then GRPO will compile per decode shape.
+3. **68 of 880 traces (7.7 %) drop at 16,384**, biased toward multi-finding cases (D3). Report per-finding-count recall.
+4. **Re-run SFT/GRPO baselines:** the duplicate-image bug (§5.3), the manifest-key bug (§5.2) and the GRPO optimizer
+   reset (§5.4) invalidate any earlier numbers.
+5. **Library eval call sites** (ablations, sweep helpers, judge, batch runner) are still native-only (D7).
+6. **`docs/SFT_RESULTS.md` memory figures** are pre-canonical; re-measure.
+7. **Letterbox accuracy claim** is an expectation, not a measurement; run the stretch-vs-letterbox ablation if needed.
+8. Still outstanding from before: regenerate the 18 Tufts no-tools traces; zero-shot notebook; Tunisia loader.
 
 ## 10. Paper-ready statements and limitations
 
 **Methods (suggested text).** *Radiographs are presented to the model as fixed-size views: the base image and
 whole-image operators at 1536×768, `zoom_crop` outputs at 256×384 and `contralateral_compare` composites at 512×384
-(Lanczos resampling; 1,152 / 96 / 192 visual tokens). Tools execute on the original-resolution image and all
+(aspect-preserving Lanczos resampling onto a constant black canvas; 1,152 / 96 / 192 visual tokens). Tools execute on the original-resolution image and all
 coordinates are in original pixel space. The identical views are used for SFT, GRPO rollouts and evaluation.*
 
 **Limitations to state.**
-* **Anisotropic CROP resampling.** `zoom_crop` boxes (pad = max(25 %·side, 50 px)) are close to square; CROP is 2:3.
-  Measured stretch (vertical ÷ horizontal): 60×120 box → 1.09; 110×150 → 1.26; 152×148 → 1.52; 200×160 → 1.73. FULL
-  distortion is small (0.955 for the 2872×1504 scan). Morphology cues in crops are therefore scaled non-uniformly,
-  identically at train and test time. **Recommended ablation:** letterbox/pad-to-canvas (same token counts) vs stretch.
+* **Letterboxed canvases.** CROP/COMPARE views are aspect-preserving, so non-matching crops carry black borders (CROP
+  canvas 58-92 % occupied for typical boxes). Geometry is preserved; effective resolution of a crop is capped by its
+  source pixels, not by the canvas.
 * **Resolution loss.** FULL downsamples a 2872×1504 scan by ≈1.9× per axis; fine findings are expected to be inspected
   via CROP (which re-samples from the *native* image, so zoomed detail is not lost).
 * **Baseline fairness.** Base-model zero-shot baselines should be reported under both native and canonical views when

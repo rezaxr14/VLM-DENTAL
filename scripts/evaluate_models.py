@@ -68,7 +68,7 @@ from dental_agent.evaluation.metrics import (
 from dental_agent.evaluation.reporting import generate_summary_table, generate_markdown_report
 from dental_agent.utils.serialization import to_jsonable
 from dental_agent.utils.canonical import (
-    ENV_CANONICAL_RESIZE, family_for_tool, resolve_canonical_resize, to_canonical,
+    family_for_tool, to_canonical,
 )
 from PIL import Image
 
@@ -209,6 +209,7 @@ def extract_ground_truth(image_id: int, annots_df, cats_df) -> list[dict[str, An
 
 def run_no_tools_eval(
     model, processor, image: Image.Image, image_id: int, device,
+    canonical_resize: bool = False,
 ) -> tuple[list[dict], str, bool]:
     """Run single-turn zero-shot evaluation using ZERO_SHOT_PROMPT.
 
@@ -216,7 +217,7 @@ def run_no_tools_eval(
     """
     from dental_agent.model.inference import generate_agent_reply
 
-    if resolve_canonical_resize(None):
+    if canonical_resize:
         image = to_canonical(image, "FULL")  # same view the SFT/GRPO policy was trained on
 
     messages = [
@@ -252,6 +253,7 @@ def run_with_tools_eval(
     model, processor, image: Image.Image, image_id: int, device,
     registry: ToolRegistry, dataset: str = "dentex",
     max_turns: int = 15, max_tool_calls: int = 25,
+    canonical_resize: bool = False,
 ) -> tuple[list[dict], str, bool, int, int]:
     """Run multi-turn agent loop with real dynamic tool execution.
 
@@ -262,7 +264,7 @@ def run_with_tools_eval(
     system_prompt = build_agent_system_prompt(registry.format_tool_descriptions(), dataset=dataset)
 
     # Tools execute on the NATIVE `image` (bbox args are native pixels); the model is shown canonical views.
-    canonical = resolve_canonical_resize(None)
+    canonical = canonical_resize
     view_image = to_canonical(image, "FULL") if canonical else image
 
     messages: list[dict[str, Any]] = [
@@ -572,10 +574,12 @@ def evaluate_condition(
                 model, processor, image, image_id, device,
                 registry=registry, dataset=args.dataset,
                 max_turns=args.max_turns, max_tool_calls=args.max_tool_calls,
+                canonical_resize=args.canonical_resize,
             )
         else:
             pred_findings, raw_output, format_ok = run_no_tools_eval(
                 model, processor, image, image_id, device,
+                canonical_resize=args.canonical_resize,
             )
             turns = 1
             tools_used = 0
@@ -701,10 +705,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--canonical-resize",
         action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Show every evaluated condition canonical image views (FULL 1536x768 / CROP 256x384 / COMPARE 512x384). "
-             "Use the SAME setting the evaluated checkpoint was trained with; report base-model baselines under both "
-             "settings if they are compared against a canonical-trained model.",
+        default=False,
+        help="Show every evaluated condition aspect-preserving canonical views (FULL 1536x768 / CROP 256x384 / "
+             "COMPARE 512x384, letterboxed). Pass exactly what the evaluated checkpoint was trained with.",
     )
     return parser.parse_args()
 
@@ -712,9 +715,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     load_env()
-    if args.canonical_resize is not None:
-        os.environ[ENV_CANONICAL_RESIZE] = "1" if args.canonical_resize else "0"
-    print(f"[EVAL] canonical_resize={resolve_canonical_resize(None)}")
+    print(f"[EVAL] canonical_resize={args.canonical_resize}")
 
     # Load dataset
     print(f"\n[DATA] Loading {args.dataset.upper()} dataset (split='{args.split}')...")

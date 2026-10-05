@@ -8,7 +8,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Optional
 from PIL import Image
-from dental_agent.utils.canonical import family_for_tool, resolve_canonical_resize, to_canonical
+from dental_agent.utils.canonical import family_for_tool, to_canonical
 import pandas as pd
 
 from dental_agent.agent.prompts import build_agent_system_prompt, NO_TOOLS_SYSTEM_PROMPT
@@ -52,7 +52,7 @@ def run_agent(
     registry: ToolRegistry | None = None,
     max_tool_calls: int = 50,
     verbose: bool = True,
-    canonical_resize: bool | None = None,
+    canonical_resize: bool = False,
 ) -> AgentTrajectory:
     """Run the multi-turn agent loop on a single dental radiograph.
 
@@ -63,7 +63,6 @@ def run_agent(
     4. Terminate when final_answer is returned or max_tool_calls is reached.
     """
     registry = registry or ToolRegistry.create_default()
-    canonical_resize = resolve_canonical_resize(canonical_resize)
     row = images_df[images_df["id"] == image_id].iloc[0]
     base_image = Image.open(row["local_path"]).convert("RGB")
     # Native base_image is what tools execute on; view_image is what the model sees (matches SFT).
@@ -265,12 +264,12 @@ def run_agent_no_tools(
     model: Any,
     processor: Any,
     verbose: bool = True,
-    canonical_resize: bool | None = None,
+    canonical_resize: bool = False,
 ) -> AgentTrajectory:
     """H1 Ablation condition: One-turn direct reasoning without tool access."""
     row = images_df[images_df["id"] == image_id].iloc[0]
     image = Image.open(row["local_path"]).convert("RGB")
-    if resolve_canonical_resize(canonical_resize):
+    if canonical_resize:
         image = to_canonical(image, "FULL")
 
     messages = [

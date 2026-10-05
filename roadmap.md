@@ -372,14 +372,12 @@ re-checking it against those same two papers.
   With trace generation 100% complete, the active training focus transitions directly to
   **Stage 1 Supervised Fine-Tuning (SFT)** in `VLM_Dental_Colab_SFT.ipynb` and
   **Stage 2 GRPO RL** in `VLM_Dental_Colab_GRPO.ipynb`.
-- **TPU SFT path: canonical vision views + static vision-slot padding — implemented, CPU-tested, awaiting first TPU run.**
-  Canonical resizing (FULL 1536×768 / CROP 256×384 / COMPARE 512×384) is now actually wired into
-  `DentalSFTDataset` (it previously existed only in planning, so earlier OOM experiments ran at native
-  resolution), the `[5,10,4]` static slot budget gives XLA one graph (requires `--max-seq-len 16384`), a
-  `solve_triangular` matmul shim unblocks GSPMD sharding of Gated-DeltaNet layers, and GRPO/evaluation take the same
-  `--canonical-resize` flag. Also fixed a silent bug where a freshly computed token-length manifest filtered nothing.
-  Decisions, verification evidence, limitations and the open-items list:
-  `docs/CANONICAL_VISION_AND_TPU_PIPELINE.md`. Next: TPU warmup at 16,384, run `census_vision_slots.py`.
+- **TPU SFT/GRPO path: canonical vision + static slots + SPMD GRPO — implemented, CPU-tested, awaiting first TPU run.**
+  Aspect-preserving canonical views, the static `--vision-slots 5 10 4` budget at `--max-seq-len 16384`, a
+  `solve_triangular` matmul shim (A/B via `--no-triangular-shim`), SPMD-default launchers for SFT, warmup and GRPO, and
+  notebooks that pass every setting verbatim. Also fixed: duplicate `zoom_crop` images (19.5 % of observation images),
+  a manifest-key bug that disabled length filtering, and a GRPO optimizer reset per step. Earlier SFT/GRPO numbers must be
+  re-run. Details, measurements and open items: `docs/CANONICAL_VISION_AND_TPU_PIPELINE.md`. Next: warmup A/B on TPU.
 - **Tunisia dataset loader — Phase 1 done, Phase 2 blocked on one
   verification step.** See "Datasets" below for full detail; short version:
   image discovery + VIA parsing + bbox geometry work today, FDI-position

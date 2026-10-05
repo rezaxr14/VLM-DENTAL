@@ -132,8 +132,8 @@ $$R_{\text{Track B}} = 0.45 R_{\text{FDI}} + 0.45 R_{\text{Diag}} + 0.10 R_{\tex
    python scripts/run_grpo.py --track with_tools --sft-stage dentex_alone --group-size 4 --resume-hf Reza-Nadimi/vlm-dental-models
    ```
 
-## 9. Rollout Image Views Must Match SFT (Canonical Resize)
+## 9. SPMD, Static Update Shapes & Rollout Views (Canonical Resize)
 
-GRPO rollouts (`run_agent`, `run_agent_no_tools`, the batched no-tools rollout, `collect_grpo_group*`, `grpo_step`, `train_grpo`) accept `canonical_resize`. Pass `--canonical-resize` to `scripts/run_grpo.py` / `run_grpo_sweep.py` **exactly when the SFT run that produced `--sft-stage` used it** (TPU SFT does by default); otherwise the policy is optimised on a different image distribution than it was fine-tuned on. Tools still execute on the native image; only the views handed to the processor are canonical (FULL 1536×768 / CROP 256×384 / COMPARE 512×384). If the argument is omitted, the `DENTAL_CANONICAL_RESIZE` environment variable decides (default off), so ablation/judge/batch-runner call sites inherit one consistent setting.
+`run_grpo.py` / `run_grpo_sweep.py` are single-process **SPMD** by default (`--spmd`, FSDPv2 over the device mesh; `--no-spmd` = legacy `xmp.spawn`, which exhausts host RAM). All view/shape flags must equal the SFT run that produced `--sft-stage`: `--canonical-resize`, `--pad-vision-to-slots`, `--max-seq-len`, `--vision-slots`. With `--pad-vision-to-slots` every policy-gradient forward runs at the SFT static shapes (one rollout per core, inert filler rows, one compiled graph); rollouts longer than `--max-seq-len` are excluded from the update and reported as `n_dropped_overlength`. The Adam optimizer is created once per run (it used to be rebuilt per image, resetting its moments).
 
-**Not addressed:** GRPO on TPU still launches via `xmp.spawn` and uses HF `generate` with dynamically-shaped, growing inputs; the static vision-slot padding that fixes SFT recompilation does not apply to rollouts. See `docs/CANONICAL_VISION_AND_TPU_PIPELINE.md` §9.
+Tools still execute on the native image; only the views handed to the processor are canonical. **Not solved:** `generate()` still produces dynamically shaped graphs on XLA (growing KV cache, varying prompt lengths); see `docs/CANONICAL_VISION_AND_TPU_PIPELINE.md` §5.4 and §9.

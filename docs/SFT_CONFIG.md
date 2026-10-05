@@ -127,7 +127,7 @@ Qwen2.5/3.5-VL incorporates 3D Rotary Position Embeddings (temporal, vertical, h
 
 ### 5.3 Canonical Vision Views & Static Vision-Slot Padding (TPU)
 
-On TPU the collator additionally pads every sample to a static `[5 FULL, 10 CROP, 4 COMPARE]` vision budget (`pixel_values [29952, 1536]`, `image_grid_thw [19, 3]`, 7,488 vision tokens) so XLA compiles exactly one graph. Because each sample then occupies `text + 7,488` tokens, **padded mode requires `--max-seq-len 16384`** (the 10,240 default is auto-raised, with a log line, only when `--pad-vision-to-slots` is active). Padded overlength sequences raise rather than truncate. On GPU/CPU none of this applies (native resolution, dynamic padding). Design, decisions, verification and limitations: `docs/CANONICAL_VISION_AND_TPU_PIPELINE.md`.
+With `--pad-vision-to-slots` (requires `--canonical-resize`) the collator pads every sample to the static `--vision-slots` budget (default `5 10 4`: `pixel_values [29952, 1536]`, `image_grid_thw [19, 3]`, 7,488 vision tokens) so XLA compiles exactly one graph. Each sample then occupies `text + static vision tokens`, so pass `--max-seq-len 16384`; nothing is adjusted automatically and overlength samples raise instead of truncating. `--spmd` is on by default. Design, decisions, measurements and limitations: `docs/CANONICAL_VISION_AND_TPU_PIPELINE.md`.
 
 ---
 

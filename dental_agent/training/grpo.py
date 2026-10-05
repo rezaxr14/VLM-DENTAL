@@ -196,13 +196,14 @@ def collect_grpo_group_batched_no_tools(
     ground_truth: list[dict[str, Any]],
     group_size: int = 4,
     temperature: float = 0.7,
-    canonical_resize: bool | None = None,
+    canonical_resize: bool = False,
+    compute_old_log_probs: bool = True,
 ) -> tuple[list[dict], list[float], list[torch.Tensor], list[torch.Tensor]]:
     """Sample K candidate trajectories simultaneously in ONE batched forward pass (Track B)."""
     row = images_df[images_df["id"] == image_id].iloc[0]
     base_image = Image.open(row["local_path"]).convert("RGB")
-    from dental_agent.utils.canonical import resolve_canonical_resize, to_canonical
-    if resolve_canonical_resize(canonical_resize):
+    from dental_agent.utils.canonical import to_canonical
+    if canonical_resize:
         base_image = to_canonical(base_image, "FULL")
 
     prompt_messages = [
@@ -276,12 +277,16 @@ def collect_grpo_group_batched_no_tools(
         trajectories.append(traj_dict)
         rewards.append(reward)
 
-        enc = build_full_trajectory_labels(traj_dict, processor)
-        enc = {k: v.to(model.device) if hasattr(v, "to") else v for k, v in enc.items()}
-        with torch.no_grad():
-            old_lp, mask = compute_token_log_probs(model, enc, use_reference=False)
-        old_log_probs_list.append(old_lp.detach())
-        masks_list.append(mask)
+        if compute_old_log_probs:
+            enc = build_full_trajectory_labels(traj_dict, processor)
+            enc = {k: v.to(model.device) if hasattr(v, "to") else v for k, v in enc.items()}
+            with torch.no_grad():
+                old_lp, mask = compute_token_log_probs(model, enc, use_reference=False)
+            old_log_probs_list.append(old_lp.detach())
+            masks_list.append(mask)
+        else:
+            old_log_probs_list.append(None)  # computed later in the static-shape update path
+            masks_list.append(None)
 
     return trajectories, rewards, old_log_probs_list, masks_list
 
@@ -295,7 +300,8 @@ def collect_grpo_group_batched_with_tools(
     registry: ToolRegistry,
     group_size: int = 4,
     max_tool_calls: int = 50,
-    canonical_resize: bool | None = None,
+    canonical_resize: bool = False,
+    compute_old_log_probs: bool = True,
 ) -> tuple[list[dict], list[float], list[torch.Tensor], list[torch.Tensor]]:
     """Sample K candidate multi-turn trajectories with workstation tools (Track A)."""
     trajectories, rewards, old_log_probs_list, masks_list = [], [], [], []
@@ -319,12 +325,16 @@ def collect_grpo_group_batched_with_tools(
         trajectories.append(traj_dict)
         rewards.append(reward)
 
-        enc = build_full_trajectory_labels(traj_dict, processor)
-        enc = {k: v.to(model.device) if hasattr(v, "to") else v for k, v in enc.items()}
-        with torch.no_grad():
-            old_lp, mask = compute_token_log_probs(model, enc, use_reference=False)
-        old_log_probs_list.append(old_lp.detach())
-        masks_list.append(mask)
+        if compute_old_log_probs:
+            enc = build_full_trajectory_labels(traj_dict, processor)
+            enc = {k: v.to(model.device) if hasattr(v, "to") else v for k, v in enc.items()}
+            with torch.no_grad():
+                old_lp, mask = compute_token_log_probs(model, enc, use_reference=False)
+            old_log_probs_list.append(old_lp.detach())
+            masks_list.append(mask)
+        else:
+            old_log_probs_list.append(None)  # computed later in the static-shape update path
+            masks_list.append(None)
 
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -342,7 +352,8 @@ def collect_grpo_group(
     group_size: int = 4,
     max_tool_calls: int = 50,
     track: str = "with_tools",
-    canonical_resize: bool | None = None,
+    canonical_resize: bool = False,
+    compute_old_log_probs: bool = True,
 ) -> tuple[list[dict], list[float], list[torch.Tensor], list[torch.Tensor]]:
     """Unified group rollout entrypoint supporting Track A and Track B."""
     if track == "no_tools":
@@ -354,6 +365,7 @@ def collect_grpo_group(
             ground_truth=ground_truth,
             group_size=group_size,
             canonical_resize=canonical_resize,
+            compute_old_log_probs=compute_old_log_probs,
         )
     else:
         if registry is None:
@@ -368,7 +380,105 @@ def collect_grpo_group(
             group_size=group_size,
             max_tool_calls=max_tool_calls,
             canonical_resize=canonical_resize,
+            compute_old_log_probs=compute_old_log_probs,
         )
+
+
+# ---------------------------------------------------------------------------
+# Static-shape policy forward (TPU/SPMD): one XLA graph for every update
+# ---------------------------------------------------------------------------
+
+def collate_static_rows(
+    encs: list[dict[str, torch.Tensor]],
+    collator: Any,
+    rows: int,
+) -> dict[str, torch.Tensor]:
+    """Collate trajectory encodings into ONE fixed-shape batch of exactly ``rows`` rows.
+
+    ``collator`` is the SFT ``BucketedQwenVLCollator(pad_vision_to_slots=True)``, so every batch has the same
+    ``input_ids`` / ``pixel_values`` / ``image_grid_thw`` shapes as SFT (one compiled graph, rows shardable across the
+    SPMD mesh). Missing rows are inert copies of row 0 with ``labels = -100`` (zero loss, zero gradient).
+    """
+    if not encs or len(encs) > rows:
+        raise ValueError(f"collate_static_rows needs 1..{rows} encodings, got {len(encs)}.")
+    padded = list(encs)
+    for _ in range(rows - len(encs)):
+        dummy = dict(encs[0])
+        dummy["labels"] = torch.full_like(encs[0]["labels"], -100)
+        padded.append(dummy)
+    return collator(padded)
+
+
+def _split_rows(token_lp: torch.Tensor, mask: torch.Tensor, n_real: int) -> list[tuple[torch.Tensor, torch.Tensor]]:
+    return [(token_lp[i : i + 1].detach(), mask[i : i + 1]) for i in range(n_real)]
+
+
+def compute_static_old_log_probs(
+    model: Any,
+    encs: list[dict[str, torch.Tensor]],
+    collator: Any,
+    rows: int,
+    to_device: Any,
+) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
+    """No-grad behaviour-policy log-probs for every trajectory, computed with the SAME static shapes as the update."""
+    old_lps: list[torch.Tensor] = []
+    masks: list[torch.Tensor] = []
+    for start in range(0, len(encs), rows):
+        chunk = encs[start : start + rows]
+        batch = to_device(collate_static_rows(chunk, collator, rows))
+        with torch.no_grad():
+            lp, mask = compute_token_log_probs(model, batch, use_reference=False)
+        for a, b in _split_rows(lp, mask, len(chunk)):
+            old_lps.append(a)
+            masks.append(b)
+    return old_lps, masks
+
+
+def static_policy_epoch(
+    model: Any,
+    collator: Any,
+    rows: int,
+    groups_static: list[tuple[list[dict[str, torch.Tensor]], torch.Tensor, list[torch.Tensor]]],
+    clip_eps: float,
+    kl_beta: float,
+    n_total_rollouts: int,
+    to_device: Any,
+) -> tuple[float, int]:
+    """One PPO-clip/k3-KL pass over micro-batches of ``rows`` trajectories with static shapes.
+
+    Math is identical to the per-trajectory path (per-trajectory masked mean, divided by ``n_total_rollouts``);
+    only the batching differs. Returns (sum of per-trajectory mean KL, number of trajectories).
+    """
+    kl_sum, kl_n = 0.0, 0
+    for encs, advs, old_lps in groups_static:
+        for start in range(0, len(encs), rows):
+            chunk = encs[start : start + rows]
+            n = len(chunk)
+            batch = to_device(collate_static_rows(chunk, collator, rows))
+            new_lp, mask = compute_token_log_probs(model, batch, use_reference=False)
+
+            old = torch.cat(old_lps[start : start + n], dim=0).to(new_lp.device)
+            adv = new_lp.new_zeros((rows, 1))
+            adv[:n, 0] = advs[start : start + n].to(new_lp.device)
+            if n < rows:
+                old = torch.cat([old, old.new_zeros((rows - n, old.shape[1]))], dim=0)
+
+            ratio = torch.exp(new_lp - old)
+            per_token_loss = -torch.min(ratio * adv, torch.clamp(ratio, 1.0 - clip_eps, 1.0 + clip_eps) * adv)
+
+            if kl_beta > 0:
+                with torch.no_grad():
+                    ref_lp, _ = compute_token_log_probs(model, batch, use_reference=True)
+                log_ratio_ref = ref_lp - new_lp
+                per_token_kl = torch.exp(log_ratio_ref) - log_ratio_ref - 1.0
+                per_token_loss = per_token_loss + kl_beta * per_token_kl
+                row_kl = (per_token_kl * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1)
+                kl_sum += float(row_kl[:n].sum().item())
+                kl_n += n
+
+            per_row = (per_token_loss * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1)
+            (per_row.sum() / n_total_rollouts).backward()
+    return kl_sum, kl_n
 
 
 # ---------------------------------------------------------------------------
@@ -389,13 +499,45 @@ def grpo_step(
     clip_eps: float = 0.2,
     kl_beta: float = 0.04,
     running_ema_baseline: float = 0.0,
-    canonical_resize: bool | None = None,
+    canonical_resize: bool = False,
+    optimizer: torch.optim.Optimizer | None = None,
+    train_collator: Any = None,
+    rows_per_forward: int = 1,
+    spmd_mesh: Any = None,
+    use_spmd: bool = False,
 ) -> tuple[dict[str, Any], float]:
-    """One GRPO update cycle over on-policy sampled groups."""
+    """One GRPO update cycle over on-policy sampled groups.
+
+    ``optimizer`` should be created ONCE by the caller and reused: building a fresh AdamW per call reset the Adam
+    moments on every image, turning each update into a sign-SGD step. (If omitted, a fresh one is created for
+    backwards compatibility.)
+
+    ``train_collator`` (a ``BucketedQwenVLCollator`` with ``pad_vision_to_slots=True``) switches the update to the
+    static-shape path: ``rows_per_forward`` trajectories per forward (use the number of SPMD cores so each core owns
+    one sequence), identical shapes to SFT, old log-probs recomputed with the same shapes.
+    """
     if registry is None:
         registry = ToolRegistry.create_default()
 
-    optimizer = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=lr)
+    if optimizer is None:
+        optimizer = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=lr)
+
+    gen_free_model = model  # policy forward goes through the (possibly FSDPv2-wrapped) model
+    # Rollouts call .generate(), which the SPMD FSDP wrapper does not expose; the inner module shares the very same
+    # sharded parameters, so GSPMD partitions it identically.
+    rollout_model = unwrap_peft_model(model) if use_spmd else model
+
+    def _to_device(batch: dict[str, Any]) -> dict[str, Any]:
+        if use_spmd:
+            import torch_xla.core.xla_model as xm
+            dev = xm.xla_device()
+        else:
+            dev = model.device
+        moved = {k: v.to(dev) if hasattr(v, "to") else v for k, v in batch.items()}
+        if use_spmd and spmd_mesh is not None:
+            from dental_agent.training.sft import apply_spmd_input_sharding
+            apply_spmd_input_sharding(moved, spmd_mesh, num_cores=rows_per_forward)
+        return moved
 
     groups, all_rewards = [], []
     current_baseline = running_ema_baseline
@@ -403,7 +545,7 @@ def grpo_step(
     # 1. On-policy rollout collection
     for image_id, ground_truth in image_ids_and_gts:
         trajs, rewards, old_lps, masks = collect_grpo_group(
-            model=model,
+            model=rollout_model,
             processor=processor,
             image_id=image_id,
             images_df=images_df,
@@ -413,6 +555,7 @@ def grpo_step(
             max_tool_calls=max_tool_calls,
             track=track,
             canonical_resize=canonical_resize,
+            compute_old_log_probs=train_collator is None,
         )
         advantages, current_baseline = compute_group_advantages(
             rewards=rewards,
@@ -422,6 +565,35 @@ def grpo_step(
         all_rewards.extend(rewards)
 
     n_total_rollouts = len(image_ids_and_gts) * group_size
+
+    # Static-shape path: encode each trajectory once, drop those that cannot fit the static length, and compute the
+    # behaviour-policy log-probs with exactly the shapes used by the update (one compiled graph, no per-length recompiles).
+    groups_static: list[tuple[list[dict[str, torch.Tensor]], torch.Tensor, list[torch.Tensor]]] = []
+    n_dropped_overlength = 0
+    if train_collator is not None:
+        for trajs, advantages, _, _ in groups:
+            kept_idx, encs = [], []
+            for i, traj in enumerate(trajs):
+                enc = build_full_trajectory_labels(traj, processor)
+                if train_collator.padded_length(enc) > train_collator.max_seq_len:
+                    n_dropped_overlength += 1
+                    continue
+                kept_idx.append(i)
+                encs.append(enc)
+            if not encs:
+                continue
+            old_lps, _ = compute_static_old_log_probs(
+                gen_free_model, encs, train_collator, rows_per_forward, _to_device
+            )
+            groups_static.append((encs, advantages[torch.tensor(kept_idx, dtype=torch.long)], old_lps))
+        if n_dropped_overlength:
+            import warnings
+            warnings.warn(
+                f"[GRPO] {n_dropped_overlength} rollout(s) exceeded the static length "
+                f"{train_collator.max_seq_len} and were excluded from this update (rewards/advantages unchanged).",
+                UserWarning,
+                stacklevel=2,
+            )
     model.train()
 
     total_kl = 0.0
@@ -430,35 +602,43 @@ def grpo_step(
     # 2. Optimization passes over fixed rollout batch
     for epoch in range(epochs_per_batch):
         optimizer.zero_grad()
-        for trajs, advantages, old_lps, masks in groups:
-            for traj, advantage, old_lp, mask in zip(trajs, advantages, old_lps, masks):
-                enc = build_full_trajectory_labels(traj, processor)
-                enc = {k: v.to(model.device) if hasattr(v, "to") else v for k, v in enc.items()}
-                new_lp, _ = compute_token_log_probs(model, enc, use_reference=False)
+        if train_collator is not None:
+            ks, kn = static_policy_epoch(
+                model, train_collator, rows_per_forward, groups_static,
+                clip_eps, kl_beta, n_total_rollouts, _to_device,
+            )
+            total_kl += ks
+            kl_count += kn
+        else:
+            for trajs, advantages, old_lps, masks in groups:
+                for traj, advantage, old_lp, mask in zip(trajs, advantages, old_lps, masks):
+                    enc = build_full_trajectory_labels(traj, processor)
+                    enc = {k: v.to(model.device) if hasattr(v, "to") else v for k, v in enc.items()}
+                    new_lp, _ = compute_token_log_probs(model, enc, use_reference=False)
 
-                ratio = torch.exp(new_lp - old_lp.to(model.device))
-                adv = advantage.to(model.device)
-                unclipped = ratio * adv
-                clipped = torch.clamp(ratio, 1.0 - clip_eps, 1.0 + clip_eps) * adv
-                per_token_loss = -torch.min(unclipped, clipped)
+                    ratio = torch.exp(new_lp - old_lp.to(model.device))
+                    adv = advantage.to(model.device)
+                    unclipped = ratio * adv
+                    clipped = torch.clamp(ratio, 1.0 - clip_eps, 1.0 + clip_eps) * adv
+                    per_token_loss = -torch.min(unclipped, clipped)
 
-                if kl_beta > 0:
-                    with torch.no_grad():
-                        ref_lp, _ = compute_token_log_probs(model, enc, use_reference=True)
-                    # Schulman k3 estimator: strictly non-negative with lower variance
-                    log_ratio_ref = ref_lp - new_lp
-                    per_token_kl = torch.exp(log_ratio_ref) - log_ratio_ref - 1.0
-                    per_token_loss = per_token_loss + kl_beta * per_token_kl
+                    if kl_beta > 0:
+                        with torch.no_grad():
+                            ref_lp, _ = compute_token_log_probs(model, enc, use_reference=True)
+                        # Schulman k3 estimator: strictly non-negative with lower variance
+                        log_ratio_ref = ref_lp - new_lp
+                        per_token_kl = torch.exp(log_ratio_ref) - log_ratio_ref - 1.0
+                        per_token_loss = per_token_loss + kl_beta * per_token_kl
 
-                    valid_kl = (per_token_kl * mask).sum() / mask.sum().clamp(min=1)
-                    total_kl += float(valid_kl.item())
-                    kl_count += 1
+                        valid_kl = (per_token_kl * mask).sum() / mask.sum().clamp(min=1)
+                        total_kl += float(valid_kl.item())
+                        kl_count += 1
 
-                loss = (per_token_loss * mask).sum() / mask.sum().clamp(min=1) / n_total_rollouts
-                loss.backward()
+                    loss = (per_token_loss * mask).sum() / mask.sum().clamp(min=1) / n_total_rollouts
+                    loss.backward()
 
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
 
         is_tpu = False
         try:
@@ -467,7 +647,10 @@ def grpo_step(
         except Exception:
             pass
 
-        if is_tpu:
+        if is_tpu and use_spmd:
+            optimizer.step()  # SPMD: gradients are already globally consistent; no cross-replica all-reduce
+            xm.mark_step()
+        elif is_tpu:
             xm.optimizer_step(optimizer)
         else:
             optimizer.step()
@@ -480,6 +663,7 @@ def grpo_step(
         "n_rollouts": len(all_rewards),
         "group_size": group_size,
         "track": track,
+        "n_dropped_overlength": n_dropped_overlength,
     }
     return stats, current_baseline
 
@@ -599,7 +783,11 @@ def train_grpo(
     path_in_repo_prefix: str | None = None,
     num_cores: int = 1,
     use_fsdp: bool = True,
-    canonical_resize: bool | None = None,
+    canonical_resize: bool = False,
+    use_spmd: bool = False,
+    max_seq_len: int | None = None,
+    pad_vision_to_slots: bool = False,
+    slot_budget: dict[str, int] | None = None,
 ) -> str:
     """Execute Stage 2 GRPO policy optimization with dual-adapter reference and group advantage normalization."""
     from peft import PeftModel, LoraConfig
@@ -639,7 +827,39 @@ def train_grpo(
     except Exception:
         pass
 
-    model = wrap_distributed_model(model, is_tpu=is_tpu, num_cores=num_cores, use_fsdp=use_fsdp)
+    spmd_mesh = None
+    train_collator = None
+    rows_per_forward = 1
+    if pad_vision_to_slots and not canonical_resize:
+        raise ValueError("pad_vision_to_slots requires canonical_resize (static slots assume canonical image sizes).")
+    if use_spmd and is_tpu:
+        if not use_fsdp:
+            raise ValueError("SPMD shards weights through FSDPv2; use_fsdp=False would replicate 18 GB on every core.")
+        from dental_agent.training.sft import freeze_and_guard_vision_tower, setup_spmd_mesh, wrap_spmd_model
+        freeze_and_guard_vision_tower(model, train_merger=False)
+        spmd_mesh = setup_spmd_mesh(num_cores=num_cores)
+        model = wrap_spmd_model(model, mesh=spmd_mesh, is_master=True)
+        rows_per_forward = num_cores  # one trajectory per core in every policy forward
+    else:
+        model = wrap_distributed_model(model, is_tpu=is_tpu, num_cores=num_cores, use_fsdp=use_fsdp)
+
+    if pad_vision_to_slots:
+        if max_seq_len is None:
+            raise ValueError("pad_vision_to_slots requires max_seq_len.")
+        from dental_agent.training.sft import BucketedQwenVLCollator
+        train_collator = BucketedQwenVLCollator(
+            processor=processor, track=track, max_seq_len=max_seq_len, dynamic_padding=False,
+            pad_vision_to_slots=True, slot_budget=slot_budget,
+        )
+    elif use_spmd and is_tpu:
+        print("[GRPO WARNING] SPMD without --pad-vision-to-slots: every distinct trajectory length/image mix compiles "
+              "a new XLA graph. Use --canonical-resize --pad-vision-to-slots --max-seq-len N.")
+    print(f"[CONFIG] spmd={use_spmd and is_tpu} fsdp={use_fsdp} canonical_resize={canonical_resize} "
+          f"pad_vision_to_slots={pad_vision_to_slots} max_seq_len={max_seq_len} rows_per_forward={rows_per_forward} "
+          f"num_cores={num_cores}")
+
+    # One optimizer for the whole run: Adam moments must persist across GRPO steps.
+    optimizer = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=lr)
 
     cat_lookup = dict(zip(categories_df["id"], categories_df["name"])) if len(categories_df) else {}
     registry = ToolRegistry.create_default() if track == "with_tools" else None
@@ -679,6 +899,11 @@ def train_grpo(
             kl_beta=beta,
             running_ema_baseline=current_baseline,
             canonical_resize=canonical_resize,
+            optimizer=optimizer,
+            train_collator=train_collator,
+            rows_per_forward=rows_per_forward,
+            spmd_mesh=spmd_mesh,
+            use_spmd=bool(use_spmd and is_tpu),
         )
         log_grpo_step(stats, extra={"step": step, "image_id": int(img_id)})
         print(f"[GRPO Step {step}/{total_steps}] mean_reward={stats['mean_reward']:.3f} kl={stats['kl_divergence']:.4f}")

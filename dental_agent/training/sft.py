@@ -11,6 +11,7 @@ Production implementation supporting:
 
 from __future__ import annotations
 
+import collections
 import json
 import os
 import glob
@@ -28,7 +29,7 @@ from dental_agent.utils.canonical import (
     CANONICAL_SIZES,
     PATCH_FEATURE_DIM,
     SLOT_BUDGET,
-    TOTAL_VISION_TOKENS,
+    slot_totals,
     family_for_tool,
     family_from_grid,
     grid_thw as canonical_grid_thw,
@@ -237,11 +238,14 @@ class BucketedQwenVLCollator:
         custom_buckets: list[int] | None = None,
         dynamic_padding: bool = False,
         pad_vision_to_slots: bool = False,
+        slot_budget: dict[str, int] | None = None,
     ) -> None:
         self.processor = processor
         self.tokenizer = processor.tokenizer
         self.track = track
         self.dynamic_padding = dynamic_padding
+        self.slot_budget = dict(slot_budget) if slot_budget is not None else dict(SLOT_BUDGET)
+        self.slot_totals = slot_totals(self.slot_budget)
         # TPU-only: pad every example to the static 19-slot vision budget so XLA sees ONE
         # (pixel_values, image_grid_thw) shape. Requires canonical-resized images.
         self.pad_vision_to_slots = pad_vision_to_slots
@@ -292,7 +296,7 @@ class BucketedQwenVLCollator:
             grid = torch.zeros((0, 3), dtype=torch.long)
             pix = torch.zeros((0, PATCH_FEATURE_DIM), dtype=torch.float32)
 
-        used = {fam: 0 for fam in SLOT_BUDGET}
+        used = {fam: 0 for fam in self.slot_budget}
         for row in grid.tolist():
             fam = family_from_grid(tuple(row))
             if fam is None:
@@ -303,15 +307,15 @@ class BucketedQwenVLCollator:
                 )
             used[fam] += 1
         for fam, n in used.items():
-            if n > SLOT_BUDGET[fam]:
+            if n > self.slot_budget[fam]:
                 raise ValueError(
-                    f"pad_vision_to_slots: trace uses {n} {fam} images but the static budget is {SLOT_BUDGET[fam]}."
+                    f"pad_vision_to_slots: trace uses {n} {fam} images but the static budget is {self.slot_budget[fam]}."
                 )
         if pix.shape[-1] != PATCH_FEATURE_DIM and pix.shape[0] > 0:
             raise ValueError(f"Unexpected pixel_values feature dim {pix.shape[-1]} (expected {PATCH_FEATURE_DIM}).")
 
         dummy_pix, dummy_grid, tail_tokens = [], [], 0
-        for fam, budget in SLOT_BUDGET.items():
+        for fam, budget in self.slot_budget.items():
             for _ in range(budget - used[fam]):
                 dummy_pix.append(torch.zeros((patches_per_image(fam), PATCH_FEATURE_DIM), dtype=pix.dtype))
                 dummy_grid.append(torch.tensor([canonical_grid_thw(fam)], dtype=grid.dtype))
@@ -334,7 +338,20 @@ class BucketedQwenVLCollator:
                 if mm.dim() == 1:
                     mm = mm.unsqueeze(0)
                 out["mm_token_type_ids"] = torch.cat([mm, torch.ones((1, tail_tokens), dtype=mm.dtype)], dim=1)
+        # Budget-independent self-consistency: one pixel_values row per patch of every grid, and one placeholder
+        # token per merged patch group, so HF's image-token/feature check can never fail at runtime.
+        n_patches = int(out["image_grid_thw"].prod(dim=-1).sum())
+        if out["pixel_values"].shape[0] != n_patches:
+            raise ValueError(f"pixel_values rows ({out['pixel_values'].shape[0]}) != sum(grid_thw) ({n_patches}).")
+        if out["pixel_values"].shape[0] != self.slot_totals["patches"] or out["image_grid_thw"].shape[0] != self.slot_totals["slots"]:
+            raise ValueError("Slot padding produced shapes that differ from the configured --vision-slots budget.")
         return out
+
+    def padded_length(self, ex: dict[str, Any]) -> int:
+        """Sequence length ``ex`` will occupy after static vision-slot padding (text + static vision tokens)."""
+        ids = ex["input_ids"]
+        n_vision = int((ids == self._image_token_id()).sum())
+        return int(ids.shape[-1]) - n_vision + self.slot_totals["tokens"]
 
     def __call__(self, batch: list[dict[str, Any]]) -> dict[str, torch.Tensor]:
         if not batch:
@@ -373,7 +390,7 @@ class BucketedQwenVLCollator:
             curr_len = ex["input_ids"].shape[1]
             if curr_len > target_len and self.pad_vision_to_slots:
                 raise ValueError(
-                    f"Slot-padded sequence ({curr_len} tokens = text + {TOTAL_VISION_TOKENS} static vision tokens) "
+                    f"Slot-padded sequence ({curr_len} tokens = text + {self.slot_totals['tokens']} static vision tokens) "
                     f"exceeds target length {target_len}. Truncating would desynchronise <|image_pad|> tokens from "
                     "vision features. Raise --max-seq-len (e.g. 16384) or filter this trace."
                 )
@@ -479,6 +496,8 @@ class DentalSFTDataset(Dataset):
         token_lengths_manifest: str | Path | None = None,
         canonical_resize: bool = False,
         pad_vision_to_slots: bool = False,
+        slot_budget: dict[str, int] | None = None,
+        view_cache_max_items: int = 256,
     ) -> None:
         self.processor = processor
         self.track = track
@@ -488,11 +507,16 @@ class DentalSFTDataset(Dataset):
         # execute on the native image; only the rendered view is resampled.
         self.canonical_resize = canonical_resize
         # Only affects length filtering: with static slot padding a sequence occupies
-        # (text + real vision) - real vision + TOTAL_VISION_TOKENS = text + TOTAL_VISION_TOKENS tokens.
+        # (text + real vision) - real vision + static vision tokens = text + static vision tokens.
         self.pad_vision_to_slots = pad_vision_to_slots
+        self._static_vision_tokens = slot_totals(slot_budget if slot_budget is not None else SLOT_BUDGET)["tokens"]
         self.records: list[dict[str, Any]] = []
         self.registry = ToolRegistry.create_default()
-        self._crop_cache: dict[str, Image.Image] = {}
+        # LRU of finished model-facing tool views. Previously an unbounded dict of NATIVE-resolution tool outputs
+        # (up to ~13 MB each for whole-image operators), which grows without limit over epochs on host RAM.
+        self._crop_cache: collections.OrderedDict[str, Image.Image] = collections.OrderedDict()
+        self._view_cache_max_items = int(view_cache_max_items)
+        self.unresolved_tool_images = 0
 
         # Resolve pre-computed token lengths manifest for instant O(1) filtering on Kaggle/Colab
         token_map: dict[str, int] = {}
@@ -571,14 +595,14 @@ class DentalSFTDataset(Dataset):
                     if vis_len is None:
                         retained.append(r)
                         continue
-                    tok_len = tok_len - vis_len + TOTAL_VISION_TOKENS
+                    tok_len = tok_len - vis_len + self._static_vision_tokens
                 if tok_len > max_seq_len:
                     filtered_count += 1
                 else:
                     retained.append(r)
             self.records = retained
             pct = (len(retained) / max(len(raw_records), 1)) * 100
-            basis = f"text + {TOTAL_VISION_TOKENS} static vision tokens" if self.pad_vision_to_slots else "raw sequence"
+            basis = f"text + {self._static_vision_tokens} static vision tokens" if self.pad_vision_to_slots else "raw sequence"
             print(
                 f"[DATASET MASK] Evaluated {len(raw_records)} traces: retained {len(retained)} "
                 f"(<= {max_seq_len} tokens [{basis}], {pct:.1f}%), filtered out {filtered_count} overlength traces."
@@ -714,6 +738,7 @@ class DentalSFTDataset(Dataset):
                         pending_calls = [{"tool": c.get("tool_name"), "args": c.get("tool_args", {})} for c in raw_calls]
 
                     call_cursor = 0
+                    seen_by_tool: collections.Counter = collections.Counter()
                     for item_idx, item in enumerate(content):
                         if isinstance(item, dict) and item.get("type") == "image":
                             # Match the tool that generated this image
@@ -727,10 +752,25 @@ class DentalSFTDataset(Dataset):
 
                             tool_args = {}
                             if matched_tool_name:
-                                for pc in pending_calls:
-                                    if pc.get("tool") == matched_tool_name:
-                                        tool_args = pc.get("args", {})
-                                        break
+                                # k-th image of a tool <-> k-th call of that tool in the assistant turn. (Matching the
+                                # FIRST call every time rendered N identical images for N different zoom_crop calls.)
+                                same_tool_calls = [pc for pc in pending_calls if pc.get("tool") == matched_tool_name]
+                                k = seen_by_tool[matched_tool_name]
+                                seen_by_tool[matched_tool_name] += 1
+                                if k < len(same_tool_calls):
+                                    tool_args = same_tool_calls[k].get("args", {})
+                                else:
+                                    self.unresolved_tool_images += 1
+                                    if self.unresolved_tool_images <= 5 or self.unresolved_tool_images % 100 == 0:
+                                        import warnings
+                                        warnings.warn(
+                                            f"[TOOL IMAGE] image #{k + 1} of '{matched_tool_name}' (image_id={image_id_str}) "
+                                            f"has no matching call in its assistant turn ({len(same_tool_calls)} found); "
+                                            f"a default crop is rendered instead. total unresolved so far: "
+                                            f"{self.unresolved_tool_images}",
+                                            UserWarning,
+                                            stacklevel=2,
+                                        )
                             elif call_cursor < len(pending_calls):
                                 pc = pending_calls[call_cursor]
                                 matched_tool_name = pc.get("tool")
@@ -742,16 +782,19 @@ class DentalSFTDataset(Dataset):
 
                             tool_img = None
                             produced_by = matched_tool_name
+                            cache_key = None
+                            from_cache = False
                             if matched_tool_name in IMAGE_PRODUCING_TOOLS:
                                 cache_key = f"{image_id_str}_{matched_tool_name}_{json.dumps(tool_args, sort_keys=True)}"
                                 if cache_key in self._crop_cache:
                                     tool_img = self._crop_cache[cache_key]
+                                    self._crop_cache.move_to_end(cache_key)
+                                    from_cache = True
                                 else:
                                     try:
                                         res = execute_tool_call(self.registry, matched_tool_name, tool_args, base_image)
                                         if isinstance(res, Image.Image):
                                             tool_img = res
-                                            self._crop_cache[cache_key] = tool_img
                                     except Exception:
                                         pass
 
@@ -765,6 +808,10 @@ class DentalSFTDataset(Dataset):
 
                             if self.canonical_resize:
                                 tool_img = to_canonical(tool_img, family_for_tool(produced_by))
+                            if cache_key is not None and not from_cache and produced_by == matched_tool_name:
+                                self._crop_cache[cache_key] = tool_img  # finished view (canonical when enabled)
+                                while len(self._crop_cache) > self._view_cache_max_items:
+                                    self._crop_cache.popitem(last=False)
                             sanitized_content.append({"type": "image", "image": tool_img})
                         else:
                             sanitized_content.append(item)

@@ -287,16 +287,6 @@ def test_slot_padded_length_filter_uses_text_plus_static_vision(tmp_path):
                          canonical_resize=True, pad_vision_to_slots=True)
 
 
-def test_resolve_canonical_resize_env_and_explicit(monkeypatch):
-    monkeypatch.delenv(C.ENV_CANONICAL_RESIZE, raising=False)
-    assert C.resolve_canonical_resize(None) is False
-    monkeypatch.setenv(C.ENV_CANONICAL_RESIZE, "1")
-    assert C.resolve_canonical_resize(None) is True
-    assert C.resolve_canonical_resize(False) is False  # explicit wins
-    monkeypatch.setenv(C.ENV_CANONICAL_RESIZE, "0")
-    assert C.resolve_canonical_resize(None) is False
-
-
 # --------------------------------------------------------------------------- census
 def test_census_family_counting_matches_dataset_attribution(tmp_path):
     import importlib.util, pathlib
@@ -307,3 +297,84 @@ def test_census_family_counting_matches_dataset_attribution(tmp_path):
     rec = _record(tmp_path, Image.new("RGB", (8, 8)))
     counts = census.count_families(rec)
     assert counts == {"FULL": 2, "CROP": 1, "COMPARE": 0}  # base + window_level=FULL, zoom_crop=CROP
+
+
+# --------------------------------------------------------------------------- letterbox
+def test_letterbox_preserves_aspect_ratio_and_canvas_size():
+    for size, fam in [((252, 248), "CROP"), ((160, 220), "CROP"), ((300, 260), "CROP"),
+                      ((420, 240), "COMPARE"), ((2872, 1504), "FULL"), ((1615, 840), "FULL")]:
+        out = C.to_canonical(Image.new("RGB", size, (200, 200, 200)), fam)
+        assert out.size == C.CANONICAL_SIZES[fam]
+        bbox = out.convert("L").point(lambda v: 255 if v > 0 else 0).getbbox()
+        cw, ch = bbox[2] - bbox[0], bbox[3] - bbox[1]
+        assert abs(cw / ch - size[0] / size[1]) < 0.02, (size, fam, cw, ch)  # no anisotropic stretch
+        assert 0 < C.content_fraction(size, fam) <= 1.0
+
+
+def test_letterbox_does_not_crop_content_and_uses_constant_fill():
+    img = Image.new("RGB", (100, 400), (255, 0, 0))
+    out = C.to_canonical(img, "CROP")
+    assert out.getpixel((0, 0)) == C.LETTERBOX_FILL and out.getpixel((255, 0)) == C.LETTERBOX_FILL
+    assert out.getpixel((128, 192))[0] > 200  # content centred
+    assert out.getpixel((128, 2))[0] > 200 and out.getpixel((128, 381))[0] > 200  # full height retained
+
+
+# --------------------------------------------------------------------------- tool-call matching
+def test_n_zoom_crops_in_one_turn_render_n_distinct_images(tmp_path):
+    native = Image.new("RGB", (1200, 600), (0, 0, 0))
+    colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255)]
+    boxes = [(100, 100, 60, 60), (400, 200, 60, 60), (800, 300, 60, 60)]
+    for col, (x, y, w, h) in zip(colors, boxes):
+        native.paste(col, (x, y, x + w, y + h))
+    p = tmp_path / "s.png"
+    native.save(p)
+    calls = [{"tool": "zoom_crop", "args": {"bbox": [float(x), float(y), float(w), float(h)], "padding_frac": 0.0}}
+             for (x, y, w, h) in boxes]
+    rec = {
+        "image_id": 9, "image_path": str(p),
+        "messages": [
+            {"role": "system", "content": "s"},
+            {"role": "user", "content": [{"type": "image", "image": "<Image>"}, {"type": "text", "text": "Analyze."}]},
+            {"role": "assistant", "content": json.dumps({"thought": "t", "tool_calls": calls})},
+            {"role": "user", "content": [
+                {"type": "image", "image": "<Image>"}, {"type": "text", "text": "Result of zoom_crop:"},
+                {"type": "image", "image": "<Image>"}, {"type": "text", "text": "Result of zoom_crop:"},
+                {"type": "image", "image": "<Image>"}, {"type": "text", "text": "Result of zoom_crop:"}]},
+            {"role": "assistant", "content": json.dumps({"thought": "d", "final_answer": []})},
+        ],
+        "turns": [], "final_answer": [],
+    }
+    trace = tmp_path / "t.jsonl"
+    trace.write_text(json.dumps(rec) + "\n")
+    proc = _RecordingProcessor()
+    ds = DentalSFTDataset(trace, processor=proc, data_dir=tmp_path, canonical_resize=True)
+    ds[0]
+    crops = proc.seen_images[1:]
+    assert len(crops) == 3
+    centres = [im.getpixel((im.width // 2, im.height // 2)) for im in crops]
+    assert centres == colors  # k-th image <-> k-th call (used to be three copies of the first crop)
+    assert ds.unresolved_tool_images == 0
+
+
+def test_view_cache_is_bounded(tmp_path):
+    ds, _ = _build(tmp_path, canonical=True)
+    ds._view_cache_max_items = 1
+    ds[0]
+    assert len(ds._crop_cache) <= 1
+    first = next(iter(ds._crop_cache.values()), None)
+    assert first is None or first.size in set(C.CANONICAL_SIZES.values())  # caches finished (canonical) views
+
+
+# --------------------------------------------------------------------------- configurable slot budget
+def test_custom_slot_budget_changes_static_shapes_consistently():
+    budget = C.parse_slot_budget(2, 4, 1)
+    totals = C.slot_totals(budget)
+    assert totals == {"slots": 7, "patches": 2 * 4608 + 4 * 384 + 768, "tokens": 2 * 1152 + 4 * 96 + 192}
+    coll = BucketedQwenVLCollator(_CollProc(), max_seq_len=8192, pad_vision_to_slots=True, slot_budget=budget)
+    out = coll([_example(1, 2, 0, text_len=200)])
+    assert out["pixel_values"].shape == (totals["patches"], 1536) and out["image_grid_thw"].shape == (7, 3)
+    assert int((out["input_ids"] == IMG_TOK).sum()) == totals["tokens"]
+    with pytest.raises(ValueError, match="static budget"):
+        coll([_example(3, 0, 0)])
+    with pytest.raises(ValueError):
+        C.parse_slot_budget(0, 1, 1)

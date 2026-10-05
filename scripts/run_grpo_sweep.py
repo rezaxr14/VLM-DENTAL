@@ -27,6 +27,7 @@ from dental_agent.config import load_config
 from dental_agent.data.dentex import load_dentex_dataset
 from dental_agent.data.tufts import load_tufts_dataset
 from dental_agent.training.grpo import train_grpo
+from dental_agent.utils.canonical import SLOT_BUDGET, parse_slot_budget
 
 
 def parse_args():
@@ -73,18 +74,46 @@ def parse_args():
         default=True,
         help="Enable PyTorch/XLA FSDP parameter sharding across TPU cores to fit 9B BF16 model within 16 GB HBM (default: True on multi-core TPU)",
     )
+    parser.add_argument("--model-id", type=str, default=None,
+                        help="Base model path/repo (same as run_grpo.py; the notebook passes it in sweep mode).")
+    parser.add_argument("--spmd", action=argparse.BooleanOptionalAction, default=True,
+                        help="Single-process SPMD (default on); --no-spmd = legacy path.")
+    parser.add_argument("--pad-vision-to-slots", action=argparse.BooleanOptionalAction, default=False,
+                        help="Static-shape policy update (see run_grpo.py).")
+    parser.add_argument("--max-seq-len", type=int, default=None,
+                        help="Static update length; required with --pad-vision-to-slots (use the SFT value).")
+    parser.add_argument("--vision-slots", type=int, nargs=3, metavar=("FULL", "CROP", "COMPARE"),
+                        default=[SLOT_BUDGET["FULL"], SLOT_BUDGET["CROP"], SLOT_BUDGET["COMPARE"]],
+                        help="Static slot budget (must equal the SFT run's).")
+    parser.add_argument("--triangular-shim", action=argparse.BooleanOptionalAction, default=True,
+                        help="Matmul replacement for solve_triangular on XLA.")
     parser.add_argument(
         "--canonical-resize",
         action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Roll out with canonical image views; must match the SFT stage's --canonical-resize setting.",
+        default=False,
+        help="Roll out with canonical views; must match the SFT stage's --canonical-resize setting.",
     )
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
+    if args.pad_vision_to_slots and (not args.canonical_resize or args.max_seq_len is None):
+        raise SystemExit("--pad-vision-to-slots requires --canonical-resize and --max-seq-len.")
+    if args.spmd:
+        try:
+            import torch_xla.runtime as xr
+            if hasattr(xr, "use_spmd"):
+                xr.use_spmd()  # before any device is initialised
+            os.environ["XLA_USE_SPMD"] = "1"
+        except ImportError:
+            pass
+    if args.triangular_shim:
+        from dental_agent.training.xla_patches import install_xla_solve_triangular_shim
+        install_xla_solve_triangular_shim()
     cfg = load_config()
+    if args.model_id:
+        cfg.model.name = args.model_id
 
     out_path = Path(args.output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
@@ -143,6 +172,10 @@ def main():
             num_cores=args.num_cores,
             use_fsdp=args.fsdp,
             canonical_resize=args.canonical_resize,
+            use_spmd=args.spmd,
+            max_seq_len=args.max_seq_len,
+            pad_vision_to_slots=args.pad_vision_to_slots,
+            slot_budget=parse_slot_budget(*args.vision_slots),
         )
 
         elapsed = time.time() - start_time

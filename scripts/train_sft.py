@@ -74,6 +74,7 @@ from dental_agent.training.sft import (
     unwrap_peft_model,
 )
 from dental_agent.model.backbone import get_model_classes
+from dental_agent.utils.canonical import SLOT_BUDGET, parse_slot_budget, slot_totals
 
 
 def parse_args():
@@ -183,8 +184,8 @@ def parse_args():
         type=int,
         default=10240,
         help="Single static sequence length (default: 10240). With --pad-vision-to-slots every sample is "
-             "text + 7,488 static vision tokens, so the default is auto-raised to 16384 (logged) unless you pass a "
-             "larger value explicitly.",
+             "text + the static vision tokens of --vision-slots (7,488 for 5 10 4), so pass a larger value "
+             "(the notebooks use 16384). Never adjusted automatically.",
     )
     parser.add_argument(
         "--custom-buckets",
@@ -196,17 +197,34 @@ def parse_args():
     parser.add_argument(
         "--canonical-resize",
         action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Show the model canonical-sized views (FULL 1536x768 / CROP 256x384 / COMPARE 512x384); tools still run "
-             "on the native image. Default: on for TPU, off for GPU/CPU (native resolution).",
+        default=False,
+        help="Show the model aspect-preserving canonical views (FULL 1536x768 / CROP 256x384 / COMPARE 512x384, "
+             "letterboxed); tools still run on the native image. Default: off (native resolution).",
     )
     parser.add_argument(
         "--pad-vision-to-slots",
         action=argparse.BooleanOptionalAction,
-        default=None,
-        help="TPU only: pad vision inputs to the static [5 FULL, 10 CROP, 4 COMPARE] budget (pixel_values "
-             "[29952,1536], image_grid_thw [19,3]) so XLA compiles one graph. Needs --canonical-resize and a "
-             "--max-seq-len that fits text + 7488 vision tokens. Default: on for TPU, off elsewhere.",
+        default=False,
+        help="Pad every sample's vision inputs to the static --vision-slots budget so XLA compiles one graph "
+             "(masked tail: attention_mask=0, labels=-100). Requires --canonical-resize and a --max-seq-len large "
+             "enough for text + the static vision tokens. Default: off.",
+    )
+    parser.add_argument(
+        "--vision-slots",
+        type=int,
+        nargs=3,
+        metavar=("FULL", "CROP", "COMPARE"),
+        default=[SLOT_BUDGET["FULL"], SLOT_BUDGET["CROP"], SLOT_BUDGET["COMPARE"]],
+        help="Static slot budget used by --pad-vision-to-slots (default: 5 10 4 = 19 images, 29,952 patches, 7,488 "
+             "tokens; covers every trace in the current corpus). Must be identical in warmup_xla_cache.py and here.",
+    )
+    parser.add_argument(
+        "--triangular-shim",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Replace torch.linalg.solve_triangular (unit-lower, XLA tensors only) with a matmul product expansion "
+             "so Qwen3.5 Gated-DeltaNet layers shard under GSPMD. Default: on. Use --no-triangular-shim to A/B the "
+             "native solver (HBM/OOM comparison).",
     )
     parser.add_argument(
         "--xla-pallas",
@@ -219,8 +237,9 @@ def parse_args():
         "--spmd",
         dest="xla_spmd",
         action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Use SPMD-based FSDPv2 (single process, shared device mesh) instead of legacy xmp.spawn",
+        default=True,
+        help="Use SPMD-based FSDPv2 (single process, shared device mesh). Default: on. --no-spmd selects the legacy "
+             "xmp.spawn path, which holds one full copy of the weights per process and exhausts host RAM on v5e-8.",
     )
     parser.add_argument(
         "--fsdp",
@@ -485,13 +504,6 @@ def apply_spmd_input_sharding(inputs: Dict[str, Any], spmd_mesh: Any, num_cores:
     image_grid_thw = inputs.get("image_grid_thw")
     input_ids = inputs.get("input_ids")
 
-    # Cheap assertion for 19-slot static budget: if 29952 patches per sample, verify exactly 19 images
-    if pixel_values is not None and input_ids is not None and pixel_values.shape[0] == input_ids.shape[0] * 29952:
-        assert image_grid_thw is not None and image_grid_thw.shape[0] == input_ids.shape[0] * 19, (
-            f"Corrupted image slot budget: pixel_values has {pixel_values.shape[0]} patches "
-            f"({input_ids.shape[0]} * 29952), but image_grid_thw has {getattr(image_grid_thw, 'shape', None)} instead of {input_ids.shape[0] * 19}"
-        )
-
     if pixel_values is not None and hasattr(pixel_values, "dim") and pixel_values.dim() > 0:
         if input_ids is not None:
             batch_sz = input_ids.shape[0]
@@ -635,29 +647,30 @@ def run_training(index: int, args: argparse.Namespace):
         import torch_xla.core.xla_model as xm
         is_master = xm.is_master_ordinal()
 
-    # TPU-only defaults; GPU/CPU stay on native resolution + dynamic padding with zero XLA code touched.
-    canonical_resize = args.canonical_resize if args.canonical_resize is not None else is_tpu
-    pad_vision_to_slots = args.pad_vision_to_slots if args.pad_vision_to_slots is not None else is_tpu
+    canonical_resize = args.canonical_resize
+    pad_vision_to_slots = args.pad_vision_to_slots
+    slot_budget = parse_slot_budget(*args.vision_slots)
+    static_vision_tokens = slot_totals(slot_budget)["tokens"]
     if pad_vision_to_slots and not canonical_resize:
         raise SystemExit("--pad-vision-to-slots requires --canonical-resize (static slots assume canonical image sizes).")
-    if pad_vision_to_slots and args.max_seq_len == 10240:
-        # 10240 leaves only 2,752 tokens of text next to the 7,488 static vision tokens (real traces carry 3-9k).
-        args.max_seq_len = 16384
-        if is_master:
-            print("[CONFIG] --pad-vision-to-slots: raising --max-seq-len 10240 -> 16384 "
-                  "(text + 7,488 static vision tokens). Pass an explicit larger value to override.")
-    if pad_vision_to_slots:
-        from dental_agent.utils.canonical import TOTAL_VISION_TOKENS
-        if args.max_seq_len <= TOTAL_VISION_TOKENS:
-            raise SystemExit(
-                f"--max-seq-len {args.max_seq_len} cannot hold the static {TOTAL_VISION_TOKENS} vision tokens plus text."
-            )
-    if is_tpu:
+    if pad_vision_to_slots and args.max_seq_len <= static_vision_tokens:
+        raise SystemExit(
+            f"--max-seq-len {args.max_seq_len} cannot hold the {static_vision_tokens} static vision tokens of "
+            f"--vision-slots {args.vision_slots} plus any text."
+        )
+    if is_tpu and args.xla_spmd and not args.fsdp:
+        raise SystemExit("--spmd shards the weights through FSDPv2; --no-fsdp would replicate 18 GB on every core. "
+                         "Use --spmd --fsdp, or --no-spmd for the legacy path.")
+    if args.triangular_shim:
         from dental_agent.training.xla_patches import install_xla_solve_triangular_shim
-        installed = install_xla_solve_triangular_shim()
-        if is_master:
-            print(f"[XLA] solve_triangular matmul shim {'installed' if installed else 'already active'}; "
-                  f"canonical_resize={canonical_resize} pad_vision_to_slots={pad_vision_to_slots}")
+        install_xla_solve_triangular_shim()
+    if is_master:
+        text_capacity = args.max_seq_len - static_vision_tokens if pad_vision_to_slots else args.max_seq_len
+        print("[CONFIG] "
+              f"spmd={args.xla_spmd} fsdp={args.fsdp} canonical_resize={canonical_resize} "
+              f"pad_vision_to_slots={pad_vision_to_slots} vision_slots={args.vision_slots} "
+              f"static_vision_tokens={static_vision_tokens if pad_vision_to_slots else 'n/a'} "
+              f"max_seq_len={args.max_seq_len} text_capacity={text_capacity} triangular_shim={args.triangular_shim}")
 
     if is_master:
         print("======================================================================")
@@ -882,6 +895,7 @@ def run_training(index: int, args: argparse.Namespace):
         max_seq_len=args.max_seq_len,
         canonical_resize=canonical_resize,
         pad_vision_to_slots=pad_vision_to_slots,
+        slot_budget=slot_budget,
     )
     val_size = max(int(len(full_dataset) * 0.05), 1) if len(full_dataset) >= 20 else 0
     train_size = len(full_dataset) - val_size
@@ -904,6 +918,7 @@ def run_training(index: int, args: argparse.Namespace):
             custom_buckets=args.custom_buckets,
             dynamic_padding=False,
             pad_vision_to_slots=pad_vision_to_slots,
+            slot_budget=slot_budget,
         )
         if is_master:
             print(f"[COLLATOR] Static sequence length padding enabled: {collator.max_seq_len} tokens (Zero buckets, single XLA graph).")

@@ -20,7 +20,6 @@ This module is intentionally torch-free so it can be imported anywhere.
 
 from __future__ import annotations
 
-import os
 from typing import Mapping
 
 from PIL import Image
@@ -64,14 +63,26 @@ def tokens_per_image(family: str) -> int:
     return patches_per_image(family) // MERGE_AREA
 
 
-TOTAL_SLOTS = sum(SLOT_BUDGET.values())
-TOTAL_PATCHES = sum(n * patches_per_image(f) for f, n in SLOT_BUDGET.items())
-TOTAL_VISION_TOKENS = sum(n * tokens_per_image(f) for f, n in SLOT_BUDGET.items())
+def parse_slot_budget(n_full: int, n_crop: int, n_compare: int) -> dict[str, int]:
+    """Build a slot budget from CLI integers (``--vision-slots FULL CROP COMPARE``)."""
+    budget = {"FULL": int(n_full), "CROP": int(n_crop), "COMPARE": int(n_compare)}
+    if budget["FULL"] < 1 or budget["CROP"] < 0 or budget["COMPARE"] < 0:
+        raise ValueError(f"Invalid vision slot budget {budget}: need FULL >= 1 and CROP, COMPARE >= 0.")
+    return budget
 
-# Guard the arithmetic the rest of the pipeline (and sft.apply_spmd_input_sharding) relies on.
-assert TOTAL_SLOTS == 19
-assert TOTAL_PATCHES == 29952
-assert TOTAL_VISION_TOKENS == 7488
+
+def slot_totals(budget: Mapping[str, int] = SLOT_BUDGET) -> dict[str, int]:
+    """Static totals implied by a slot budget: slots, patches (pixel_values rows) and LLM vision tokens."""
+    return {
+        "slots": sum(budget.values()),
+        "patches": sum(n * patches_per_image(f) for f, n in budget.items()),
+        "tokens": sum(n * tokens_per_image(f) for f, n in budget.items()),
+    }
+
+
+TOTAL_SLOTS = slot_totals()["slots"]
+TOTAL_PATCHES = slot_totals()["patches"]
+TOTAL_VISION_TOKENS = slot_totals()["tokens"]  # default budget only; runtime code takes ``slot_totals(budget)``
 
 
 def family_from_grid(thw: tuple[int, int, int]) -> str | None:
@@ -86,30 +97,34 @@ def family_for_tool(tool_name: str | None, default: str = "CROP") -> str:
     return TOOL_FAMILY.get(tool_name or "", default)
 
 
+LETTERBOX_FILL = (0, 0, 0)  # radiograph background is dark; constant, so train/GRPO/eval see identical borders
+
+
 def to_canonical(image: Image.Image, family: str) -> Image.Image:
-    """Resample ``image`` to the exact canonical size of ``family`` (LANCZOS, RGB).
+    """Fit ``image`` into the canonical canvas of ``family`` WITHOUT changing its aspect ratio.
 
-    Plain resize (no letterboxing): this is the settled project spec. Note it does
-    not preserve aspect ratio for CROP/COMPARE outputs of arbitrary shape.
+    The image is scaled uniformly (LANCZOS, RGB) to the largest size that fits the canvas and centred on a
+    constant-colour canvas. Token counts are identical to a plain resize because the canvas size is fixed, but
+    geometry is preserved: a near-square ``zoom_crop`` is NOT stretched to the 2:3 CROP canvas (a plain resize
+    stretched it up to 1.7x vertically relative to horizontally). No pixels are cropped away.
     """
-    size = CANONICAL_SIZES[family]
+    cw, ch = CANONICAL_SIZES[family]
     img = image if image.mode == "RGB" else image.convert("RGB")
-    if img.size == size:
+    if img.size == (cw, ch):
         return img
-    return img.resize(size, Image.Resampling.LANCZOS)
+    scale = min(cw / img.width, ch / img.height)
+    nw, nh = max(1, round(img.width * scale)), max(1, round(img.height * scale))
+    resized = img.resize((nw, nh), Image.Resampling.LANCZOS)
+    if (nw, nh) == (cw, ch):
+        return resized
+    canvas = Image.new("RGB", (cw, ch), LETTERBOX_FILL)
+    canvas.paste(resized, ((cw - nw) // 2, (ch - nh) // 2))
+    return canvas
 
 
-ENV_CANONICAL_RESIZE = "DENTAL_CANONICAL_RESIZE"
-
-
-def resolve_canonical_resize(value: bool | None = None) -> bool:
-    """Single source of truth for "does the model see canonical views?".
-
-    An explicit ``value`` wins. Otherwise the ``DENTAL_CANONICAL_RESIZE`` env var decides
-    (``1/true/yes/on``), defaulting to False (native resolution). Training, GRPO rollouts and
-    evaluation MUST resolve to the same answer, otherwise the policy is evaluated on a
-    different image distribution than it was trained on.
-    """
-    if value is not None:
-        return bool(value)
-    return os.environ.get(ENV_CANONICAL_RESIZE, "").strip().lower() in {"1", "true", "yes", "on"}
+def content_fraction(image_size: tuple[int, int], family: str) -> float:
+    """Fraction of the canonical canvas occupied by real image content after ``to_canonical``."""
+    cw, ch = CANONICAL_SIZES[family]
+    w, h = image_size
+    scale = min(cw / w, ch / h)
+    return (w * scale) * (h * scale) / (cw * ch)

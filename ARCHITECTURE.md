@@ -87,7 +87,7 @@ This is the heart of the project containing all reusable logic. It is imported b
 - `figures.py`: **Case study generator.** Extracts intermediate tool crops (e.g., `turn2_locate.png`, `turn5_zoom_nudged.png`) to visually prove self-correction in the paper.
 
 ### `dental_agent/utils/` (Shared Helpers)
-- `canonical.py`: **Canonical vision geometry (single source of truth).** FULL/CROP/COMPARE sizes, grid/patch/token math, the `[5,10,4]` static slot budget, tool→family map, `to_canonical()`, and `resolve_canonical_resize()` (explicit flag > `DENTAL_CANONICAL_RESIZE` env > off). Torch-free.
+- `canonical.py`: **Canonical vision geometry (single source of truth).** FULL/CROP/COMPARE sizes, grid/patch/token math, the default `[5,10,4]` slot budget (`parse_slot_budget`, `slot_totals`), tool→family map and the aspect-preserving letterbox `to_canonical()`. Torch-free; no environment-variable behaviour.
 - `serialization.py`: **JSON Encoder.** Takes complex Python objects (like PIL Images or numpy arrays), safely encodes them, and outputs standard JSON-compatible strings.
 - `persistence.py`: **The cacher.** Takes intermediate pipeline results, saves them to disk to survive Colab crashes, and outputs loaded data upon restart.
 - `environment.py`: **The config loader.** Takes `.env` files, parses them, and outputs secure environment variables for the system.

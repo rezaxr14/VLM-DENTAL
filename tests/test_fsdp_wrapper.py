@@ -83,7 +83,17 @@ def test_sft_cli_fsdp_flags():
         args = parse_args()
         assert args.max_seq_len == 10240
         assert args.xla_pallas is True
-        assert args.xla_spmd is False
+        assert args.xla_spmd is True  # SPMD is the default: legacy xmp.spawn exhausts host RAM on v5e-8
+        assert args.canonical_resize is False and args.pad_vision_to_slots is False  # no hidden TPU-dependent defaults
+        assert args.vision_slots == [5, 10, 4] and args.triangular_shim is True
+
+    # Every behaviour is switchable from the command line, with no contradicting flag pairs
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(sys, "argv", ["train_sft.py", "--track", "with_tools", "--no-spmd", "--canonical-resize",
+                                 "--pad-vision-to-slots", "--vision-slots", "3", "6", "2", "--no-triangular-shim"])
+        args = parse_args()
+        assert args.xla_spmd is False and args.canonical_resize and args.pad_vision_to_slots
+        assert args.vision_slots == [3, 6, 2] and args.triangular_shim is False
 
     # Backtrack sequence length override
     with pytest.MonkeyPatch.context() as mp:

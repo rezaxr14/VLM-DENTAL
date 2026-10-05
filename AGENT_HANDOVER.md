@@ -165,6 +165,6 @@ Godspeed, Agent.
 ## Canonical Vision Inputs & TPU Static Slots (read before touching sft.py / loop.py / grpo.py)
 
 - The model sees **canonical views**; **tools run on the native image** (bbox args are native pixels). Geometry lives only in `dental_agent/utils/canonical.py`.
-- TPU SFT defaults to `canonical_resize=True` and `pad_vision_to_slots=True` (19 static slots, 7,488 vision tokens ⇒ `--max-seq-len 16384`). GPU/CPU keep native resolution + dynamic padding. GRPO and evaluation must use the same view mode as the SFT checkpoint (`--canonical-resize` / `DENTAL_CANONICAL_RESIZE`).
+- Everything is explicit: `--spmd` (default on), `--canonical-resize`, `--pad-vision-to-slots`, `--vision-slots 5 10 4`, `--max-seq-len 16384`, `--triangular-shim`. The notebooks set each as a literal and pass it verbatim; each script echoes a `[CONFIG]` line. GRPO (`run_grpo.py`) runs single-process SPMD with the same flags and must match the SFT run. Padded mode needs `--max-seq-len` large enough for text + 7,488 static vision tokens (16384).
 - The token-length manifest records its resolution mode and per-trace vision-token counts; regenerate it per mode (`scripts/compute_exact_trace_lengths.py --canonical-resize`). A mismatched manifest is ignored with a warning.
 - Full design, decisions, verification and open items: `docs/CANONICAL_VISION_AND_TPU_PIPELINE.md`.
