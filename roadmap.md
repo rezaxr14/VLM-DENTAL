@@ -492,6 +492,16 @@ Lower priority than Tunisia for exactly these reasons; not started.
 
 ## 🔴 Left To Do (Future Milestones)
 
+### Deferred until the hardware path (single GPU, then TPU) is validated
+Full list with reasoning: `docs/CANONICAL_VISION_AND_TPU_PIPELINE.md` §13.
+- **Evaluation at original size** for every dataset, regardless of training hardware. Only `scripts/evaluate_models.py` has
+  the switch; `evaluation/ablations.py`, `sweep.py`, `batch_runner.py` and `rewards/judge.py` call `run_agent` natively and
+  were left untouched. Decide how to treat canonical-trained checkpoints evaluated at original size before quoting results.
+- **Traces dropped by the 16,384 static length** (68 of 880): revisit 18,432 / tiered graphs after the first HBM measurement.
+- **GRPO decode shapes on XLA** (static KV cache / bucketed prompts).
+- **LoRA coverage of the Gated-DeltaNet layers** (`in_proj_*`, `out_proj`): currently only 1 layer in 4 gets attention LoRA.
+- **Letterbox vs stretch ablation** if the paper needs the accuracy claim.
+
 ### Immediate next step: resolve `_region_to_fdi` for Tunisia
 See "Datasets" above. This is a ~30-second file inspection, not an
 engineering task — the engineering (loader, bundler, slicer) is already

@@ -243,6 +243,13 @@ authentic system+user text loaded via `DentalSFTDataset`; the image also differs
 2872×1504). Different scripts, different inputs — not a discrepancy in the pipeline. **[plan-reported inputs,
 verified arithmetic]**
 
+**Addendum (native token counts do not reconcile).** The plan's *native* figures (62,884 patches / 15,721 tokens for a
+2780x1410 image; 69,316 patches / 17,329 tokens for 2872x1504) are about 4x what the HF Qwen3-VL image processor
+produces at patch 16 / merge 2: measured **2872x1504 -> grid (1,94,180) -> 4,230 tokens; 1615x840 -> 1,300 tokens**. The
+canonical figures *are* confirmed (the uploaded manifest's per-trace vision-token counts match 1,152 / 96 / 192 per
+image on 880 of 880 traces). So canonical resizing cuts a native DENTEX base image from ~4.2k to 1.15k tokens (3.7x), not
+the ~15x the plan implies. Do not quote the plan's native numbers until they are re-measured with the real processor.
+
 ## 9. Open items (honest list)
 
 1. **No TPU run yet.** Unverified: GSPMD sharding of the shim, HBM fit at 16,384, single compilation, `save_pretrained`
@@ -286,3 +293,80 @@ coordinates are in original pixel space. The identical views are used for SFT, G
   downstream).
 * *Deep copies:* the shim captures the original `solve_triangular` once and is idempotent; `uninstall` restores it.
 * *Determinism:* LANCZOS resampling and the matmul shim are deterministic; no randomness introduced.
+
+## 12. Findings from the real-corpus checks and the pre-GPU smoke test
+
+**12.1 Duplicate crops, precisely.** Zooming always uses the original image -- that part was right. The bug was *which
+call's bounding box* was used when the dataset rebuilt an observation turn: for N calls to the same tool in one turn it took
+the arguments of the first call for all N images. Reproduced on the original commit (`8572362`) with three differently
+coloured target regions: the three rendered crops had centre pixels (255,0,0), (255,0,0), (255,0,0) instead of red, green,
+blue. So the model saw three copies of tooth A beside text about teeth A, B and C. Scale on the 880 traces: 679 of 3,490
+observation images (19.5 %), 341 traces (38.8 %). Fixed by matching the k-th image of a tool to the k-th call.
+
+**12.2 Does static padding change the result? No (measured).** On the real HF Qwen3.5 code (hybrid linear/full attention,
+fp32, CPU, tiny random weights, real traces and real processor) the same sample was run unpadded and slot-padded
+(`--vision-slots 2 4 1`, 2,784 static vision tokens): loss identical to 6 decimals (|dloss| = 0), max logit difference at real
+positions <= 2.4e-7, lm_head gradient relative difference <= 9.7e-8, over four traces with 4->7 and 3->7 images. This is
+the empirical counterpart of the causal-masking argument in §5.1. What padding *does* change is the length ceiling (§4 D3).
+
+**12.3 `--spmd` default exposed a crash on every non-TPU machine (fixed).** After `--spmd` became the default, a GPU/CPU run
+with default flags reached `wrap_spmd_model` and died with `ModuleNotFoundError: torch_xla` (reproduced), and would also
+have multiplied the dataloader batch by `--num-cores`. SPMD is now gated on the real backend
+(`use_spmd = args.xla_spmd and is_tpu`), so `--spmd` is inert off-TPU. Verified by a default-flags CPU run.
+
+**12.4 `--pad-vision-to-slots` was silently ignored off-TPU (fixed).** The non-TPU collator did not receive the flag while the
+dataset still filtered by padded length. The flag and `--vision-slots` now apply on every backend (sequences still pad
+dynamically to the longest sample in the batch).
+
+**12.5 LoRA does not cover the linear-attention layers (not changed; decision needed).** `train_sft.py` hardcodes the LoRA
+targets `q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj`. Qwen3.5 is hybrid: 3 of every 4 layers are
+Gated-DeltaNet layers whose projections are `in_proj_qkv, in_proj_z, in_proj_a, in_proj_b, out_proj`, so attention LoRA
+reaches only 1 layer in 4 (the MLP projections are adapted in every layer). This may limit what SFT can learn and is a
+hardcoded list, against the "no hardcoding" rule. Proposed: an explicit `--lora-targets` flag defaulting to the current
+list, with the linear-attention projections available behind it. Not applied, because it changes trainable parameters and
+VRAM on the first GPU run.
+
+**12.6 GPU dependencies.** Without `flash-linear-attention` and `causal-conv1d`, `transformers` falls back to a pure-PyTorch
+reference for the Gated-DeltaNet layers ("correct but much slower"); neither is in `requirements.txt`. For a 24 GB card
+install them (`pip install flash-linear-attention`; `causal-conv1d` needs a CUDA build). The fallback is also the likelier
+memory hog at 10k tokens. Untested here (no GPU).
+
+**12.7 Pre-GPU smoke test.** `scripts/smoke_test_sft.py` builds a ~2M-parameter random Qwen3.5 (hybrid layers, real ViT,
+BPE tokenizer trained on your traces, real Qwen3-VL image processor), writes noise radiographs at the real resolutions,
+and drives the real `train_sft.py` end to end (dataset, tools, collator, LoRA, gradient checkpointing, loop, save). Run on
+the CPU sandbox, all three configurations exited 0 and saved an adapter: GPU-style canonical + dynamic padding at 8,192;
+slot-padded (`--vision-slots 4 6 2`, 12,288); and default flags with no `--no-spmd`. It checks crashes and version
+compatibility, **not** memory or speed. Run it on the target machine first:
+
+```bash
+python scripts/smoke_test_sft.py --traces data/traces/train_cot_traces.jsonl -- --canonical-resize --max-seq-len 8192
+```
+
+**12.8 Single 24 GB GPU (RTX 4090) configuration.** Native resolution is not viable: a native DENTEX base image is ~4.2k
+tokens and with-tools traces carry up to five full-size images. Use canonical views with dynamic padding (no static slots, no
+SPMD), and a manifest measured in the same mode:
+
+```bash
+python scripts/compute_exact_trace_lengths.py --canonical-resize --recompute
+python scripts/train_sft.py --canonical-resize --no-pad-vision-to-slots --max-seq-len 10240 ...   # --spmd/--fsdp are inert off-TPU
+```
+
+Length filter at that setting, from the uploaded manifest: DENTEX with-tools 540 of 678 (79.6 %) fit 10,240 and 218 (32.2 %)
+fit 8,192; the 880-trace set 736 (83.6 %) and 379 (43.1 %). The excluded traces are the longest (multi-finding) ones. Memory is
+unmeasured: your earlier note of ~21.6 GB at 10,240 predates canonical views, so treat 10,240 as the starting point and
+`--max-seq-len 8192` (or `--precision qlora`) as the fallbacks if it does not fit.
+
+## 13. Deferred items (to attend after the hardware path is validated)
+
+1. **Evaluation policy: evals run on original-size images**, whichever hardware trained the model. Today only
+   `scripts/evaluate_models.py` has the switch (`--canonical-resize`, default off = original size). Still native-only and
+   untouched: `dental_agent/evaluation/ablations.py` (5 call sites), `sweep.py`, `batch_runner.py` (2),
+   `dental_agent/rewards/judge.py`. **Open question:** a checkpoint trained on canonical views and evaluated on original-size
+   views sees a different input distribution than it was trained on (a native DENTEX image is 3.7x the tokens). Decide whether
+   that is intended (report both settings) before quoting numbers.
+2. **68 of 880 traces drop at a single 16,384 graph**; 18,432 drops 16, 20,480 drops 3, tiers drop ~3 at ~84 % of the compute.
+   Kept at 16,384 until the first HBM measurement.
+3. **GRPO decode shapes** on XLA (static cache / bucketed decoding).
+4. **LoRA coverage of linear-attention layers** (12.5).
+5. **Letterbox vs stretch ablation**, if the paper needs the accuracy claim.
+

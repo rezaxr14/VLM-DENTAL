@@ -716,7 +716,7 @@ def run_training(index: int, args: argparse.Namespace):
     # Strict serialized loading across ranks: only ONE worker loads the 18 GB weights from disk
     # at a time. Once sharded via FSDP, memory drops to ~2.2 GB before the next rank starts.
     # This keeps total host CPU RAM below 28 GB at all times on Kaggle.
-    use_spmd = getattr(args, "xla_spmd", False)
+    use_spmd = bool(getattr(args, "xla_spmd", False) and is_tpu)  # SPMD only exists on TPU; --spmd is inert on GPU/CPU
     if is_tpu and args.num_cores > 1 and not use_spmd:
         lock_dir = Path("/tmp/xla_sft_locks")
         lock_dir.mkdir(parents=True, exist_ok=True)
@@ -924,7 +924,16 @@ def run_training(index: int, args: argparse.Namespace):
             print(f"[COLLATOR] Static sequence length padding enabled: {collator.max_seq_len} tokens (Zero buckets, single XLA graph).")
     else:
         # On GPU / CPU: dynamic sequence padding to longest item in each batch (eliminates static bucket overhead)
-        collator = BucketedQwenVLCollator(processor=processor, track=args.track, max_seq_len=args.max_seq_len, dynamic_padding=True)
+        # --pad-vision-to-slots / --vision-slots apply on every backend (never silently ignored); sequences are still
+        # padded dynamically to the longest sample in the batch.
+        collator = BucketedQwenVLCollator(
+            processor=processor,
+            track=args.track,
+            max_seq_len=args.max_seq_len,
+            dynamic_padding=True,
+            pad_vision_to_slots=pad_vision_to_slots,
+            slot_budget=slot_budget,
+        )
         if is_master:
             print("[COLLATOR] Dynamic sequence padding enabled (GPU eager mode: batch-adaptive length, zero static bucket overhead).")
 
@@ -1231,7 +1240,7 @@ def main():
         except Exception as e:
             print(f"[AUTO-SYNC WARNING] Could not auto-download traces from {traces_repo}: {e}")
 
-    use_spmd = getattr(args, "xla_spmd", False)
+    use_spmd = bool(getattr(args, "xla_spmd", False) and is_tpu)  # SPMD only exists on TPU; --spmd is inert on GPU/CPU
     if is_tpu and args.num_cores > 1 and not use_spmd:
         # Pre-cache base model to local disk once before spawning 8 worker processes,
         # preventing 8-way concurrent Hugging Face download lock contention.
