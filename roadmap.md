@@ -372,12 +372,7 @@ re-checking it against those same two papers.
   With trace generation 100% complete, the active training focus transitions directly to
   **Stage 1 Supervised Fine-Tuning (SFT)** in `VLM_Dental_Colab_SFT.ipynb` and
   **Stage 2 GRPO RL** in `VLM_Dental_Colab_GRPO.ipynb`.
-- **TPU SFT/GRPO path: canonical vision + static slots + SPMD GRPO — implemented, CPU-tested, awaiting first TPU run.**
-  Aspect-preserving canonical views, the static `--vision-slots 5 10 4` budget at `--max-seq-len 16384`, a
-  `solve_triangular` matmul shim (A/B via `--no-triangular-shim`), SPMD-default launchers for SFT, warmup and GRPO, and
-  notebooks that pass every setting verbatim. Also fixed: duplicate `zoom_crop` images (19.5 % of observation images),
-  a manifest-key bug that disabled length filtering, and a GRPO optimizer reset per step. Earlier SFT/GRPO numbers must be
-  re-run. Details, measurements and open items: `docs/CANONICAL_VISION_AND_TPU_PIPELINE.md`. Next: warmup A/B on TPU.
+- **TPU/GPU SFT and GRPO path: canonical views, static slots, SPMD GRPO — implemented and CPU-tested, awaiting the first hardware run** (RTX 4090 with QLoRA, then TPU v5e-8). Also fixed: duplicate `zoom_crop` images in training data, a length filter that never matched its manifest, and a GRPO optimizer that reset every step. Earlier SFT/GRPO numbers must be re-run. See `docs/CANONICAL_VISION_AND_TPU_PIPELINE.md`.
 - **Tunisia dataset loader — Phase 1 done, Phase 2 blocked on one
   verification step.** See "Datasets" below for full detail; short version:
   image discovery + VIA parsing + bbox geometry work today, FDI-position
@@ -492,15 +487,10 @@ Lower priority than Tunisia for exactly these reasons; not started.
 
 ## 🔴 Left To Do (Future Milestones)
 
-### Deferred until the hardware path (single GPU, then TPU) is validated
-Full list with reasoning: `docs/CANONICAL_VISION_AND_TPU_PIPELINE.md` §13.
-- **Evaluation at original size** for every dataset, regardless of training hardware. Only `scripts/evaluate_models.py` has
-  the switch; `evaluation/ablations.py`, `sweep.py`, `batch_runner.py` and `rewards/judge.py` call `run_agent` natively and
-  were left untouched. Decide how to treat canonical-trained checkpoints evaluated at original size before quoting results.
-- **Traces dropped by the 16,384 static length** (68 of 880): revisit 18,432 / tiered graphs after the first HBM measurement.
-- **GRPO decode shapes on XLA** (static KV cache / bucketed prompts).
-- **LoRA coverage of the Gated-DeltaNet layers** (`in_proj_*`, `out_proj`): currently only 1 layer in 4 gets attention LoRA.
-- **Letterbox vs stretch ablation** if the paper needs the accuracy claim.
+### Deferred until the hardware path is validated
+Details in `docs/CANONICAL_VISION_AND_TPU_PIPELINE.md` §7.
+- Evaluation at original size for every evaluation entrypoint (only `evaluate_models.py` is wired).
+- Traces excluded by the 16,384 length; GRPO decode shapes on XLA; LoRA coverage of the Gated-DeltaNet layers; letterbox vs stretch ablation.
 
 ### Immediate next step: resolve `_region_to_fdi` for Tunisia
 See "Datasets" above. This is a ~30-second file inspection, not an

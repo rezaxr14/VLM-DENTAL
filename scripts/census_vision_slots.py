@@ -8,7 +8,7 @@ Answers, from the real trace files, the questions the TPU design rests on:
 
 Usage:
   python scripts/census_vision_slots.py data/traces/train_cot_traces_dentex.jsonl [more.jsonl ...] \
-      [--manifest data/traces/trace_token_lengths.json] [--seq-lens 10240 16384] [--json out.json]
+      [--manifest data/traces/trace_token_lengths.json] [--seq-lens 16384] [--json out.json]
 
 Family attribution mirrors DentalSFTDataset: turn-1 image = FULL; each later image is attributed via the
 "Result of <tool>:" text that follows it (fallback: next pending tool call), using canonical.TOOL_FAMILY.
@@ -85,7 +85,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("traces", nargs="+")
     ap.add_argument("--manifest", default=None, help="trace_token_lengths.json (computed with --canonical-resize)")
-    ap.add_argument("--seq-lens", type=int, nargs="+", default=[10240, 16384])
+    ap.add_argument("--seq-lens", type=int, nargs="+", default=[16384])
     ap.add_argument("--vision-slots", type=int, nargs=3, metavar=("FULL", "CROP", "COMPARE"),
                     default=[SLOT_BUDGET["FULL"], SLOT_BUDGET["CROP"], SLOT_BUDGET["COMPARE"]],
                     help="Static slot budget to evaluate (same flag as train_sft.py).")

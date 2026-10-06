@@ -181,9 +181,9 @@ def main() -> None:
     parser.add_argument(
         "--max-seq-len",
         type=int,
-        default=None,
-        help="Static sequence length of the policy update (use the SFT value, e.g. 16384). Required with "
-             "--pad-vision-to-slots. Rollouts that do not fit are excluded from the update and reported.",
+        default=16384,
+        help="Maximum sequence length of the policy update (default: 16384; use the SFT value). With "
+             "--pad-vision-to-slots every update forward is padded to it. Longer rollouts are excluded and reported.",
     )
     parser.add_argument(
         "--vision-slots",
@@ -258,8 +258,6 @@ def run_worker(index: int, args: argparse.Namespace):
 
     if args.pad_vision_to_slots and not args.canonical_resize:
         raise SystemExit("--pad-vision-to-slots requires --canonical-resize.")
-    if args.pad_vision_to_slots and args.max_seq_len is None:
-        raise SystemExit("--pad-vision-to-slots requires --max-seq-len (use the SFT value, e.g. 16384).")
     slot_budget = parse_slot_budget(*args.vision_slots)
     if args.pad_vision_to_slots and args.max_seq_len <= slot_totals(slot_budget)["tokens"]:
         raise SystemExit(f"--max-seq-len {args.max_seq_len} cannot hold the static vision tokens of --vision-slots.")

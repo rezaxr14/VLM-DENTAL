@@ -80,8 +80,8 @@ def parse_args():
                         help="Single-process SPMD (default on); --no-spmd = legacy path.")
     parser.add_argument("--pad-vision-to-slots", action=argparse.BooleanOptionalAction, default=False,
                         help="Static-shape policy update (see run_grpo.py).")
-    parser.add_argument("--max-seq-len", type=int, default=None,
-                        help="Static update length; required with --pad-vision-to-slots (use the SFT value).")
+    parser.add_argument("--max-seq-len", type=int, default=16384,
+                        help="Maximum update sequence length (default: 16384; use the SFT value).")
     parser.add_argument("--vision-slots", type=int, nargs=3, metavar=("FULL", "CROP", "COMPARE"),
                         default=[SLOT_BUDGET["FULL"], SLOT_BUDGET["CROP"], SLOT_BUDGET["COMPARE"]],
                         help="Static slot budget (must equal the SFT run's).")
@@ -98,8 +98,8 @@ def parse_args():
 
 def main():
     args = parse_args()
-    if args.pad_vision_to_slots and (not args.canonical_resize or args.max_seq_len is None):
-        raise SystemExit("--pad-vision-to-slots requires --canonical-resize and --max-seq-len.")
+    if args.pad_vision_to_slots and not args.canonical_resize:
+        raise SystemExit("--pad-vision-to-slots requires --canonical-resize.")
     if args.spmd:
         try:
             import torch_xla.runtime as xr

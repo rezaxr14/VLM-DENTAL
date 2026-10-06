@@ -115,7 +115,7 @@ Rather than freezing the entire vision stack or fine-tuning early ViT blocks:
 ### 5.1 Static Discrete Buckets & 16,384 Headroom
 Dynamic sequence lengths cause continuous XLA graph recompilations (30–120s stalls per shape). `BucketedQwenVLCollator` rounds sequences up to the nearest static boundary:
 
-- **Track A (`with_tools`)**: `[10240]` — a single static length (one XLA graph); `--max-seq-len` overrides it (16,384 on TPU with static vision slots, §5.3).
+- **Track A (`with_tools`)**: `[16384]` — a single static length (one XLA graph); `--max-seq-len` overrides it.
 - **Track B (`no_tools`)**: `[1536, 2048, 2560, 3072, 8192]`
 
 (Values are `BucketedQwenVLCollator.BUCKETS_WITH_TOOLS` / `BUCKETS_NO_TOOLS` in `dental_agent/training/sft.py`; this section previously listed an older bucket set.)

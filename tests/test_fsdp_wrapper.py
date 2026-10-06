@@ -81,7 +81,7 @@ def test_sft_cli_fsdp_flags():
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(sys, "argv", ["train_sft.py", "--track", "with_tools"])
         args = parse_args()
-        assert args.max_seq_len == 10240
+        assert args.max_seq_len == 16384
         assert args.xla_pallas is True
         assert args.xla_spmd is True  # SPMD is the default: legacy xmp.spawn exhausts host RAM on v5e-8
         assert args.canonical_resize is False and args.pad_vision_to_slots is False  # no hidden TPU-dependent defaults
@@ -174,3 +174,17 @@ def test_wrap_distributed_model_spmd_cpu_fallback():
     assert out is base
 
 
+
+
+def test_setup_hardware_never_switches_requested_precision(monkeypatch, capsys):
+    """bf16 stays bf16 on a GPU without native BF16 (hint only); nothing silently becomes fp16/qlora."""
+    import torch
+    from scripts.train_sft import setup_hardware
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "is_bf16_supported", lambda *a, **k: False)
+    monkeypatch.setattr(torch.cuda, "device_count", lambda: 1)
+    monkeypatch.setattr(torch.cuda, "get_device_name", lambda *a, **k: "Old GPU")
+    is_tpu, _device, dtype, precision = setup_hardware("bf16")
+    assert not is_tpu and precision == "bf16" and dtype == torch.bfloat16
+    assert "[HINT]" in capsys.readouterr().out

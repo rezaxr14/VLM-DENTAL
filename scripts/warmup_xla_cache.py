@@ -77,7 +77,7 @@ from dental_agent.training.sft import (
     apply_spmd_input_sharding,
 )
 
-DEFAULT_BUCKETS_WITH_TOOLS = [10240]
+DEFAULT_BUCKETS_WITH_TOOLS = [16384]
 DEFAULT_BUCKETS_NO_TOOLS = [1536, 2048, 2560, 3072, 8192]
 
 
@@ -385,11 +385,11 @@ def run_warmup_worker(index: int, args: argparse.Namespace):
         elif getattr(args, "max_seq_len", None):
             target_buckets = [args.max_seq_len]
         elif args.track == "with_tools":
-            target_buckets = [10240]
+            target_buckets = [16384]
         elif args.track == "no_tools":
             target_buckets = [8192]
         else:  # "both"
-            target_buckets = [10240]
+            target_buckets = [16384]
 
         if is_master:
             print("=" * 70)
@@ -600,7 +600,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-seq-len",
         type=int,
-        default=10240,
+        default=16384,
         help="Single static sequence length to pre-compile. MUST equal the training run's --max-seq-len "
              "(never adjusted automatically).",
     )

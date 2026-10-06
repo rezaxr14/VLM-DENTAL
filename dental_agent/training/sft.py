@@ -227,7 +227,7 @@ class BucketedQwenVLCollator:
     4. Padding tokens masked with `labels = -100`.
     """
 
-    BUCKETS_WITH_TOOLS = [10240]
+    BUCKETS_WITH_TOOLS = [16384]
     BUCKETS_NO_TOOLS = [1536, 2048, 2560, 3072, 8192]
 
     def __init__(
@@ -1215,7 +1215,7 @@ def train_sft(
     num_cores: int = 1,
     use_fsdp: bool = True,
     use_spmd: bool = False,
-    max_seq_len: int = 10240,
+    max_seq_len: int = 16384,
 ) -> str:
     """Execute Stage 1 SFT on verified expert traces with conversational loss masking."""
     print(f"--- Starting Stage 1 SFT Training (Track={track}, Epochs={epochs}, LR={learning_rate}) ---")

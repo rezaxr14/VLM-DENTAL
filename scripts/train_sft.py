@@ -182,10 +182,9 @@ def parse_args():
     parser.add_argument(
         "--max-seq-len",
         type=int,
-        default=10240,
-        help="Single static sequence length (default: 10240). With --pad-vision-to-slots every sample is "
-             "text + the static vision tokens of --vision-slots (7,488 for 5 10 4), so pass a larger value "
-             "(the notebooks use 16384). Never adjusted automatically.",
+        default=16384,
+        help="Maximum sequence length (default: 16384). With --pad-vision-to-slots (TPU) every sample is padded to "
+             "exactly this length. Never adjusted automatically.",
     )
     parser.add_argument(
         "--custom-buckets",
@@ -381,20 +380,12 @@ def setup_hardware(precision: str, rank: int = 0, xla_pallas: bool = True, xla_s
             print("[HARDWARE] Running on CPU.")
 
     if is_tpu and precision == "qlora":
-        try:
-            import torch_xla.core.xla_model as xm
-            if xm.is_master_ordinal():
-                print("[WARNING] 4-bit QLoRA is not supported on TPU/XLA devices. Switching to native BF16.")
-        except Exception:
-            pass
-        precision = "bf16"
+        raise SystemExit("--precision qlora is not supported on TPU/XLA (bitsandbytes is CUDA-only). Use --precision bf16.")
 
-    # Auto-detect GPUs without native hardware BF16 (e.g. Tesla T4 Turing CC 7.5, Tesla P100 Pascal CC 6.0)
-    if not is_tpu and torch.cuda.is_available() and precision == "bf16":
-        if not torch.cuda.is_bf16_supported():
-            gpu_name = torch.cuda.get_device_name(device)
-            print(f"[HARDWARE NOTICE] {gpu_name} does not support native BF16. Automatically switching compute & loading precision to FP16.")
-            precision = "fp16"
+    # Never switch the requested precision silently: suggest, then run exactly what was asked for.
+    if not is_tpu and torch.cuda.is_available() and precision == "bf16" and not torch.cuda.is_bf16_supported():
+        print(f"[HINT] {torch.cuda.get_device_name(device)} has no native BF16; consider --precision fp16. "
+              "Continuing with bf16 as requested.")
 
     if precision == "bf16":
         dtype = torch.bfloat16
@@ -668,9 +659,10 @@ def run_training(index: int, args: argparse.Namespace):
         text_capacity = args.max_seq_len - static_vision_tokens if pad_vision_to_slots else args.max_seq_len
         print("[CONFIG] "
               f"spmd={args.xla_spmd} fsdp={args.fsdp} canonical_resize={canonical_resize} "
-              f"pad_vision_to_slots={pad_vision_to_slots} vision_slots={args.vision_slots} "
-              f"static_vision_tokens={static_vision_tokens if pad_vision_to_slots else 'n/a'} "
-              f"max_seq_len={args.max_seq_len} text_capacity={text_capacity} triangular_shim={args.triangular_shim}")
+              f"pad_vision_to_slots={pad_vision_to_slots} "
+              + (f"vision_slots={args.vision_slots} static_vision_tokens={static_vision_tokens} text_capacity={text_capacity} "
+                 if pad_vision_to_slots else "")
+              + f"max_seq_len={args.max_seq_len} precision={args.precision} triangular_shim={args.triangular_shim}")
 
     if is_master:
         print("======================================================================")

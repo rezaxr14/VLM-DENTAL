@@ -164,9 +164,8 @@ Godspeed, Agent.
 
 ## Canonical Vision Inputs & TPU Static Slots (read before touching sft.py / loop.py / grpo.py)
 
-- The model sees **canonical views**; **tools run on the native image** (bbox args are native pixels). Geometry lives only in `dental_agent/utils/canonical.py`.
-- Everything is explicit: `--spmd` (default on), `--canonical-resize`, `--pad-vision-to-slots`, `--vision-slots 5 10 4`, `--max-seq-len 16384`, `--triangular-shim`. The notebooks set each as a literal and pass it verbatim; each script echoes a `[CONFIG]` line. GRPO (`run_grpo.py`) runs single-process SPMD with the same flags and must match the SFT run. Padded mode needs `--max-seq-len` large enough for text + 7,488 static vision tokens (16384).
-- The token-length manifest records its resolution mode and per-trace vision-token counts; regenerate it per mode (`scripts/compute_exact_trace_lengths.py --canonical-resize`). A mismatched manifest is ignored with a warning.
-- Full design, decisions, verification and open items: `docs/CANONICAL_VISION_AND_TPU_PIPELINE.md`.
-- Before a long run on new hardware or a new `transformers`/`peft` version, run `python scripts/smoke_test_sft.py --traces <with-tools jsonl> -- <the same flags>` (tiny random Qwen3.5, no downloads, minutes). It catches crashes and version incompatibilities, not memory or speed. Single 24 GB GPU: `--canonical-resize --no-pad-vision-to-slots --max-seq-len 10240` (`--spmd`/`--fsdp` are inert off-TPU); details in `docs/CANONICAL_VISION_AND_TPU_PIPELINE.md` §12.8.
-
+- The model sees canonical views; tools run on the native image. Geometry lives only in `dental_agent/utils/canonical.py`.
+- Everything is an explicit flag and the notebooks pass each value verbatim; `--max-seq-len` defaults to 16384; `--spmd` is inert off-TPU. GPU runs use `--canonical-resize` with dynamic padding (QLoRA is chosen explicitly with `--precision qlora`); TPU runs add `--pad-vision-to-slots --vision-slots 5 10 4 --triangular-shim --spmd --fsdp`.
+- The token-length manifest is per resolution mode (`compute_exact_trace_lengths.py --canonical-resize`).
+- Before a long run on new hardware or library versions: `python scripts/smoke_test_sft.py --traces <with-tools jsonl> -- <same flags>`.
+- Full notes: `docs/CANONICAL_VISION_AND_TPU_PIPELINE.md`.

@@ -58,6 +58,11 @@ dev = [
     "pytest>=8.0.0",
     "ruff>=0.3.0",
 ]
+# CUDA GPUs only -- never on TPU (see requirements-gpu.txt)
+gpu = [
+    "flash-linear-attention>=0.5.2",
+    "causal-conv1d>=1.7.0",
+]
 all = [
     "dental-agent[api,dev]"
 ]
