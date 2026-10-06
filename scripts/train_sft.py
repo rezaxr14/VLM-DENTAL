@@ -642,6 +642,8 @@ def run_training(index: int, args: argparse.Namespace):
     pad_vision_to_slots = args.pad_vision_to_slots
     slot_budget = parse_slot_budget(*args.vision_slots)
     static_vision_tokens = slot_totals(slot_budget)["tokens"]
+    if pad_vision_to_slots and not is_tpu:
+        raise SystemExit("--pad-vision-to-slots is TPU-only (static shapes avoid XLA recompilation). GPU/CPU runs pad dynamically; remove the flag.")
     if pad_vision_to_slots and not canonical_resize:
         raise SystemExit("--pad-vision-to-slots requires --canonical-resize (static slots assume canonical image sizes).")
     if pad_vision_to_slots and args.max_seq_len <= static_vision_tokens:
@@ -916,16 +918,7 @@ def run_training(index: int, args: argparse.Namespace):
             print(f"[COLLATOR] Static sequence length padding enabled: {collator.max_seq_len} tokens (Zero buckets, single XLA graph).")
     else:
         # On GPU / CPU: dynamic sequence padding to longest item in each batch (eliminates static bucket overhead)
-        # --pad-vision-to-slots / --vision-slots apply on every backend (never silently ignored); sequences are still
-        # padded dynamically to the longest sample in the batch.
-        collator = BucketedQwenVLCollator(
-            processor=processor,
-            track=args.track,
-            max_seq_len=args.max_seq_len,
-            dynamic_padding=True,
-            pad_vision_to_slots=pad_vision_to_slots,
-            slot_budget=slot_budget,
-        )
+        collator = BucketedQwenVLCollator(processor=processor, track=args.track, max_seq_len=args.max_seq_len, dynamic_padding=True)
         if is_master:
             print("[COLLATOR] Dynamic sequence padding enabled (GPU eager mode: batch-adaptive length, zero static bucket overhead).")
 

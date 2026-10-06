@@ -830,6 +830,8 @@ def train_grpo(
     spmd_mesh = None
     train_collator = None
     rows_per_forward = 1
+    if pad_vision_to_slots and not is_tpu:
+        raise ValueError("pad_vision_to_slots is TPU-only (static shapes avoid XLA recompilation); GPU/CPU pad dynamically.")
     if pad_vision_to_slots and not canonical_resize:
         raise ValueError("pad_vision_to_slots requires canonical_resize (static slots assume canonical image sizes).")
     if use_spmd and is_tpu:

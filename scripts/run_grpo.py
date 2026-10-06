@@ -256,6 +256,8 @@ def run_worker(index: int, args: argparse.Namespace):
     except Exception:
         is_master = True
 
+    if args.pad_vision_to_slots and not is_tpu:
+        raise SystemExit("--pad-vision-to-slots is TPU-only (static shapes avoid XLA recompilation). GPU/CPU runs pad dynamically; remove the flag.")
     if args.pad_vision_to_slots and not args.canonical_resize:
         raise SystemExit("--pad-vision-to-slots requires --canonical-resize.")
     slot_budget = parse_slot_budget(*args.vision_slots)

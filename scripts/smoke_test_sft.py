@@ -11,10 +11,6 @@ Examples (every argument after ``--`` is passed to train_sft.py verbatim):
     # the configuration planned for a single 24 GB GPU
     python scripts/smoke_test_sft.py --traces data/traces/train_cot_traces.jsonl -- \
         --canonical-resize --max-seq-len 8192
-
-    # the static-slot path (TPU configuration, run on CPU/GPU with a small budget)
-    python scripts/smoke_test_sft.py --traces data/traces/train_cot_traces.jsonl -- \
-        --canonical-resize --pad-vision-to-slots --vision-slots 4 6 2 --max-seq-len 12288
 """
 
 from __future__ import annotations

@@ -18,13 +18,13 @@ The model sees aspect-preserving views (LANCZOS, centred on a constant black can
 | CROP    | 256×384      | `zoom_crop` | 96 |
 | COMPARE | 512×384      | `contralateral_compare` | 192 |
 
-Static slot budget (`--vision-slots FULL CROP COMPARE`, default `5 10 4`) = 19 images = 7,488 vision tokens; with `--pad-vision-to-slots` every sample is `text + 7,488` tokens. Sizes live only in `dental_agent/utils/canonical.py`.
+Static slot budget (`--vision-slots FULL CROP COMPARE`, default `5 10 4`) = 19 images = 7,488 vision tokens; with `--pad-vision-to-slots` (TPU only; rejected with an error on GPU/CPU, which pad dynamically) every sample is `text + 7,488` tokens. Sizes live only in `dental_agent/utils/canonical.py`.
 
 ## 3. Decisions
 
 - **Explicit, deterministic configuration.** Every behaviour is a CLI flag; the notebooks hold literals and pass them verbatim. No environment-variable behaviour, no TPU-dependent defaults, no silent precision switching (`bf16` stays `bf16`, `qlora` is chosen by the user; a hint is printed when a small GPU runs bf16 LoRA).
 - **Defaults:** `--max-seq-len 16384` everywhere; `--spmd` on (inert off-TPU); `--canonical-resize` and `--pad-vision-to-slots` off unless passed.
-- **GPU (RTX 4090 / A100):** `--canonical-resize`, dynamic padding. No slots, no shim, no SPMD. Native resolution is not viable for with-tools traces (several full-size images per trace). 24 GB cards use `--precision qlora`; A100 uses `bf16`.
+- **GPU (RTX 4090 / A100):** `--canonical-resize`, dynamic padding. No slots, no shim, no SPMD (slot padding exists only to avoid XLA recompilation). Native resolution is not viable for with-tools traces (several full-size images per trace). 24 GB cards use `--precision qlora`; A100 uses `bf16`.
 - **TPU:** `--canonical-resize --pad-vision-to-slots --vision-slots 5 10 4 --triangular-shim --spmd --fsdp`. Padding does not change the loss: the tail is causally after every real token, with `labels=-100` and `attention_mask=0` (verified on the real Hugging Face Qwen3.5 code, loss and gradients identical to numerical precision).
 - **Fail loudly:** padded mode raises on a non-canonical grid, an over-budget trace or an over-length sequence (truncation would desynchronise image tokens from vision features).
 - **Length manifest** (`compute_exact_trace_lengths.py`) records its resolution mode and per-trace vision-token counts; a manifest from the other mode is ignored with a warning.

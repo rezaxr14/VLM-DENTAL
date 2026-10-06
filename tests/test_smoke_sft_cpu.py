@@ -48,3 +48,16 @@ def test_train_sft_default_flags_run_end_to_end_off_tpu(tmp_path):
     assert proc.returncode == 0, tail
     assert "[SMOKE] PASSED" in proc.stdout, tail
     assert (work / "out" / "adapter_config.json").exists()
+
+
+def test_pad_vision_to_slots_is_rejected_off_tpu(tmp_path):
+    """Static vision slots exist only to avoid XLA recompilation; on GPU/CPU the flag is an error, not a silent no-op."""
+    traces = tmp_path / "traces.jsonl"
+    traces.write_text("\n".join(json.dumps(_trace(i)) for i in range(2)) + "\n")
+    proc = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "smoke_test_sft.py"), "--traces", str(traces), "--num-traces", "2",
+         "--work-dir", str(tmp_path / "work"), "--", "--canonical-resize", "--pad-vision-to-slots"],
+        capture_output=True, text=True, timeout=600,
+    )
+    assert proc.returncode != 0
+    assert "TPU-only" in proc.stdout + proc.stderr
