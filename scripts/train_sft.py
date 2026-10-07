@@ -5,7 +5,7 @@ Production Training CLI for Stage 1 Supervised Fine-Tuning (SFT) (§16, §17).
 Supports:
 - Multi-Stage SFT Curriculum: --stage {dentex_alone, dentex_tufts_overlap, multicohort_all}
 - Negative Controls Calibration: Healthy control traces included across all curriculum stages
-- LoRA on Multimodal Vision Projector: --lora-target-vision {projector, none} (adapts merger.mlp)
+- LoRA on Multimodal Vision Projector: --lora-target-vision {projector, none} (adapts the vision merger)
 - Native Image Resolutions: Zero pixel clamping / downsampling, preserving dental panoramic details
 - Hardware Optimization: Multi-Core Cloud TPU v5e-8 distributed execution via torch_xla.distributed.xmp.spawn (8-way cross-replica gradient synchronization) and Multi-GPU (BF16/FP16 LoRA)
 - Sequence Length Bucketing & Right-Padding via BucketedQwenVLCollator
@@ -72,8 +72,9 @@ from dental_agent.training.sft import (
     setup_spmd_mesh,
     wrap_spmd_model,
     unwrap_peft_model,
+    freeze_and_guard_vision_tower,
 )
-from dental_agent.model.backbone import get_model_classes
+from dental_agent.model.backbone import get_model_classes, lora_coverage, lora_target_modules, projector_module_names
 from dental_agent.utils.canonical import SLOT_BUDGET, parse_slot_budget, slot_totals
 
 
@@ -125,11 +126,18 @@ def parse_args():
         help="Numerical precision: bf16 (TPU/Ampere+), fp16, or qlora (4-bit NF4, GPU only)",
     )
     parser.add_argument(
+        "--lora-linear-attn",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Also adapt the Gated-DeltaNet layers' in_proj_qkv / in_proj_z / out_proj (3 of every 4 text layers). "
+             "Without it, attention LoRA reaches only the full-attention layers. Must match warmup_xla_cache.py.",
+    )
+    parser.add_argument(
         "--lora-target-vision",
         type=str,
         default="projector",
         choices=["projector", "none"],
-        help="Attach LoRA to multimodal patch projector ('projector': merger.mlp.0, merger.mlp.2) or 'none'",
+        help="Attach LoRA to the multimodal projector ('projector': the vision merger Linear layers, found in the model) or 'none'",
     )
     parser.add_argument("--batch-size", type=int, default=1, help="Per-device batch size")
     parser.add_argument(
@@ -431,48 +439,6 @@ def log_xla_memory(stage: str, device: Any = None, is_master: bool = True) -> No
         print(f"[XLA MEMORY | {stage}] HBM Used: {used_gib:.2f} GiB / {limit_gib:.2f} GiB (raw: {info})", flush=True)
     except Exception:
         pass
-
-
-def freeze_and_guard_vision_tower(model: torch.nn.Module, train_merger: bool = False, is_master: bool = True) -> None:
-    """Freezes vision encoder parameters and wraps forward execution in torch.no_grad()."""
-    visual = getattr(model, "visual", None)
-    if visual is None and hasattr(model, "model"):
-        visual = getattr(model.model, "visual", None)
-
-    if visual is None:
-        return
-
-    # 1. Freeze all visual parameters
-    frozen_count = 0
-    trained_count = 0
-    for name, param in visual.named_parameters():
-        if train_merger and "merger" in name:
-            param.requires_grad = True
-            trained_count += param.numel()
-        else:
-            param.requires_grad = False
-            frozen_count += param.numel()
-
-    # 2. Wrap forward execution in torch.no_grad()
-    if not train_merger:
-        orig_forward = visual.forward
-        def no_grad_visual_forward(*args, **kwargs):
-            with torch.no_grad():
-                return orig_forward(*args, **kwargs)
-        visual.forward = no_grad_visual_forward
-        if is_master:
-            print(f"[VISION GUARD] Whole vision tower wrapped in torch.no_grad() ({frozen_count:,} frozen params, 0 saved activations).")
-    elif hasattr(visual, "blocks"):
-        for blk in visual.blocks:
-            orig_blk_forward = blk.forward
-            def make_no_grad(f):
-                def wrapped(*args, **kwargs):
-                    with torch.no_grad():
-                        return f(*args, **kwargs)
-                return wrapped
-            blk.forward = make_no_grad(orig_blk_forward)
-        if is_master:
-            print(f"[VISION GUARD] 27 vision transformer blocks wrapped in torch.no_grad() ({frozen_count:,} frozen params). Merger trainable ({trained_count:,} params).")
 
 
 def apply_spmd_input_sharding(inputs: Dict[str, Any], spmd_mesh: Any, num_cores: int = 8) -> None:
@@ -777,12 +743,11 @@ def run_training(index: int, args: argparse.Namespace):
         model = ModelClass.from_pretrained(args.model_id, **load_kwargs)
 
     # Define LoRA Target Modules (Language Model + optional Vision Projector)
-    target_modules = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
-    if args.lora_target_vision == "projector":
-        # Multimodal patch projector linear projections
-        target_modules.extend(["merger.mlp.0", "merger.mlp.2"])
-        if is_master:
-            print("[LORA] Enabled LoRA on Multimodal Vision Projector ('merger.mlp.0', 'merger.mlp.2')")
+    target_modules = lora_target_modules(
+        model, linear_attention=args.lora_linear_attn, vision_projector=args.lora_target_vision == "projector"
+    )
+    if is_master and args.lora_target_vision == "projector":
+        print(f"[LORA] LoRA on the vision projector: {projector_module_names(model)}")
 
     # Defensive guard: peft raises an unhandled ImportError if torchao < 0.16.0 is installed
     # (common on Kaggle default images), even when torchao is completely unused.
@@ -827,6 +792,7 @@ def run_training(index: int, args: argparse.Namespace):
     model = get_peft_model(model, peft_config)
     if is_master:
         model.print_trainable_parameters()
+        print(f"[LORA] adapted modules: {lora_coverage(model)}")
 
     # Enable gradient checkpointing across all precision modes
     try:

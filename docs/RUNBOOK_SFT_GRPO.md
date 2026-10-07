@@ -50,7 +50,7 @@ Watch the progress bar: `peak_gib` is the highest memory PyTorch has allocated s
 
 **A7. Full SFT** (use the same `--precision` and `--max-seq-len` as A5; other hyperparameters as set in the notebook)
 ```
-python scripts/train_sft.py --track with_tools --stage dentex_alone --canonical-resize --precision qlora --max-seq-len 16384 --epochs 3 --batch-size 1 --gradient-accumulation-steps 8 --eval-strategy epoch --save-strategy epoch --hf-repo <repo> --push-every-steps 50
+python scripts/train_sft.py --track with_tools --stage dentex_alone --canonical-resize --precision qlora --lora-linear-attn --max-seq-len 16384 --epochs 3 --batch-size 1 --gradient-accumulation-steps 8 --eval-strategy epoch --save-strategy epoch --hf-repo <repo> --push-every-steps 50
 ```
 The adapter is saved to `data/models/qwen3_5_9b_sft_with_tools_dentex_alone_<precision>` (for example `..._qlora`).
 
@@ -94,8 +94,8 @@ It prints, per candidate length, how many traces fit (text + 7,488), and exits w
 
 **B4. Memory test at 16384, with and without the solver replacement** (this answers whether replacing `solve_triangular` fixes the out-of-memory)
 ```
-python scripts/warmup_xla_cache.py --spmd --fsdp --num-cores 8 --max-seq-len 16384 --pad-vision-to-slots --vision-slots 5 10 4 --triangular-shim
-python scripts/warmup_xla_cache.py --spmd --fsdp --num-cores 8 --max-seq-len 16384 --pad-vision-to-slots --vision-slots 5 10 4 --no-triangular-shim
+python scripts/warmup_xla_cache.py --spmd --fsdp --num-cores 8 --max-seq-len 16384 --pad-vision-to-slots --vision-slots 5 10 4 --triangular-shim --lora-linear-attn
+python scripts/warmup_xla_cache.py --spmd --fsdp --num-cores 8 --max-seq-len 16384 --pad-vision-to-slots --vision-slots 5 10 4 --no-triangular-shim --lora-linear-attn
 ```
 Read the `[XLA MEMORY | ...]` lines (after forward and after backward) and look for `RESOURCE_EXHAUSTED`. The warmup also fills the XLA cache that training reuses.
 
@@ -106,11 +106,11 @@ Read the `[XLA MEMORY | ...]` lines (after forward and after backward) and look 
 | 16384 compiles and runs | Keep it, or try a longer length to keep more traces: repeat B4 with `--max-seq-len 18432`, then `20480` (steps of 2048). Use the largest length that completes; B3 shows how many traces each keeps. |
 | 16384 fails with `RESOURCE_EXHAUSTED` | Do not reduce cores. Try a smaller slot budget if B3 shows it still covers every trace (for example `--vision-slots 4 8 3`; this lowers the static vision tokens, so a shorter `--max-seq-len` keeps the same text capacity). Otherwise the next option is tiered static lengths (several graphs), which is not implemented yet. |
 
-The same `--max-seq-len`, `--vision-slots` and `--triangular-shim` setting must be used in warmup, SFT and GRPO.
+The same `--max-seq-len`, `--vision-slots`, `--triangular-shim` and `--lora-linear-attn` setting must be used in warmup and SFT (the LoRA targets change the compiled graph), and the same view/shape flags in GRPO.
 
 **B6. Full SFT**
 ```
-python scripts/train_sft.py --track with_tools --stage dentex_alone --spmd --fsdp --num-cores 8 --canonical-resize --pad-vision-to-slots --vision-slots 5 10 4 --triangular-shim --max-seq-len 16384 --epochs 3 --batch-size 1 --eval-strategy epoch --save-strategy epoch --hf-repo <repo> --push-every-steps 50
+python scripts/train_sft.py --track with_tools --stage dentex_alone --spmd --fsdp --num-cores 8 --canonical-resize --pad-vision-to-slots --vision-slots 5 10 4 --triangular-shim --lora-linear-attn --max-seq-len 16384 --epochs 3 --batch-size 1 --eval-strategy epoch --save-strategy epoch --hf-repo <repo> --push-every-steps 50
 ```
 `--gradient-accumulation-steps` defaults to 1 on multi-core TPU (effective batch 8). Output: `data/models/qwen3_5_9b_sft_with_tools_dentex_alone_bf16`.
 
@@ -130,4 +130,4 @@ Qwen3.5 text layers alternate three Gated-DeltaNet (linear-attention) layers and
 ```
 python -c "from transformers import AutoConfig; c=AutoConfig.from_pretrained('Qwen/Qwen3.5-9B').text_config; print(c.num_hidden_layers, [i for i,t in enumerate(c.layer_types) if t=='full_attention'])"
 ```
-Module names: Gated-DeltaNet layers hold `model.language_model.layers.<i>.linear_attn` (`in_proj_qkv`, `in_proj_z`, `in_proj_a`, `in_proj_b`, `conv1d`, `norm`, `out_proj`); full-attention layers hold `...layers.<i>.self_attn` (`q_proj`, `k_proj`, `v_proj`, `o_proj`); every layer has `...mlp` (`gate_proj`, `up_proj`, `down_proj`). The vision tower is a separate ViT with ordinary attention. The current LoRA targets (`q/k/v/o_proj` plus the MLP projections) therefore adapt attention in the full-attention layers only.
+Module names: Gated-DeltaNet layers hold `model.language_model.layers.<i>.linear_attn` (`in_proj_qkv`, `in_proj_z`, `in_proj_a`, `in_proj_b`, `conv1d`, `norm`, `out_proj`); full-attention layers hold `...layers.<i>.self_attn` (`q_proj`, `k_proj`, `v_proj`, `o_proj`); every layer has `...mlp` (`gate_proj`, `up_proj`, `down_proj`). The vision tower is a separate ViT with ordinary attention. LoRA targets: `q/k/v/o_proj` (full-attention layers), `in_proj_qkv`, `in_proj_z`, `out_proj` (Gated-DeltaNet layers, `--lora-linear-attn`, default on), the MLP projections (all layers) and the vision projector. `in_proj_a` / `in_proj_b` (small decay and write gates) are not adapted. At startup the log prints `[LORA] adapted modules: {...}` with the count per kind; `--no-lora-linear-attn` turns the Gated-DeltaNet adapters off. The extra adapters add about 22M trainable parameters at r=32 (roughly 250 MiB with optimizer states).

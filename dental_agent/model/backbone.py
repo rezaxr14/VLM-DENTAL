@@ -107,6 +107,56 @@ def load_model(
     return model, processor
 
 
+def projector_module_names(model: Any) -> list[str]:
+    """Full names of the Linear layers of the vision-to-text projector (the ``merger`` modules under ``visual``).
+
+    Discovered from the loaded model because the module names differ across transformers versions
+    (``merger.linear_fc1/2`` today, ``merger.mlp.0/2`` before); a hardcoded name silently matches nothing.
+    """
+    import torch
+
+    return [
+        name for name, module in model.named_modules()
+        if isinstance(module, torch.nn.Linear) and ".visual." in f".{name}." and "merger" in name
+    ]
+
+
+def lora_target_modules(model: Any = None, linear_attention: bool = True, vision_projector: bool = False) -> list[str]:
+    """LoRA target projections. ``linear_attention`` adds the Gated-DeltaNet layers' in/out projections;
+    ``vision_projector`` adds the projector's Linear layers (needs ``model``; raises if none are found)."""
+    from dental_agent.config import LORA_FULL_ATTENTION_TARGETS, LORA_LINEAR_ATTENTION_TARGETS, LORA_MLP_TARGETS
+
+    targets = [*LORA_FULL_ATTENTION_TARGETS, *LORA_MLP_TARGETS]
+    if linear_attention:
+        targets += LORA_LINEAR_ATTENTION_TARGETS
+    if vision_projector:
+        if model is None:
+            raise ValueError("lora_target_modules(vision_projector=True) needs the loaded model to find the projector.")
+        names = projector_module_names(model)
+        if not names:
+            raise ValueError("Projector LoRA requested (--lora-target-vision projector) but no vision merger Linear "
+                             "layers were found in this model. Use --lora-target-vision none.")
+        targets += names
+    return targets
+
+
+def lora_coverage(model: Any) -> dict[str, int]:
+    """Count LoRA-adapted modules by kind (full-attention, linear-attention, mlp, projector) for logging."""
+    counts = {"full_attention": 0, "linear_attention": 0, "mlp": 0, "projector": 0}
+    for name, module in model.named_modules():
+        if not hasattr(module, "lora_A"):
+            continue
+        if ".linear_attn." in name:
+            counts["linear_attention"] += 1
+        elif ".self_attn." in name:
+            counts["full_attention"] += 1
+        elif ".mlp." in name and "merger" not in name:
+            counts["mlp"] += 1
+        elif "merger" in name:
+            counts["projector"] += 1
+    return counts
+
+
 def apply_lora(
     model: Any,
     config: ProjectConfig | None = None,
@@ -123,10 +173,7 @@ def apply_lora(
         r, alpha, dropout = lora_cfg.r, lora_cfg.alpha, lora_cfg.dropout
         target_modules = lora_cfg.target_modules
 
-    target_modules = target_modules or [
-        "q_proj", "k_proj", "v_proj", "o_proj",
-        "gate_proj", "up_proj", "down_proj",
-    ]
+    target_modules = target_modules or lora_target_modules()
 
     peft_config = LoraConfig(
         r=r,

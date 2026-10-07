@@ -38,6 +38,9 @@ training:
       - "gate_proj"
       - "up_proj"
       - "down_proj"
+      - "in_proj_qkv"   # Gated-DeltaNet layers (see dental_agent/config.py)
+      - "in_proj_z"
+      - "out_proj"
 
   reward_weights:
     accuracy: 1.0

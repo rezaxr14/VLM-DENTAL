@@ -64,7 +64,7 @@ if str(_repo_root) not in sys.path:
 from dental_agent.config import load_env
 load_env(_repo_root / ".env")
 
-from dental_agent.model.backbone import get_model_classes, safe_process_vision_info
+from dental_agent.model.backbone import get_model_classes, lora_target_modules, safe_process_vision_info
 from dental_agent.utils.canonical import CANONICAL_SIZES, SLOT_BUDGET, parse_slot_budget, slot_totals
 from dental_agent.training.sft import (
     BucketedQwenVLCollator,
@@ -289,9 +289,9 @@ def run_warmup_worker(index: int, args: argparse.Namespace):
             model = ModelClass.from_pretrained(args.model_id, **load_kwargs)
 
         # Attach LoRA adapters to match training architecture exactly
-        target_modules = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
-        if args.lora_target_vision == "projector":
-            target_modules.extend(["merger.mlp.0", "merger.mlp.2"])
+        target_modules = lora_target_modules(
+            model, linear_attention=args.lora_linear_attn, vision_projector=args.lora_target_vision == "projector"
+        )
 
         # Defensive guard: peft raises an unhandled ImportError if torchao < 0.16.0 is installed
         # (common on Kaggle default images), even when torchao is completely unused.
@@ -592,6 +592,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--precision", type=str, default="bf16", choices=["bf16", "fp16", "fp32"])
     parser.add_argument("--lora-target-vision", type=str, default="projector", choices=["projector", "none"])
+    parser.add_argument("--lora-linear-attn", action=argparse.BooleanOptionalAction, default=True,
+                        help="Adapt the Gated-DeltaNet layers too (must match train_sft.py, or the cached graph differs).")
     parser.add_argument("--lora-r", type=int, default=32)
     parser.add_argument("--lora-alpha", type=int, default=64)
     parser.add_argument("--lora-dropout", type=float, default=0.05)

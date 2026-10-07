@@ -26,6 +26,7 @@ Static slot budget (`--vision-slots FULL CROP COMPARE`, default `5 10 4`) = 19 i
 - **Defaults:** `--max-seq-len 16384` everywhere; `--spmd` on (inert off-TPU); `--canonical-resize` and `--pad-vision-to-slots` off unless passed.
 - **GPU (RTX 4090 / A100):** `--canonical-resize`, dynamic padding. No slots, no shim, no SPMD (slot padding exists only to avoid XLA recompilation). Native resolution is not viable for with-tools traces (several full-size images per trace). 24 GB cards use `--precision qlora`; A100 uses `bf16` (`train_sft.py`, `run_grpo.py` and `evaluate_models.py` all take `--precision`).
 - **TPU:** `--canonical-resize --pad-vision-to-slots --vision-slots 5 10 4 --triangular-shim --spmd --fsdp`. Padding does not change the loss: the tail is causally after every real token, with `labels=-100` and `attention_mask=0` (verified on the real Hugging Face Qwen3.5 code, loss and gradients identical to numerical precision).
+- **LoRA covers the Gated-DeltaNet layers** (`--lora-linear-attn`, default on; `in_proj_qkv`, `in_proj_z`, `out_proj`), so token mixing is adapted in all layers, not only the full-attention quarter. Warmup and SFT must use the same value. Turn it off with `--no-lora-linear-attn` to reproduce the earlier targets.
 - **Fail loudly:** padded mode raises on a non-canonical grid, an over-budget trace or an over-length sequence (truncation would desynchronise image tokens from vision features).
 - **Length manifest** (`compute_exact_trace_lengths.py`) records its resolution mode and per-trace vision-token counts; a manifest from the other mode is ignored with a warning.
 - **GRPO** runs single-process SPMD with the same view/shape flags as SFT. With `--pad-vision-to-slots` each policy update runs at the SFT static shapes (one rollout per core); rollouts longer than `--max-seq-len` are excluded and counted.
@@ -80,6 +81,7 @@ Each training script prints a `[CONFIG]` line with the effective settings.
 - **Notebook sweep mode** passed `--model-id`, which the sweep launcher rejected.
 - **GRPO precision was implicit:** 4-bit loading came from `configs/default.yaml` and the non-4-bit GPU path loaded fp16. GRPO now has an explicit `--precision {bf16,qlora}` (bf16 means bf16).
 - **Silent precision switches removed** (bf16→fp16 on GPUs without native BF16 is now a hint; QLoRA requested on TPU is an error instead of a switch).
+- **Projector LoRA was a silent no-op:** the targets `merger.mlp.0/2` do not exist in current Qwen3.5 (`merger.linear_fc1/2`), so nothing was adapted although the log said it was. Targets are now discovered from the model and the run stops if none are found. The vision guard also failed to find the tower on a PEFT-wrapped model and did nothing; it now locates it by name. A duplicate copy of the guard in `train_sft.py` was removed.
 - **Unbounded crop cache** (native-resolution images held in host RAM) replaced by a bounded LRU of finished views.
 
 ## 7. Open and deferred
@@ -87,7 +89,6 @@ Each training script prints a `[CONFIG]` line with the effective settings.
 - No GPU/TPU run yet: HBM/VRAM fit, GSPMD sharding of the shim and single compilation are unverified.
 - GRPO `generate()` still produces dynamically shaped graphs on XLA; static update shapes do not remove decode recompiles.
 - A single 16,384 length excludes the longest (multi-finding) traces; measure with `scripts/census_vision_slots.py`. Alternatives: a larger length or tiered graphs.
-- Qwen3.5 is hybrid: LoRA targets `q/k/v/o/gate/up/down` reach attention in only the full-attention layers; the Gated-DeltaNet layers (`in_proj_*`, `out_proj`) get MLP LoRA only. Candidate: an explicit `--lora-targets` flag.
 - Evaluation at original size: only `evaluate_models.py` has the switch; `evaluation/ablations.py`, `sweep.py`, `batch_runner.py` and `rewards/judge.py` call `run_agent` natively. A canonical-trained checkpoint evaluated at original size sees a different input distribution than it trained on; decide whether to report both.
 - Optional ablation: letterbox vs plain stretch.
 

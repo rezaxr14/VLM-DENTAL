@@ -1,7 +1,7 @@
 # Core ML & Deep Learning (CUDA GPU extras live in requirements-gpu.txt; never install those on TPU)
 # torch==2.13.0
 # torchvision==0.28.0
-transformers==5.14.1
+transformers==5.18.0
 accelerate==1.14.0
 peft==0.20.0
 bitsandbytes==0.50.0

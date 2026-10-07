@@ -490,7 +490,7 @@ Lower priority than Tunisia for exactly these reasons; not started.
 ### Deferred until the hardware path is validated
 Details in `docs/CANONICAL_VISION_AND_TPU_PIPELINE.md` §7.
 - Evaluation at original size for every evaluation entrypoint (only `evaluate_models.py` is wired).
-- Traces excluded by the 16,384 length; GRPO decode shapes on XLA; LoRA coverage of the Gated-DeltaNet layers; letterbox vs stretch ablation.
+- Traces excluded by the 16,384 length; GRPO decode shapes on XLA; letterbox vs stretch ablation; an ablation of Gated-DeltaNet LoRA on/off.
 
 ### Immediate next step: resolve `_region_to_fdi` for Tunisia
 See "Datasets" above. This is a ~30-second file inspection, not an

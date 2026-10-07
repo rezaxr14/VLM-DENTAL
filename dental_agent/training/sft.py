@@ -1115,46 +1115,52 @@ def log_xla_memory(stage: str, device: Any = None, is_master: bool = True) -> No
 
 
 def freeze_and_guard_vision_tower(model: torch.nn.Module, train_merger: bool = False, is_master: bool = True) -> None:
-    """Freezes vision encoder parameters and wraps forward execution in torch.no_grad()."""
-    visual = getattr(model, "visual", None)
-    if visual is None and hasattr(model, "model"):
-        visual = getattr(model.model, "visual", None)
+    """Freeze the vision encoder and run it under ``torch.no_grad()`` (no saved activations).
 
+    With ``train_merger`` the projector stays trainable *through its LoRA adapters* (PEFT already froze the base
+    weights); base merger weights are never made trainable, because they would not be saved with the adapter.
+    The tower is located by module name so this works for a bare model and for a PEFT-wrapped one in any nesting.
+    """
+    visual = next((m for n, m in model.named_modules() if n.split(".")[-1] == "visual"), None)
     if visual is None:
+        if is_master:
+            print("[VISION GUARD WARNING] no 'visual' module found; vision tower not guarded.")
         return
 
-    # 1. Freeze all visual parameters
     frozen_count = 0
     trained_count = 0
     for name, param in visual.named_parameters():
         if train_merger and "merger" in name:
-            param.requires_grad = True
-            trained_count += param.numel()
+            if param.requires_grad:
+                trained_count += param.numel()  # LoRA params of the projector; leave PEFT's setting untouched
+            else:
+                frozen_count += param.numel()
         else:
             param.requires_grad = False
             frozen_count += param.numel()
 
-    # 2. Wrap forward execution in torch.no_grad()
     if not train_merger:
         orig_forward = visual.forward
+
         def no_grad_visual_forward(*args, **kwargs):
             with torch.no_grad():
                 return orig_forward(*args, **kwargs)
+
         visual.forward = no_grad_visual_forward
         if is_master:
             print(f"[VISION GUARD] Whole vision tower wrapped in torch.no_grad() ({frozen_count:,} frozen params, 0 saved activations).")
     elif hasattr(visual, "blocks"):
-        for blk in visual.blocks:
-            orig_blk_forward = blk.forward
-            def make_no_grad(f):
-                def wrapped(*args, **kwargs):
-                    with torch.no_grad():
-                        return f(*args, **kwargs)
-                return wrapped
-            blk.forward = make_no_grad(orig_blk_forward)
-        if is_master:
-            print(f"[VISION GUARD] 27 vision transformer blocks wrapped in torch.no_grad() ({frozen_count:,} frozen params). Merger trainable ({trained_count:,} params).")
+        def make_no_grad(f):
+            def wrapped(*args, **kwargs):
+                with torch.no_grad():
+                    return f(*args, **kwargs)
+            return wrapped
 
+        for blk in visual.blocks:
+            blk.forward = make_no_grad(blk.forward)
+        if is_master:
+            print(f"[VISION GUARD] {len(visual.blocks)} vision transformer blocks wrapped in torch.no_grad() "
+                  f"({frozen_count:,} frozen params). Projector trainable via LoRA ({trained_count:,} params).")
 
 def apply_spmd_input_sharding(inputs: Dict[str, Any], spmd_mesh: Any, num_cores: int = 8) -> None:
     """Shard inputs cleanly across SPMD mesh, guarding against dimension mismatches and KeyError."""

@@ -14,8 +14,8 @@ This document serves as the master technical specification for Stage 1 Supervise
 | **LoRA Rank ($r$)** | $32$ | Maximizes expressive adaptation capacity for clinical dental reasoning. |
 | **LoRA Alpha ($\alpha$)** | $64$ | Standard scaling ratio $\alpha / r = 2.0$. |
 | **LoRA Dropout** | $0.05$ | Prevents clinical feature co-adaptation and overfitting on synthetic reasoning. |
-| **LLM Target Modules** | `["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]` | Comprehensive adaptation across all self-attention and MLP feed-forward projections. |
-| **Vision Target Modules** | `["merger.mlp.0", "merger.mlp.2"]` (`--lora-target-vision projector`) | Adapts the multimodal patch projector mapping visual tokens to language embeddings without disturbing early ViT representations. |
+| **LLM Target Modules** | `["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]` plus `["in_proj_qkv", "in_proj_z", "out_proj"]` with `--lora-linear-attn` (default on) | Qwen3.5 is hybrid: the full-attention layers use `q/k/v/o_proj`, the Gated-DeltaNet layers (3 of every 4) use `in_proj_qkv`, `in_proj_z`, `out_proj`; all layers have the MLP. `in_proj_a` / `in_proj_b` (the small decay and write gates) are not adapted. `--no-lora-linear-attn` restricts attention LoRA to the full-attention layers. |
+| **Vision Target Modules** | the Linear layers of `visual.merger` (`--lora-target-vision projector`; names are discovered from the loaded model, `merger.linear_fc1/2` in current transformers) | Adapts the multimodal patch projector mapping visual tokens to language embeddings without disturbing early ViT representations. |
 
 ---
 
@@ -99,12 +99,12 @@ To evaluate in-domain performance, cross-institution transfer, and complete mult
 
 ---
 
-## 4. Multimodal Vision Projector LoRA (`merger.mlp`)
+## 4. Multimodal Vision Projector LoRA (`visual.merger`)
 
 Rather than freezing the entire vision stack or fine-tuning early ViT blocks:
 1. **ViT Transformer Blocks (`visual.blocks`)**: Kept **frozen**. Preserves foundational edge, texture, and spatial detectors pre-trained on millions of images.
-2. **Patch Merger Projector (`visual.merger.mlp`)**: LoRA-adapted via `--lora-target-vision projector`.
-   - Targets linear projection layers `merger.mlp.0` and `merger.mlp.2`.
+2. **Patch Merger Projector (`visual.merger`)**: LoRA-adapted via `--lora-target-vision projector`.
+   - Targets the merger's Linear layers, found in the loaded model at startup (the run stops with an error if none are found, instead of silently training nothing).
    - Trains specialized alignment between subtle radiographic densities (radiolucencies, bone trabeculae, pulp chambers) and clinical language representations.
    - Total parameter overhead is $<1.5\text{ MB}$ of adapter weights.
 

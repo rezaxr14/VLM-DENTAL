@@ -41,6 +41,15 @@ class ModelConfig:
     bnb_double_quant: bool = True
 
 
+# LoRA target projections (matched by module-name suffix). Qwen3.5 is a hybrid: every 4th text layer is full attention
+# (self_attn.q/k/v/o_proj); the other layers are Gated-DeltaNet layers whose token-mixing projections are
+# linear_attn.in_proj_qkv / in_proj_z / out_proj (in_proj_a / in_proj_b are the tiny decay and write gates and are not
+# adapted). All layers have the MLP. The vision tower has none of these names.
+LORA_FULL_ATTENTION_TARGETS = ["q_proj", "k_proj", "v_proj", "o_proj"]
+LORA_MLP_TARGETS = ["gate_proj", "up_proj", "down_proj"]
+LORA_LINEAR_ATTENTION_TARGETS = ["in_proj_qkv", "in_proj_z", "out_proj"]
+
+
 @dataclass
 class LoraConfig:
     """LoRA / QLoRA fine-tuning settings."""
@@ -51,8 +60,7 @@ class LoraConfig:
     bias: str = "none"
     target_modules: list[str] = field(
         default_factory=lambda: [
-            "q_proj", "k_proj", "v_proj", "o_proj",
-            "gate_proj", "up_proj", "down_proj",
+            *LORA_FULL_ATTENTION_TARGETS, *LORA_MLP_TARGETS, *LORA_LINEAR_ATTENTION_TARGETS,
         ]
     )
 
