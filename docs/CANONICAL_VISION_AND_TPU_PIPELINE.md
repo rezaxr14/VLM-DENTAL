@@ -24,7 +24,7 @@ Static slot budget (`--vision-slots FULL CROP COMPARE`, default `5 10 4`) = 19 i
 
 - **Explicit, deterministic configuration.** Every behaviour is a CLI flag; the notebooks hold literals and pass them verbatim. No environment-variable behaviour, no TPU-dependent defaults, no silent precision switching (`bf16` stays `bf16`, `qlora` is chosen by the user; a hint is printed when a small GPU runs bf16 LoRA).
 - **Defaults:** `--max-seq-len 16384` everywhere; `--spmd` on (inert off-TPU); `--canonical-resize` and `--pad-vision-to-slots` off unless passed.
-- **GPU (RTX 4090 / A100):** `--canonical-resize`, dynamic padding. No slots, no shim, no SPMD (slot padding exists only to avoid XLA recompilation). Native resolution is not viable for with-tools traces (several full-size images per trace). 24 GB cards use `--precision qlora`; A100 uses `bf16`.
+- **GPU (RTX 4090 / A100):** `--canonical-resize`, dynamic padding. No slots, no shim, no SPMD (slot padding exists only to avoid XLA recompilation). Native resolution is not viable for with-tools traces (several full-size images per trace). 24 GB cards use `--precision qlora`; A100 uses `bf16` (`train_sft.py`, `run_grpo.py` and `evaluate_models.py` all take `--precision`).
 - **TPU:** `--canonical-resize --pad-vision-to-slots --vision-slots 5 10 4 --triangular-shim --spmd --fsdp`. Padding does not change the loss: the tail is causally after every real token, with `labels=-100` and `attention_mask=0` (verified on the real Hugging Face Qwen3.5 code, loss and gradients identical to numerical precision).
 - **Fail loudly:** padded mode raises on a non-canonical grid, an over-budget trace or an over-length sequence (truncation would desynchronise image tokens from vision features).
 - **Length manifest** (`compute_exact_trace_lengths.py`) records its resolution mode and per-trace vision-token counts; a manifest from the other mode is ignored with a warning.
@@ -78,6 +78,7 @@ Each training script prints a `[CONFIG]` line with the effective settings.
 - **GRPO optimizer** was rebuilt for every image, resetting Adam's moments. It is now created once per run.
 - **Default `--spmd` crashed every non-TPU run** (`torch_xla` import); it is now gated on the real backend. `--pad-vision-to-slots` was silently ignored off-TPU; it now applies everywhere.
 - **Notebook sweep mode** passed `--model-id`, which the sweep launcher rejected.
+- **GRPO precision was implicit:** 4-bit loading came from `configs/default.yaml` and the non-4-bit GPU path loaded fp16. GRPO now has an explicit `--precision {bf16,qlora}` (bf16 means bf16).
 - **Silent precision switches removed** (bf16→fp16 on GPUs without native BF16 is now a hint; QLoRA requested on TPU is an error instead of a switch).
 - **Unbounded crop cache** (native-resolution images held in host RAM) replaced by a bounded LRU of finished views.
 

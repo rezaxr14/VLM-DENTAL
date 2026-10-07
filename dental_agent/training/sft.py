@@ -521,6 +521,7 @@ class DentalSFTDataset(Dataset):
         # Resolve pre-computed token lengths manifest for instant O(1) filtering on Kaggle/Colab
         token_map: dict[str, int] = {}
         vision_map: dict[str, int] = {}
+        id_map: dict[str, int] = {}
         manifest_candidates = []
         if token_lengths_manifest:
             manifest_candidates.append(Path(token_lengths_manifest))
@@ -537,6 +538,7 @@ class DentalSFTDataset(Dataset):
                         manifest_canonical = bool(m_data.get("canonical_resize", False))
                         token_map = m_data.get("lengths_by_file_and_id", {})
                         vision_map = m_data.get("vision_tokens_by_file_and_id", {})
+                        id_map = m_data.get("lengths_by_image_id", {})
                         if not token_map:
                             token_map = m_data.get("lengths_by_image_id", {})
                     if token_map and manifest_canonical != self.canonical_resize:
@@ -552,6 +554,7 @@ class DentalSFTDataset(Dataset):
                         )
                         token_map = {}
                         vision_map = {}
+                        id_map = {}
                     if token_map:
                         break
                 except Exception:
@@ -586,7 +589,7 @@ class DentalSFTDataset(Dataset):
             filtered_count = 0
             unmatched = 0
             for r in raw_records:
-                tok_len, vis_len = self._manifest_lookup(r, token_map, vision_map)
+                tok_len, vis_len = self._manifest_lookup(r, token_map, vision_map, id_map)
                 if tok_len is None:
                     unmatched += 1
                     retained.append(r)
@@ -623,6 +626,7 @@ class DentalSFTDataset(Dataset):
         rec: dict[str, Any],
         token_map: dict[str, int],
         vision_map: dict[str, int],
+        id_map: dict[str, int] | None = None,
     ) -> tuple[int | None, int | None]:
         """Find a trace's (total_tokens, vision_tokens) in the manifest.
 
@@ -634,9 +638,14 @@ class DentalSFTDataset(Dataset):
         rid = str(rec.get("image_id", ""))
         fname = rec.get("_origin_file", "")
         ds = str(rec.get("dataset", "default"))
-        for key in (f"{fname}::{ds}::{rid}", f"{ds}::{rid}", f"{fname}::{rid}", rid):
+        keys = (f"{fname}::{ds}::{rid}", f"{ds}::{rid}", f"{fname}::{rid}", rid)
+        for key in keys:
             if key in token_map:
                 return int(token_map[key]), (int(vision_map[key]) if key in vision_map else None)
+        # Files the manifest has never seen (e.g. a probe subset): fall back to the per-image lengths.
+        for key in keys:
+            if id_map and key in id_map:
+                return int(id_map[key]), None
         return None, None
 
     def __len__(self) -> int:

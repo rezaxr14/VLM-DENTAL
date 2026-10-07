@@ -74,6 +74,8 @@ def parse_args():
         default=True,
         help="Enable PyTorch/XLA FSDP parameter sharding across TPU cores to fit 9B BF16 model within 16 GB HBM (default: True on multi-core TPU)",
     )
+    parser.add_argument("--precision", type=str, default="bf16", choices=["bf16", "qlora"],
+                        help="bf16 = LoRA on bf16 weights; qlora = LoRA on 4-bit weights (CUDA only). Never chosen for you.")
     parser.add_argument("--model-id", type=str, default=None,
                         help="Base model path/repo (same as run_grpo.py; the notebook passes it in sweep mode).")
     parser.add_argument("--spmd", action=argparse.BooleanOptionalAction, default=True,
@@ -114,6 +116,7 @@ def main():
     cfg = load_config()
     if args.model_id:
         cfg.model.name = args.model_id
+    cfg.model.load_in_4bit = args.precision == "qlora"
 
     out_path = Path(args.output_dir)
     out_path.mkdir(parents=True, exist_ok=True)

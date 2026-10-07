@@ -1136,7 +1136,10 @@ def run_training(index: int, args: argparse.Namespace):
                 if is_master:
                     lr_current = scheduler.get_last_lr()[0] if scheduler.get_last_lr() else args.learning_rate
                     if hasattr(pbar, "set_postfix"):
-                        pbar.set_postfix({"loss": f"{step_loss:.4f}", "lr": f"{lr_current:.2e}"})
+                        postfix = {"loss": f"{step_loss:.4f}", "lr": f"{lr_current:.2e}"}
+                        if torch.cuda.is_available():
+                            postfix["peak_gib"] = f"{torch.cuda.max_memory_allocated() / 2**30:.1f}"
+                        pbar.set_postfix(postfix)
 
                     log_entry = {
                         "epoch": epoch,
@@ -1144,6 +1147,8 @@ def run_training(index: int, args: argparse.Namespace):
                         "loss": step_loss,
                         "lr": lr_current,
                     }
+                    if torch.cuda.is_available():
+                        log_entry["peak_gib"] = round(torch.cuda.max_memory_allocated() / 2**30, 2)
 
                     # Step-interval evaluation on held-out validation set
                     eval_at_steps = args.eval_strategy in ("steps", "both")

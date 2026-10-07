@@ -91,7 +91,7 @@ def load_model(
         if bnb_config is not None:
             model_kwargs["quantization_config"] = bnb_config
         else:
-            model_kwargs["torch_dtype"] = torch.float16
+            model_kwargs["torch_dtype"] = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
     else:
         model_kwargs["torch_dtype"] = torch.float32
 

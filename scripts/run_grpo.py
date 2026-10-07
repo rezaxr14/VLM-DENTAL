@@ -165,6 +165,15 @@ def main() -> None:
         help="Enable PyTorch/XLA FSDP parameter sharding across TPU cores to fit 9B BF16 model within 16 GB HBM (default: True on multi-core TPU)",
     )
     parser.add_argument(
+        "--precision",
+        type=str,
+        default="bf16",
+        choices=["bf16", "qlora"],
+        help="bf16 = LoRA on bf16 weights (A100-class GPUs). qlora = LoRA on 4-bit NF4 weights (24 GB GPUs such as "
+             "RTX 4090). CUDA only; nothing selects it for you. (Previously 4-bit came implicitly from "
+             "configs/default.yaml model.load_in_4bit.)",
+    )
+    parser.add_argument(
         "--spmd",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -239,6 +248,7 @@ def run_worker(index: int, args: argparse.Namespace):
     cfg = load_config(args.config)
     if args.model_id:
         cfg.model.name = args.model_id
+    cfg.model.load_in_4bit = args.precision == "qlora"  # explicit; the config file value is overridden
 
     is_tpu = False
     try:
@@ -256,6 +266,8 @@ def run_worker(index: int, args: argparse.Namespace):
     except Exception:
         is_master = True
 
+    if args.precision == "qlora" and is_tpu:
+        raise SystemExit("--precision qlora is not supported on TPU/XLA (bitsandbytes is CUDA-only). Use --precision bf16.")
     if args.pad_vision_to_slots and not is_tpu:
         raise SystemExit("--pad-vision-to-slots is TPU-only (static shapes avoid XLA recompilation). GPU/CPU runs pad dynamically; remove the flag.")
     if args.pad_vision_to_slots and not args.canonical_resize:

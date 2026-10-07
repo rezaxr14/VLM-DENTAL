@@ -153,7 +153,7 @@ def test_grpo_cli_flags_explicit(monkeypatch):
         run_grpo.main()
     a = seen["args"]
     assert a.spmd is True and a.canonical_resize is False and a.pad_vision_to_slots is False
-    assert a.vision_slots == [5, 10, 4] and a.triangular_shim is True and a.max_seq_len == 16384
+    assert a.vision_slots == [5, 10, 4] and a.triangular_shim is True and a.max_seq_len == 16384 and a.precision == "bf16"
 
 
 def test_sweep_cli_accepts_every_notebook_flag(monkeypatch):

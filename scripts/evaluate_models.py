@@ -112,7 +112,7 @@ def setup_eval_hardware(precision: str = "bf16"):
             device = torch.device("cpu")
             print("[HARDWARE] Running on CPU.")
 
-    dtype = torch.bfloat16 if precision == "bf16" else (torch.float16 if precision == "fp16" else torch.float32)
+    dtype = torch.bfloat16 if precision in ("bf16", "qlora") else (torch.float16 if precision == "fp16" else torch.float32)
     return device, dtype, is_tpu
 
 
@@ -120,7 +120,7 @@ def setup_eval_hardware(precision: str = "bf16"):
 # Model Loading
 # ---------------------------------------------------------------------------
 
-def load_eval_model(model_id: str, adapter_path: str | None, device, dtype, condition: str):
+def load_eval_model(model_id: str, adapter_path: str | None, device, dtype, condition: str, quantize_4bit: bool = False):
     """Load base model and optionally attach LoRA adapter for SFT/GRPO conditions.
 
     Returns (model, processor).
@@ -142,8 +142,13 @@ def load_eval_model(model_id: str, adapter_path: str | None, device, dtype, cond
     }
     if torch.cuda.is_available():
         load_kwargs["device_map"] = "auto"
+    if quantize_4bit:
+        from transformers import BitsAndBytesConfig
+        load_kwargs["quantization_config"] = BitsAndBytesConfig(
+            load_in_4bit=True, bnb_4bit_quant_type="nf4", bnb_4bit_use_double_quant=True, bnb_4bit_compute_dtype=dtype,
+        )
 
-    print(f"[MODEL] Loading base model: {model_id} (dtype={dtype})...")
+    print(f"[MODEL] Loading base model: {model_id} (dtype={dtype}, 4-bit={quantize_4bit})...")
     try:
         model = ModelClass.from_pretrained(model_id, **load_kwargs)
     except TypeError:
@@ -156,8 +161,11 @@ def load_eval_model(model_id: str, adapter_path: str | None, device, dtype, cond
         print(f"[MODEL] Attaching LoRA adapter from: {adapter_path}")
         from peft import PeftModel
         model = PeftModel.from_pretrained(model, adapter_path)
-        model = model.merge_and_unload()
-        print("[MODEL] LoRA adapter merged successfully.")
+        if quantize_4bit:
+            print("[MODEL] LoRA adapter attached (not merged into the 4-bit base weights).")
+        else:
+            model = model.merge_and_unload()
+            print("[MODEL] LoRA adapter merged successfully.")
 
     model.eval()
 
@@ -548,7 +556,7 @@ def evaluate_condition(
     is_tools = "with_tools" in condition
     adapter_path = args.adapter_path if condition.startswith(("sft_", "grpo_")) else None
     device, dtype, is_tpu = setup_eval_hardware(args.precision)
-    model, processor = load_eval_model(args.model_id, adapter_path, device, dtype, condition)
+    model, processor = load_eval_model(args.model_id, adapter_path, device, dtype, condition, quantize_4bit=args.precision == "qlora")
 
     registry = None
     if is_tools:
@@ -698,8 +706,9 @@ def parse_args() -> argparse.Namespace:
         "--precision",
         type=str,
         default="bf16",
-        choices=["bf16", "fp16", "fp32"],
-        help="Numerical precision for model inference",
+        choices=["bf16", "fp16", "fp32", "qlora"],
+        help="Numerical precision for model inference. qlora = 4-bit NF4 base weights (CUDA only), the setting for 24 GB GPUs; "
+             "nothing selects it for you.",
     )
     parser.add_argument("--config", "-c", default=None, help="Path to config YAML")
     parser.add_argument(
