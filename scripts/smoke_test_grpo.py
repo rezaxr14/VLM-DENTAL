@@ -104,6 +104,11 @@ def main() -> int:
     grpo.combine_reward = lambda traj, gt, max_tool_calls=0: (
         (len(json.dumps(traj, default=str)) % 17) / 17.0, {})
 
+    # The step log defaults to ./data/grpo_training_log.jsonl, the real training log; keep smoke rows out of it.
+    real_log_step = grpo.log_grpo_step
+    grpo.log_grpo_step = lambda stats, log_path=None, extra=None: real_log_step(
+        stats, log_path=work / "grpo_training_log.jsonl", extra=extra)
+
     sys.argv = [
         "run_grpo.py", "--track", args.track, "--sft-stage", "dentex_alone", "--sft-model-dir", str(adapter_dir),
         "--model-id", str(model_dir), "--dataset", "tufts", "--group-size", "2", "--epochs", "1",
