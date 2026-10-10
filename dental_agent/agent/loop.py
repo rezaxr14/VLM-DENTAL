@@ -53,8 +53,12 @@ def run_agent(
     max_tool_calls: int = 50,
     verbose: bool = True,
     canonical_resize: bool = False,
+    temperature: float = 0.0,
 ) -> AgentTrajectory:
     """Run the multi-turn agent loop on a single dental radiograph.
+
+    ``temperature`` is the sampling temperature of every turn (0.0 = greedy, the right choice for evaluation; GRPO
+    rollouts must sample, otherwise every rollout of an image is identical and all advantages are zero).
 
     Executes:
     1. Load full panoramic image.
@@ -107,6 +111,7 @@ def run_agent(
             model,
             processor,
             messages,
+            temperature=temperature,
             return_ids=True,
             past_key_values=pkv,
             cache_state=cache_state,
@@ -124,6 +129,9 @@ def run_agent(
         if not parsed:
             turn_record["status"] = "unparseable_json"
             turns.append(turn_record)
+            # Keep the reply in the transcript: its tokens must be present when the trajectory is re-encoded, otherwise
+            # the span is dropped from the policy-gradient loss and malformed output can never be penalised.
+            messages.append({"role": "assistant", "content": reply})
             break
 
         # Check for final answer

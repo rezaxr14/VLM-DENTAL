@@ -82,6 +82,11 @@ Each training script prints a `[CONFIG]` line with the effective settings.
 - **GRPO precision was implicit:** 4-bit loading came from `configs/default.yaml` and the non-4-bit GPU path loaded fp16. GRPO now has an explicit `--precision {bf16,qlora}` (bf16 means bf16).
 - **Silent precision switches removed** (bf16→fp16 on GPUs without native BF16 is now a hint; QLoRA requested on TPU is an error instead of a switch).
 - **Projector LoRA was a silent no-op:** the targets `merger.mlp.0/2` do not exist in current Qwen3.5 (`merger.linear_fc1/2`), so nothing was adapted although the log said it was. Targets are now discovered from the model and the run stops if none are found. The vision guard also failed to find the tower on a PEFT-wrapped model and did nothing; it now locates it by name. A duplicate copy of the guard in `train_sft.py` was removed.
+- **Tool-image matching ignored malformed-but-recoverable JSON.** About 1.5% of assistant turns are wrapped in code fences or miss the final brace; the dataset used a strict parser, so their tool calls were lost and the images fell back to a default crop (63 images across the four with-tools files). It now uses the agent loop's own tolerant parser; none are unresolved.
+- **Malformed assistant turns were training targets.** In the with-tools files 231 assistant turns (empty, truncated or mis-nested JSON, each answered by an "Error: ... not valid JSON" message) sit in 150 of 1,847 traces. They are now context-only (`--mask-malformed-turns`, default on, count printed at startup).
+- **With-tools GRPO could not learn:** rollouts were greedy (temperature 0), so every rollout of an image was identical and every advantage zero. Rollouts now sample at an explicit `--temperature` (default 0.7). An unparseable reply was also left out of the transcript, so its tokens never reached the loss (and a run whose first reply was unparseable crashed); it is kept now.
+- **GRPO/sweep/eval launchers crashed at startup** on `cfg.data.data_dir` (no such attribute); fixed.
+- **Evaluating a GRPO checkpoint** needs the `grpo_policy` adapter inside the checkpoint folder, not the folder itself; evaluation now resolves it.
 - **Unbounded crop cache** (native-resolution images held in host RAM) replaced by a bounded LRU of finished views.
 
 ## 7. Open and deferred
@@ -90,6 +95,7 @@ Each training script prints a `[CONFIG]` line with the effective settings.
 - GRPO `generate()` still produces dynamically shaped graphs on XLA; static update shapes do not remove decode recompiles.
 - A single 16,384 length excludes the longest (multi-finding) traces; measure with `scripts/census_vision_slots.py`. Alternatives: a larger length or tiered graphs.
 - Evaluation at original size: only `evaluate_models.py` has the switch; `evaluation/ablations.py`, `sweep.py`, `batch_runner.py` and `rewards/judge.py` call `run_agent` natively. A canonical-trained checkpoint evaluated at original size sees a different input distribution than it trained on; decide whether to report both.
+- **Context policy mismatch:** the trace generator replaced older tool images with an "[Earlier tool result omitted]" marker when the context grew long, and SFT trains on that. `run_agent` (GRPO rollouts and evaluation) keeps every image, so long episodes are out of distribution and use more memory. Aligning them means applying the same rule in `run_agent` and handling the resulting prompt/label alignment in GRPO; not done yet.
 - Optional ablation: letterbox vs plain stretch.
 
 ## 8. For the paper

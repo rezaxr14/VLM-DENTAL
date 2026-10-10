@@ -126,6 +126,13 @@ def parse_args():
         help="Numerical precision: bf16 (TPU/Ampere+), fp16, or qlora (4-bit NF4, GPU only)",
     )
     parser.add_argument(
+        "--mask-malformed-turns",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Keep assistant turns that the agent loop rejected (empty, truncated or mis-nested JSON, each followed by an "
+             "'Error: ...' message) as context but exclude them from the loss. --no-mask-malformed-turns trains on them.",
+    )
+    parser.add_argument(
         "--lora-linear-attn",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -856,6 +863,7 @@ def run_training(index: int, args: argparse.Namespace):
         canonical_resize=canonical_resize,
         pad_vision_to_slots=pad_vision_to_slots,
         slot_budget=slot_budget,
+        mask_malformed_turns=args.mask_malformed_turns,
     )
     val_size = max(int(len(full_dataset) * 0.05), 1) if len(full_dataset) >= 20 else 0
     train_size = len(full_dataset) - val_size

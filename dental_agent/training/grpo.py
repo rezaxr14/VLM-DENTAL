@@ -302,8 +302,9 @@ def collect_grpo_group_batched_with_tools(
     max_tool_calls: int = 50,
     canonical_resize: bool = False,
     compute_old_log_probs: bool = True,
+    temperature: float = 0.7,
 ) -> tuple[list[dict], list[float], list[torch.Tensor], list[torch.Tensor]]:
-    """Sample K candidate multi-turn trajectories with workstation tools (Track A)."""
+    """Sample K candidate multi-turn trajectories with workstation tools (Track A), at ``temperature`` (> 0)."""
     trajectories, rewards, old_log_probs_list, masks_list = [], [], [], []
     model.eval()
 
@@ -318,6 +319,7 @@ def collect_grpo_group_batched_with_tools(
             max_tool_calls=max_tool_calls,
             verbose=False,
             canonical_resize=canonical_resize,
+            temperature=temperature,
         )
         traj_dict = traj.to_dict() if hasattr(traj, "to_dict") else traj
         reward, _ = combine_reward(traj_dict, ground_truth, max_tool_calls=max_tool_calls)
@@ -354,6 +356,7 @@ def collect_grpo_group(
     track: str = "with_tools",
     canonical_resize: bool = False,
     compute_old_log_probs: bool = True,
+    temperature: float = 0.7,
 ) -> tuple[list[dict], list[float], list[torch.Tensor], list[torch.Tensor]]:
     """Unified group rollout entrypoint supporting Track A and Track B."""
     if track == "no_tools":
@@ -366,6 +369,7 @@ def collect_grpo_group(
             group_size=group_size,
             canonical_resize=canonical_resize,
             compute_old_log_probs=compute_old_log_probs,
+            temperature=temperature,
         )
     else:
         if registry is None:
@@ -381,6 +385,7 @@ def collect_grpo_group(
             max_tool_calls=max_tool_calls,
             canonical_resize=canonical_resize,
             compute_old_log_probs=compute_old_log_probs,
+            temperature=temperature,
         )
 
 
@@ -505,6 +510,7 @@ def grpo_step(
     rows_per_forward: int = 1,
     spmd_mesh: Any = None,
     use_spmd: bool = False,
+    temperature: float = 0.7,
 ) -> tuple[dict[str, Any], float]:
     """One GRPO update cycle over on-policy sampled groups.
 
@@ -556,6 +562,7 @@ def grpo_step(
             track=track,
             canonical_resize=canonical_resize,
             compute_old_log_probs=train_collator is None,
+            temperature=temperature,
         )
         advantages, current_baseline = compute_group_advantages(
             rewards=rewards,
@@ -784,6 +791,7 @@ def train_grpo(
     num_cores: int = 1,
     use_fsdp: bool = True,
     canonical_resize: bool = False,
+    temperature: float = 0.7,
     use_spmd: bool = False,
     max_seq_len: int | None = None,
     pad_vision_to_slots: bool = False,
@@ -906,6 +914,7 @@ def train_grpo(
             rows_per_forward=rows_per_forward,
             spmd_mesh=spmd_mesh,
             use_spmd=bool(use_spmd and is_tpu),
+            temperature=temperature,
         )
         log_grpo_step(stats, extra={"step": step, "image_id": int(img_id)})
         print(f"[GRPO Step {step}/{total_steps}] mean_reward={stats['mean_reward']:.3f} kl={stats['kl_divergence']:.4f}")

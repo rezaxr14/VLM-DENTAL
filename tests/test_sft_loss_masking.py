@@ -160,3 +160,32 @@ def test_zero_supervision_guard_raises():
         import os
         if os.path.exists(temp_path):
             os.remove(temp_path)
+
+
+def test_malformed_assistant_turns_are_context_only():
+    from dental_agent.training.sft import malformed_assistant_turns
+
+    tokenizer = MockTokenizer()
+    system = [1001, 2002, 3001, 4001, 1002]
+    user = [1001, 2003, 3001, 4003, 1002]
+    asst_bad = [1001, 2001, 3001, 7001, 7002, 1002]   # e.g. empty / mis-nested JSON the agent loop rejected
+    error = [1001, 2003, 3001, 8001, 1002]            # "Error: Your output was not valid JSON ..."
+    asst_ok = [1001, 2001, 3001, 9001, 9002, 1002]
+    ids = torch.tensor([system + user + asst_bad + error + asst_ok])
+
+    labels = build_conversational_labels(ids, tokenizer, skip_assistant_turns={0})
+    bad_start = len(system) + len(user)
+    ok_start = bad_start + len(asst_bad) + len(error)
+    assert (labels[0, bad_start:bad_start + len(asst_bad)] == -100).all()            # rejected turn: not a target
+    assert (labels[0, ok_start + 3:ok_start + len(asst_ok)] == ids[0, ok_start + 3:ok_start + len(asst_ok)]).all()  # corrected turn: trained
+    assert (build_conversational_labels(ids, tokenizer)[0, bad_start + 3:bad_start + len(asst_bad)] != -100).all()  # default unchanged
+
+    msgs = [
+        {"role": "system", "content": "s"},
+        {"role": "assistant", "content": ""},                                                          # empty
+        {"role": "user", "content": "Error: Your output was not valid JSON"},
+        {"role": "assistant", "content": '```json\n{"thought": "t", "tool_calls": []}\n```'},          # fenced: parser accepts
+        {"role": "assistant", "content": '{"thought": "x", "tool_calls": [{"tool": "final_answer", "args": []}}]'},  # mis-nested
+        {"role": "assistant", "content": '{"thought": "d", "final_answer": []}'},
+    ]
+    assert malformed_assistant_turns(msgs) == {0, 2}

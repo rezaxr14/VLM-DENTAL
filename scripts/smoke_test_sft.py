@@ -36,8 +36,11 @@ TEMPLATE = (
 )
 
 
-def build_tiny_model(traces: list[dict], out_dir: Path) -> None:
-    """Tiny hybrid (linear + full attention) Qwen3.5 with a real ViT, plus a BPE tokenizer trained on the traces."""
+def build_tiny_model(traces: list[dict], out_dir: Path, four_bit_friendly: bool = False) -> None:
+    """Tiny hybrid (linear + full attention) Qwen3.5 with a real ViT, plus a BPE tokenizer trained on the traces.
+
+    ``four_bit_friendly`` makes every Linear output size a multiple of 64 (the Gated-DeltaNet decay/write gates have
+    one output per value head), which bitsandbytes' CPU 4-bit kernel requires; it costs memory, so it is opt-in."""
     import torch
     from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
     from transformers import PreTrainedTokenizerFast, Qwen3_5ForConditionalGeneration, Qwen3VLProcessor
@@ -71,7 +74,7 @@ def build_tiny_model(traces: list[dict], out_dir: Path) -> None:
 
     text_cfg = Qwen3_5TextConfig(
         vocab_size=len(fast), hidden_size=64, intermediate_size=128, num_hidden_layers=4, num_attention_heads=2,
-        num_key_value_heads=1, head_dim=32, linear_num_key_heads=2, linear_num_value_heads=4, linear_key_head_dim=16,
+        num_key_value_heads=1, head_dim=32, linear_num_key_heads=2, linear_num_value_heads=64 if four_bit_friendly else 4, linear_key_head_dim=16,
         linear_value_head_dim=16, linear_conv_kernel_dim=4, max_position_embeddings=32768,
         layer_types=["linear_attention", "linear_attention", "linear_attention", "full_attention"],
     )
@@ -142,7 +145,7 @@ def main() -> int:
     model_dir.mkdir(exist_ok=True)
     data_dir.mkdir(exist_ok=True)
     print(f"[SMOKE] building tiny Qwen3.5 + tokenizer in {model_dir} ...")
-    build_tiny_model(records, model_dir)
+    build_tiny_model(records, model_dir, four_bit_friendly="qlora" in passthrough)
     trace_path = data_dir / "smoke_traces.jsonl"
     trace_path.write_text("\n".join(json.dumps(r) for r in write_fake_images(chosen, data_dir)) + "\n", encoding="utf-8")
 

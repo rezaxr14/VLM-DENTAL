@@ -18,7 +18,7 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg = load_config(args.config)
-    images_df, annots_df, _ = load_dentex_dataset(cfg.data.data_dir)
+    images_df, annots_df, _ = load_dentex_dataset(cfg.data_dir)
 
     metrics = evaluate_dataset(
         images_df=images_df,

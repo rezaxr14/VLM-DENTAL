@@ -61,3 +61,19 @@ def test_pad_vision_to_slots_is_rejected_off_tpu(tmp_path):
     )
     assert proc.returncode != 0
     assert "TPU-only" in proc.stdout + proc.stderr
+
+
+def test_run_grpo_with_tools_runs_end_to_end_on_cpu(tmp_path):
+    """Regression: launcher crash on cfg.data.data_dir, greedy (identical) rollouts, and unparseable replies being dropped
+    from the transcript (all spans lost -> 'Zero assistant completion tokens')."""
+    traces = tmp_path / "traces.jsonl"
+    traces.write_text("\n".join(json.dumps(_trace(i)) for i in range(3)) + "\n")
+    work = tmp_path / "grpo"
+    proc = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "smoke_test_grpo.py"), "--traces", str(traces), "--track", "with_tools",
+         "--work-dir", str(work), "--", "--canonical-resize"],
+        capture_output=True, text=True, timeout=900,
+    )
+    tail = (proc.stdout + proc.stderr)[-2500:]
+    assert proc.returncode == 0, tail
+    assert "[SMOKE-GRPO] PASSED" in proc.stdout, tail

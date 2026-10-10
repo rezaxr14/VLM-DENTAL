@@ -158,6 +158,12 @@ def load_eval_model(model_id: str, adapter_path: str | None, device, dtype, cond
 
     # Attach LoRA adapter for SFT / GRPO conditions
     if adapter_path and condition.startswith(("sft_", "grpo_")):
+        # A GRPO checkpoint folder holds two adapters: 'grpo_policy' (trained) and 'reference' (frozen SFT copy) and has
+        # no adapter at its root. Evaluating a GRPO checkpoint always means the trained policy.
+        root = Path(adapter_path)
+        if not (root / "adapter_config.json").exists() and (root / "grpo_policy" / "adapter_config.json").exists():
+            adapter_path = str(root / "grpo_policy")
+            print("[MODEL] GRPO checkpoint given: using its trained 'grpo_policy' adapter (not 'reference').")
         print(f"[MODEL] Attaching LoRA adapter from: {adapter_path}")
         from peft import PeftModel
         model = PeftModel.from_pretrained(model, adapter_path)

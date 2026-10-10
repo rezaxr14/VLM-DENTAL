@@ -25,6 +25,7 @@ from tqdm import tqdm
 
 from dental_agent.config import ProjectConfig, TrainingConfig
 from dental_agent.model.backbone import load_model, apply_lora, safe_process_vision_info
+from dental_agent.agent.parsing import parse_agent_json
 from dental_agent.utils.canonical import (
     CANONICAL_SIZES,
     PATCH_FEATURE_DIM,
@@ -134,15 +135,36 @@ def resolve_image_path(sample: dict[str, Any], data_dir: str | Path = "data") ->
     return None
 
 
+def malformed_assistant_turns(messages: list[dict[str, Any]]) -> set[int]:
+    """Indices (among assistant messages, in order) whose content the agent's own parser rejects.
+
+    These are turns the agent loop answered with an "Error: ... not valid JSON" message (empty, truncated or
+    mis-nested output). They stay in the context but must not be training targets.
+    """
+    bad: set[int] = set()
+    k = 0
+    for msg in messages:
+        if msg.get("role") != "assistant":
+            continue
+        content = msg.get("content")
+        text = content if isinstance(content, str) else json.dumps(content)
+        if parse_agent_json(text) is None:
+            bad.add(k)
+        k += 1
+    return bad
+
+
 def build_conversational_labels(
     input_ids: torch.Tensor,
     tokenizer: Any,
+    skip_assistant_turns: set[int] | None = None,
 ) -> torch.Tensor:
     """Build assistant-only loss mask for conversational Qwen-VL sequences.
 
     Tokens between `<|im_start|>assistant\n` and `<|im_end|>` retain their token IDs.
     All system prompts, user queries, tool return observations, and padding tokens
-    are masked with `labels = -100`.
+    are masked with `labels = -100`. Assistant turns whose (0-based, in order) index is in
+    ``skip_assistant_turns`` are masked too (they remain visible as context).
     """
     labels = torch.full_like(input_ids, -100)
     flat_ids = input_ids[0].tolist() if input_ids.dim() == 2 else input_ids.tolist()
@@ -180,6 +202,7 @@ def build_conversational_labels(
     candidate_patterns = [p for p in [assistant_token_ids, contextual_asst_ids] if p]
 
     i = 0
+    asst_idx = -1
     seq_len = len(flat_ids)
     while i < seq_len:
         # Match <|im_start|> followed by assistant token pattern
@@ -205,7 +228,10 @@ def build_conversational_labels(
                 if end_idx < seq_len:
                     end_idx += 1
 
-                if input_ids.dim() == 2:
+                asst_idx += 1
+                if skip_assistant_turns and asst_idx in skip_assistant_turns:
+                    pass  # malformed turn: context only
+                elif input_ids.dim() == 2:
                     labels[0, start_idx:end_idx] = input_ids[0, start_idx:end_idx]
                 else:
                     labels[start_idx:end_idx] = input_ids[start_idx:end_idx]
@@ -498,6 +524,7 @@ class DentalSFTDataset(Dataset):
         pad_vision_to_slots: bool = False,
         slot_budget: dict[str, int] | None = None,
         view_cache_max_items: int = 256,
+        mask_malformed_turns: bool = False,
     ) -> None:
         self.processor = processor
         self.track = track
@@ -509,6 +536,7 @@ class DentalSFTDataset(Dataset):
         # Only affects length filtering: with static slot padding a sequence occupies
         # (text + real vision) - real vision + static vision tokens = text + static vision tokens.
         self.pad_vision_to_slots = pad_vision_to_slots
+        self.mask_malformed_turns = mask_malformed_turns
         self._static_vision_tokens = slot_totals(slot_budget if slot_budget is not None else SLOT_BUDGET)["tokens"]
         self.records: list[dict[str, Any]] = []
         self.registry = ToolRegistry.create_default()
@@ -621,6 +649,15 @@ class DentalSFTDataset(Dataset):
         else:
             self.records = raw_records
 
+        # Report (and, with mask_malformed_turns, exclude from the loss) assistant turns the agent loop rejected.
+        per_trace = [len(malformed_assistant_turns(r.get("messages") or [])) for r in self.records]
+        self.malformed_turn_count = sum(per_trace)
+        if self.malformed_turn_count:
+            print(
+                f"[DATASET] {self.malformed_turn_count} malformed assistant turns in {sum(1 for n in per_trace if n)} of "
+                f"{len(self.records)} traces ({'masked from the loss' if self.mask_malformed_turns else 'TRAINED ON as targets'})."
+            )
+
     @staticmethod
     def _manifest_lookup(
         rec: dict[str, Any],
@@ -700,8 +737,10 @@ class DentalSFTDataset(Dataset):
             if role == "assistant":
                 last_assistant_tool_calls = []
                 try:
+                    # Same tolerant parser the agent loop used when the trace was generated (accepts ```json fences,
+                    # a missing closing brace and the legacy single "tool"/"args" form).
                     if isinstance(content, str):
-                        parsed = json.loads(content)
+                        parsed = parse_agent_json(content)
                     elif isinstance(content, dict):
                         parsed = content
                     else:
@@ -846,7 +885,8 @@ class DentalSFTDataset(Dataset):
         )
 
         # Apply conversational assistant-only loss masking
-        labels = build_conversational_labels(enc["input_ids"], self.processor.tokenizer)
+        skip = malformed_assistant_turns(sanitized_messages) if self.mask_malformed_turns else None
+        labels = build_conversational_labels(enc["input_ids"], self.processor.tokenizer, skip_assistant_turns=skip)
         enc["labels"] = labels
 
         # Defensive assertion (Claude Point 4): guard against zero supervision

@@ -74,6 +74,8 @@ def parse_args():
         default=True,
         help="Enable PyTorch/XLA FSDP parameter sharding across TPU cores to fit 9B BF16 model within 16 GB HBM (default: True on multi-core TPU)",
     )
+    parser.add_argument("--temperature", type=float, default=0.7,
+                        help="Sampling temperature of the GRPO rollouts (default 0.7; must be > 0).")
     parser.add_argument("--precision", type=str, default="bf16", choices=["bf16", "qlora"],
                         help="bf16 = LoRA on bf16 weights; qlora = LoRA on 4-bit weights (CUDA only). Never chosen for you.")
     parser.add_argument("--model-id", type=str, default=None,
@@ -100,6 +102,8 @@ def parse_args():
 
 def main():
     args = parse_args()
+    if args.temperature <= 0:
+        raise SystemExit("--temperature must be > 0 (greedy rollouts give identical samples and zero advantages).")
     if args.pad_vision_to_slots and not args.canonical_resize:
         raise SystemExit("--pad-vision-to-slots requires --canonical-resize.")
     if args.spmd:
@@ -132,7 +136,7 @@ def main():
     print("======================================================================")
 
     # Load dataset
-    images_df, annots_df, categories_df = load_dentex_dataset(cfg.data.data_dir)
+    images_df, annots_df, categories_df = load_dentex_dataset(cfg.data_dir)
 
     results_table = []
 
@@ -175,6 +179,7 @@ def main():
             num_cores=args.num_cores,
             use_fsdp=args.fsdp,
             canonical_resize=args.canonical_resize,
+            temperature=args.temperature,
             use_spmd=args.spmd,
             max_seq_len=args.max_seq_len,
             pad_vision_to_slots=args.pad_vision_to_slots,

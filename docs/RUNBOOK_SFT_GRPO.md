@@ -32,7 +32,11 @@ python scripts/select_longest_traces.py --traces data/traces/train_cot_traces_de
 ```
 python scripts/smoke_test_sft.py --traces data/traces/train_cot_traces_dentex.jsonl -- --canonical-resize --precision qlora
 ```
-Expect `[SMOKE] PASSED`. Stop and report the traceback if it fails.
+Expect `[SMOKE] PASSED`. Stop and report the traceback if it fails. The same check exists for GRPO and evaluation (4-bit, as on a 24 GB card):
+```
+python scripts/smoke_test_grpo.py --traces data/traces/train_cot_traces_dentex.jsonl --track with_tools --eval-precision qlora -- --canonical-resize
+```
+Expect `[SMOKE-GRPO] PASSED`.
 
 **A5. Memory probe at 16384** (a few steps on the longest traces; 4090: `--precision qlora`, A100: `--precision bf16`)
 ```
@@ -50,22 +54,22 @@ Watch the progress bar: `peak_gib` is the highest memory PyTorch has allocated s
 
 **A7. Full SFT** (use the same `--precision` and `--max-seq-len` as A5; other hyperparameters as set in the notebook)
 ```
-python scripts/train_sft.py --track with_tools --stage dentex_alone --canonical-resize --precision qlora --lora-linear-attn --max-seq-len 16384 --epochs 3 --batch-size 1 --gradient-accumulation-steps 8 --eval-strategy epoch --save-strategy epoch --hf-repo <repo> --push-every-steps 50
+python scripts/train_sft.py --track with_tools --stage dentex_alone --canonical-resize --precision qlora --lora-linear-attn --mask-malformed-turns --max-seq-len 16384 --epochs 3 --batch-size 1 --gradient-accumulation-steps 8 --eval-strategy epoch --save-strategy epoch --hf-repo <repo> --push-every-steps 50
 ```
 The adapter is saved to `data/models/qwen3_5_9b_sft_with_tools_dentex_alone_<precision>` (for example `..._qlora`).
 
 **A8. GRPO** (same `--canonical-resize` and `--precision` as SFT). GRPO does not look for the precision-suffixed folder, so pass the SFT adapter explicitly:
 ```
-python scripts/run_grpo.py --track with_tools --sft-stage dentex_alone --sft-model-dir data/models/qwen3_5_9b_sft_with_tools_dentex_alone_qlora --dataset dentex --group-size 4 --epochs 2 --lr 5e-6 --kl-beta 0.04 --clip-eps 0.2 --canonical-resize --precision qlora --hf-repo <repo> --push-every-steps 25
+python scripts/run_grpo.py --track with_tools --sft-stage dentex_alone --sft-model-dir data/models/qwen3_5_9b_sft_with_tools_dentex_alone_qlora --dataset dentex --group-size 4 --epochs 2 --lr 5e-6 --kl-beta 0.04 --clip-eps 0.2 --temperature 0.7 --canonical-resize --precision qlora --hf-repo <repo> --push-every-steps 25
 ```
 GRPO on a GPU has no sequence-length ceiling: rollout length is set by the agent loop, and memory is dominated by generation. Watch `nvidia-smi` through the first step. If it runs out of memory, report the step it reached.
 
 **A9. Evaluate at original size** (no `--canonical-resize`, whichever way the model was trained)
 ```
 python scripts/evaluate_models.py --condition sft_with_tools --adapter-path data/models/qwen3_5_9b_sft_with_tools_dentex_alone_qlora --dataset dentex --split test --precision qlora
-python scripts/evaluate_models.py --condition grpo_with_tools --adapter-path <grpo adapter dir> --dataset dentex --split test --precision qlora
+python scripts/evaluate_models.py --condition grpo_with_tools --adapter-path data/models/qwen3_5_9b_grpo_with_tools_k4_dentex_alone/grpo-with_tools-final --dataset dentex --split test --precision qlora
 ```
-Conditions: `base_no_tools`, `base_with_tools`, `sft_no_tools`, `sft_with_tools`, `grpo_no_tools`, `grpo_with_tools`, or `all`.
+A GRPO checkpoint folder holds the trained `grpo_policy` and a frozen `reference` adapter; evaluation uses `grpo_policy` automatically when you pass the checkpoint folder. Conditions: `base_no_tools`, `base_with_tools`, `sft_no_tools`, `sft_with_tools`, `grpo_no_tools`, `grpo_with_tools`, or `all`.
 
 ---
 
@@ -110,19 +114,44 @@ The same `--max-seq-len`, `--vision-slots`, `--triangular-shim` and `--lora-line
 
 **B6. Full SFT**
 ```
-python scripts/train_sft.py --track with_tools --stage dentex_alone --spmd --fsdp --num-cores 8 --canonical-resize --pad-vision-to-slots --vision-slots 5 10 4 --triangular-shim --lora-linear-attn --max-seq-len 16384 --epochs 3 --batch-size 1 --eval-strategy epoch --save-strategy epoch --hf-repo <repo> --push-every-steps 50
+python scripts/train_sft.py --track with_tools --stage dentex_alone --spmd --fsdp --num-cores 8 --canonical-resize --pad-vision-to-slots --vision-slots 5 10 4 --triangular-shim --lora-linear-attn --mask-malformed-turns --max-seq-len 16384 --epochs 3 --batch-size 1 --eval-strategy epoch --save-strategy epoch --hf-repo <repo> --push-every-steps 50
 ```
 `--gradient-accumulation-steps` defaults to 1 on multi-core TPU (effective batch 8). Output: `data/models/qwen3_5_9b_sft_with_tools_dentex_alone_bf16`.
 
 **B7. GRPO** (same view and shape flags as B6)
 ```
-python scripts/run_grpo.py --track with_tools --sft-stage dentex_alone --sft-model-dir data/models/qwen3_5_9b_sft_with_tools_dentex_alone_bf16 --dataset dentex --num-cores 8 --spmd --fsdp --canonical-resize --pad-vision-to-slots --max-seq-len 16384 --vision-slots 5 10 4 --triangular-shim --group-size 4 --epochs 2 --lr 5e-6 --kl-beta 0.04 --clip-eps 0.2 --hf-repo <repo> --push-every-steps 25
+python scripts/run_grpo.py --track with_tools --sft-stage dentex_alone --sft-model-dir data/models/qwen3_5_9b_sft_with_tools_dentex_alone_bf16 --dataset dentex --num-cores 8 --spmd --fsdp --canonical-resize --pad-vision-to-slots --max-seq-len 16384 --vision-slots 5 10 4 --triangular-shim --group-size 4 --epochs 2 --lr 5e-6 --kl-beta 0.04 --clip-eps 0.2 --temperature 0.7 --hf-repo <repo> --push-every-steps 25
 ```
 The policy update runs at the same static shapes as SFT. Rollout generation does not: its shapes still vary and will recompile on XLA (see `docs/CANONICAL_VISION_AND_TPU_PIPELINE.md` section 7). Rollouts longer than `--max-seq-len` are excluded from the update and counted.
 
 **B8. Evaluate** on a GPU or CPU machine, at original size, as in A9.
 
 ---
+
+## Section C. Troubleshooting
+
+**Both paths**
+- `[DATASET MASK] ... filtered out N overlength traces` is larger than expected, or a warning says the manifest was ignored: the manifest was measured with a different `--canonical-resize` setting. Re-run `compute_exact_trace_lengths.py` with the same setting as training.
+- `[DATASET] N malformed assistant turns ... masked from the loss`: expected. Those turns (empty, truncated or mis-nested JSON that the agent loop rejected) stay as context and are not training targets. `--no-mask-malformed-turns` trains on them.
+- A `[TOOL IMAGE]` warning means an image had no matching tool call and a default crop was rendered. It should not appear on the current traces; send the warning text if it does.
+- GRPO reward is flat and `kl` stays 0.0000 for many steps: check that `--temperature` is above 0 (rollouts of one image must differ) and that the SFT adapter was found (the log prints `[SFT-REF] ...`). With a fresh adapter an early `kl` of 0.0000 is normal.
+- Any crash: run the matching smoke test (A4) on the same machine first; it separates library-version problems from data problems.
+
+**GPU path**
+- Out of memory in the probe (A5): lower the ceiling (A6), confirm `--precision qlora` on a 24 GB card, then lower `--lora-r`. `--no-lora-linear-attn` frees only about 250 MiB; it also removes the Gated-DeltaNet adapters, so use it only to compare.
+- Very slow steps and a log line that `chunk_gated_delta_rule` falls back to a PyTorch implementation: `flash-linear-attention` is not installed (or not importable). Install it from `requirements-gpu.txt`; on Windows use WSL or Linux.
+- `causal-conv1d` fails to build: it is optional, skip it.
+- bitsandbytes CUDA errors: run `python -m bitsandbytes`, which prints what it found, and match the installed CUDA/PyTorch build.
+- Loss is `nan`: do not use `--precision fp16`; use `bf16` (A100) or `qlora` (4090, bf16 compute).
+- GRPO runs out of memory during rollouts: lower `--group-size` (the no-tools track generates the whole group in one batch). The with-tools track rolls out sequentially, so its peak is the longest single rollout.
+- Rollouts longer than the training contexts: the agent loop keeps every tool image in the context, whereas the SFT traces replaced older tool images with an "[Earlier tool result omitted]" marker once the context got long. Very long GRPO or evaluation episodes are therefore out of distribution and use more memory than any training example. This is an open issue (see `docs/CANONICAL_VISION_AND_TPU_PIPELINE.md` section 7).
+
+**TPU path**
+- `RESOURCE_EXHAUSTED` in warmup: do not reduce the core count. Compare `--triangular-shim` with `--no-triangular-shim`, then try a smaller `--vision-slots` if the census says every trace still fits, then a shorter `--max-seq-len` only as a last resort (it drops the longest traces).
+- Host RAM fills up: `--spmd` must be on (it is the default). `--no-spmd` loads a full model copy per process.
+- Every step prints a long compilation pause: shapes are varying. Check that warmup and training use identical `--max-seq-len`, `--vision-slots`, `--triangular-shim` and `--lora-linear-attn`, and that `--canonical-resize --pad-vision-to-slots` are both set. GRPO rollout generation is expected to recompile (open issue).
+- `pad_vision_to_slots: trace uses N FULL images but the static budget is M`: a trace needs more images than `--vision-slots`; the census (B3) lists them. Raise the slot budget.
+- `Slot-padded sequence ... exceeds target length`: text plus the static vision tokens does not fit `--max-seq-len`; B3 shows how many traces fit each length.
 
 ## Appendix: where the Gated-DeltaNet layers are
 

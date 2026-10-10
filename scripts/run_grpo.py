@@ -165,6 +165,13 @@ def main() -> None:
         help="Enable PyTorch/XLA FSDP parameter sharding across TPU cores to fit 9B BF16 model within 16 GB HBM (default: True on multi-core TPU)",
     )
     parser.add_argument(
+        "--temperature",
+        type=float,
+        default=0.7,
+        help="Sampling temperature of the GRPO rollouts (default 0.7). Must be > 0: greedy rollouts of the same image are "
+             "identical, so every advantage would be zero.",
+    )
+    parser.add_argument(
         "--precision",
         type=str,
         default="bf16",
@@ -266,6 +273,8 @@ def run_worker(index: int, args: argparse.Namespace):
     except Exception:
         is_master = True
 
+    if args.temperature <= 0:
+        raise SystemExit("--temperature must be > 0 (greedy rollouts give identical samples and zero advantages).")
     if args.precision == "qlora" and is_tpu:
         raise SystemExit("--precision qlora is not supported on TPU/XLA (bitsandbytes is CUDA-only). Use --precision bf16.")
     if args.pad_vision_to_slots and not is_tpu:
@@ -309,9 +318,9 @@ def run_worker(index: int, args: argparse.Namespace):
 
     dataset_name = args.dataset.strip().lower()
     if dataset_name == "tufts":
-        images_df, annots_df, categories_df = load_tufts_dataset(cfg.data.data_dir)
+        images_df, annots_df, categories_df = load_tufts_dataset(cfg.data_dir)
     else:
-        images_df, annots_df, categories_df = load_dentex_dataset(cfg.data.data_dir)
+        images_df, annots_df, categories_df = load_dentex_dataset(cfg.data_dir)
 
     # Legacy xmp.spawn only: each process owns a shard of the images. SPMD is one process driving every core.
     if is_tpu and args.num_cores > 1 and not args.spmd:
@@ -350,6 +359,7 @@ def run_worker(index: int, args: argparse.Namespace):
         num_cores=args.num_cores,
         use_fsdp=args.fsdp,
         canonical_resize=args.canonical_resize,
+        temperature=args.temperature,
         use_spmd=args.spmd,
         max_seq_len=args.max_seq_len,
         pad_vision_to_slots=args.pad_vision_to_slots,

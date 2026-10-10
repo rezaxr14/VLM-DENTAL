@@ -378,3 +378,38 @@ def test_custom_slot_budget_changes_static_shapes_consistently():
         coll([_example(3, 0, 0)])
     with pytest.raises(ValueError):
         C.parse_slot_budget(0, 1, 1)
+
+
+def test_fenced_and_unclosed_assistant_json_still_renders_distinct_crops(tmp_path):
+    """Assistant JSON wrapped in ```json fences, or missing its final brace, used to lose its tool calls entirely."""
+    native = Image.new("RGB", (1200, 600), (0, 0, 0))
+    colors = [(255, 0, 0), (0, 255, 0)]
+    boxes = [(100, 100, 60, 60), (800, 300, 60, 60)]
+    for col, (x, y, w, h) in zip(colors, boxes):
+        native.paste(col, (x, y, x + w, y + h))
+    p = tmp_path / "s.png"
+    native.save(p)
+    calls = [{"tool": "zoom_crop", "args": {"bbox": [float(x), float(y), float(w), float(h)], "padding_frac": 0.0}} for (x, y, w, h) in boxes]
+    body = json.dumps({"thought": "t", "tool_calls": calls})
+    for variant in ("```json\n" + body + "\n```", body[:-1]):   # fenced / closing brace missing
+        rec = {
+            "image_id": 5, "image_path": str(p),
+            "messages": [
+                {"role": "system", "content": "s"},
+                {"role": "user", "content": [{"type": "image", "image": "<Image>"}, {"type": "text", "text": "Analyze."}]},
+                {"role": "assistant", "content": variant},
+                {"role": "user", "content": [
+                    {"type": "image", "image": "<Image>"}, {"type": "text", "text": "Result of zoom_crop:"},
+                    {"type": "image", "image": "<Image>"}, {"type": "text", "text": "Result of zoom_crop:"}]},
+                {"role": "assistant", "content": json.dumps({"thought": "d", "final_answer": []})},
+            ],
+            "turns": [], "final_answer": [],
+        }
+        trace = tmp_path / "t.jsonl"
+        trace.write_text(json.dumps(rec) + "\n")
+        proc = _RecordingProcessor()
+        ds = DentalSFTDataset(trace, processor=proc, data_dir=tmp_path, canonical_resize=True)
+        ds[0]
+        centres = [im.getpixel((im.width // 2, im.height // 2)) for im in proc.seen_images[1:]]
+        assert centres == colors, variant[:20]
+        assert ds.unresolved_tool_images == 0
