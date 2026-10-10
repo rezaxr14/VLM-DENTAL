@@ -29,7 +29,7 @@ from dental_agent.config import ProjectConfig, TrainingConfig
 from dental_agent.model.backbone import load_model, apply_lora, safe_process_vision_info
 from dental_agent.model.checkpoints import save_checkpoint
 from dental_agent.agent.loop import run_agent, run_agent_no_tools, AgentTrajectory
-from dental_agent.agent.prompts import NO_TOOLS_SYSTEM_PROMPT, build_agent_system_prompt
+from dental_agent.agent.prompts import FIRST_USER_PROMPT, NO_TOOLS_SYSTEM_PROMPT, build_agent_system_prompt
 from dental_agent.agent.parsing import parse_agent_json
 from dental_agent.data.fdi_utils import row_to_fdi
 from dental_agent.rewards.composite import combine_reward
@@ -212,11 +212,7 @@ def collect_grpo_group_batched_no_tools(
             "role": "user",
             "content": [
                 {"type": "image", "image": base_image},
-                {
-                    "type": "text",
-                    "text": f"Analyze this panoramic X-ray (image_id={image_id}). "
-                    f"Identify any abnormal teeth and determine the diagnosis.",
-                },
+                {"type": "text", "text": FIRST_USER_PROMPT},
             ],
         },
     ]

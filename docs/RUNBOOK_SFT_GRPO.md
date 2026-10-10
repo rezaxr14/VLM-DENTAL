@@ -87,8 +87,9 @@ huggingface-cli login
 
 **B2. Measure trace lengths with canonical views** (once)
 ```
-python scripts/compute_exact_trace_lengths.py --canonical-resize --recompute
+python scripts/compute_exact_trace_lengths.py --canonical-resize --recompute --vision-slots 5 10 4
 ```
+The summary reports the GPU cost (real tokens) and the TPU cost (text plus the static vision tokens of `--vision-slots`) separately; the TPU one is what `--max-seq-len` is checked against on TPU.
 
 **B3. How many traces fit each static length, and does the slot budget cover them**
 ```
@@ -131,7 +132,7 @@ The policy update runs at the same static shapes as SFT. Rollout generation does
 ## Section C. Troubleshooting
 
 **Both paths**
-- `[DATASET MASK] ... filtered out N overlength traces` is larger than expected, or a warning says the manifest was ignored: the manifest was measured with a different `--canonical-resize` setting. Re-run `compute_exact_trace_lengths.py` with the same setting as training.
+- `[DATASET MASK] ... filtered out N overlength traces` is larger than expected, or a warning says the manifest was ignored: the manifest was measured with a different `--canonical-resize` setting. Re-run `compute_exact_trace_lengths.py` with the same setting as training. The summary header prints the image mode; DENTEX lengths several times larger than expected mean `--canonical-resize` was left off.
 - `[DATASET] N malformed assistant turns ... masked from the loss`: expected. Those turns (empty, truncated or mis-nested JSON that the agent loop rejected) stay as context and are not training targets. `--no-mask-malformed-turns` trains on them.
 - A `[TOOL IMAGE]` warning means an image had no matching tool call and a default crop was rendered. It should not appear on the current traces; send the warning text if it does.
 - GRPO reward is flat and `kl` stays 0.0000 for many steps: check that `--temperature` is above 0 (rollouts of one image must differ) and that the SFT adapter was found (the log prints `[SFT-REF] ...`). With a fresh adapter an early `kl` of 0.0000 is normal.

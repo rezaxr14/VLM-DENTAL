@@ -11,7 +11,7 @@ from PIL import Image
 from dental_agent.utils.canonical import family_for_tool, to_canonical
 import pandas as pd
 
-from dental_agent.agent.prompts import build_agent_system_prompt, NO_TOOLS_SYSTEM_PROMPT
+from dental_agent.agent.prompts import FIRST_USER_PROMPT, build_agent_system_prompt, NO_TOOLS_SYSTEM_PROMPT
 from dental_agent.agent.parsing import parse_agent_json
 from dental_agent.agent.tool_dispatch import execute_tool_call
 from dental_agent.model.inference import generate_agent_reply
@@ -80,11 +80,7 @@ def run_agent(
             "role": "user",
             "content": [
                 {"type": "image", "image": view_image},
-                {
-                    "type": "text",
-                    "text": f"Analyze this panoramic X-ray (image_id={image_id}). "
-                    f"Identify any abnormal teeth and determine the diagnosis.",
-                },
+                {"type": "text", "text": FIRST_USER_PROMPT},
             ],
         },
     ]
@@ -286,7 +282,7 @@ def run_agent_no_tools(
             "role": "user",
             "content": [
                 {"type": "image", "image": image},
-                {"type": "text", "text": f"Analyze this panoramic X-ray (image_id={image_id})."},
+                {"type": "text", "text": FIRST_USER_PROMPT},
             ],
         },
     ]

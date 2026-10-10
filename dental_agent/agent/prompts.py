@@ -24,6 +24,10 @@ no-tools prompt":
 
 from __future__ import annotations
 
+# First user message of every analysis episode. The SFT traces and trace generation use exactly this text (no image id),
+# so SFT, GRPO rollouts, evaluation and the XLA warmup must all use it too.
+FIRST_USER_PROMPT = "Analyze this panoramic X-ray. Identify any abnormal teeth and determine the diagnosis."
+
 
 def build_agent_system_prompt(
     tools_description: str,

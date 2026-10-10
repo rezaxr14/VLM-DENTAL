@@ -35,6 +35,7 @@ load_dotenv(repo_root / ".env")
 
 from transformers import AutoProcessor
 from dental_agent.training.sft import DentalSFTDataset
+from dental_agent.utils.canonical import SLOT_BUDGET, parse_slot_budget, slot_totals
 
 
 CANONICAL_CURRICULUM_FILES = [
@@ -69,6 +70,15 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Measure lengths with canonical-sized views (FULL/CROP/COMPARE), matching train_sft.py --canonical-resize. "
              "The manifest records the mode; DentalSFTDataset ignores a manifest whose mode differs from its own.",
+    )
+    parser.add_argument(
+        "--vision-slots",
+        type=int,
+        nargs=3,
+        metavar=("FULL", "CROP", "COMPARE"),
+        default=[SLOT_BUDGET["FULL"], SLOT_BUDGET["CROP"], SLOT_BUDGET["COMPARE"]],
+        help="Static slot budget of the TPU run (train_sft.py --vision-slots). Only used for the TPU cost report: "
+             "lengths are always measured with the real vision tokens (the GPU cost).",
     )
     parser.add_argument(
         "--data-dir",
@@ -108,6 +118,23 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+CEILINGS = (32768, 24576, 16384, 10240, 8192)
+
+
+def tpu_static_lengths(
+    lengths_by_file_and_id: Dict[str, int],
+    vision_tokens_by_file_and_id: Dict[str, int],
+    static_vision_tokens: int,
+) -> Dict[str, int]:
+    """TPU cost per trace: with --pad-vision-to-slots a sample is its text plus the FIXED static vision tokens, whatever
+    its real image count (same rule DentalSFTDataset applies when it filters). Traces without a vision count are skipped."""
+    return {
+        k: v - vision_tokens_by_file_and_id[k] + static_vision_tokens
+        for k, v in lengths_by_file_and_id.items()
+        if k in vision_tokens_by_file_and_id
+    }
+
+
 def save_manifest(
     out_path: Path,
     model_id: str,
@@ -116,6 +143,7 @@ def save_manifest(
     lengths_by_file_and_id: Dict[str, int],
     canonical_resize: bool = False,
     vision_tokens_by_file_and_id: Dict[str, int] | None = None,
+    slot_budget: Dict[str, int] | None = None,
 ) -> Dict[str, Any]:
     if not all_lengths:
         return {}
@@ -158,6 +186,32 @@ def save_manifest(
             "le_8192": int(np.sum(f_arr <= 8192)),
         }
 
+    # TPU cost (static slot padding) next to the GPU cost above (real tokens). Only meaningful with canonical views.
+    tpu_report: Dict[str, Any] = {}
+    budget = dict(slot_budget or SLOT_BUDGET)
+    if canonical_resize and vision_tokens_by_file_and_id:
+        static_tokens = int(slot_totals(budget)["tokens"])
+        tpu = tpu_static_lengths(lengths_by_file_and_id, vision_tokens_by_file_and_id, static_tokens)
+        if tpu:
+            t_arr = np.array(list(tpu.values()))
+            tpu_by_file = defaultdict(list)
+            for k, v in tpu.items():
+                tpu_by_file[k.split("::")[0]].append(v)
+            tpu_report = {
+                "vision_slots": budget,
+                "static_vision_tokens": static_tokens,
+                "stats_tpu_static": {
+                    "count": int(len(t_arr)), "min": int(t_arr.min()), "p50": int(np.percentile(t_arr, 50)),
+                    "p90": int(np.percentile(t_arr, 90)), "p99": int(np.percentile(t_arr, 99)), "max": int(t_arr.max()),
+                },
+                "compliance_tpu_static": {str(c): int(np.sum(t_arr <= c)) for c in CEILINGS},
+                "file_stats_tpu_static": {
+                    fn: {"count": len(v), "p50": int(np.percentile(v, 50)), "max": int(max(v)),
+                         "over_16384": int(sum(1 for x in v if x > 16384))}
+                    for fn, v in sorted(tpu_by_file.items())
+                },
+            }
+
     manifest = {
         "_meta": {
             "model_id": model_id,
@@ -166,6 +220,7 @@ def save_manifest(
             "stats": stats,
             "compliance": compliance,
             "file_stats": file_stats,
+            **tpu_report,
         },
         "canonical_resize": bool(canonical_resize),
         "lengths_by_image_id": lengths_by_image_id,
@@ -176,7 +231,7 @@ def save_manifest(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=2)
-    return {"stats": stats, "compliance": compliance, "file_stats": file_stats}
+    return {"stats": stats, "compliance": compliance, "file_stats": file_stats, **tpu_report}
 
 
 def main():
@@ -203,6 +258,10 @@ def main():
     print(f"* Model ID    : {args.model_id}", flush=True)
     print(f"* Data Dir    : {data_dir}", flush=True)
     print(f"* Output File : {args.output_file}", flush=True)
+    print(f"* Image mode  : {'CANONICAL views (FULL/CROP/COMPARE)' if args.canonical_resize else 'ORIGINAL image size'}", flush=True)
+    if not args.canonical_resize:
+        print("  [WARNING] --canonical-resize is OFF: native scans (DENTEX especially) produce several times more vision "
+              "tokens. Training/GRPO with --canonical-resize ignore this manifest.", flush=True)
     print(f"* Trace Files : {len(target_files)} files to process", flush=True)
     for tf in target_files:
         print(f"    - {tf.name} ({tf.stat().st_size / 1024 / 1024:.2f} MB)", flush=True)
@@ -240,6 +299,7 @@ def main():
     if hasattr(processor, "tokenizer") and processor.tokenizer.pad_token_id is None:
         processor.tokenizer.pad_token = processor.tokenizer.eos_token
 
+    slot_budget = parse_slot_budget(*args.vision_slots)
     lengths_by_image_id: Dict[str, int] = {}
     lengths_by_file_and_id: Dict[str, int] = {}
     vision_by_key: Dict[str, int] = {}
@@ -286,6 +346,7 @@ def main():
             data_dir=str(data_dir),
             max_seq_len=None,
             canonical_resize=args.canonical_resize,
+            mask_malformed_turns=True,  # train_sft default; the length is the same either way
         )
 
         n_samples = len(ds)
@@ -375,13 +436,13 @@ def main():
 
             if (s_idx + 1) % 50 == 0 or (s_idx + 1) == n_samples:
                 print(f"  Processed {s_idx + 1}/{n_samples} traces (sample {rec_id} = {exact_tokens} tokens)...", flush=True)
-                save_manifest(out_path, args.model_id, list(lengths_by_file_and_id.values()), lengths_by_image_id, lengths_by_file_and_id, args.canonical_resize, vision_by_key)
+                save_manifest(out_path, args.model_id, list(lengths_by_file_and_id.values()), lengths_by_image_id, lengths_by_file_and_id, args.canonical_resize, vision_by_key, slot_budget)
 
         # Checkpoint save after completing each trace file
-        save_manifest(out_path, args.model_id, list(lengths_by_file_and_id.values()), lengths_by_image_id, lengths_by_file_and_id, args.canonical_resize, vision_by_key)
+        save_manifest(out_path, args.model_id, list(lengths_by_file_and_id.values()), lengths_by_image_id, lengths_by_file_and_id, args.canonical_resize, vision_by_key, slot_budget)
         print(f"  [CHECKPOINT] Manifest updated at {out_path} ({len(lengths_by_file_and_id)} traces total).", flush=True)
 
-    res = save_manifest(out_path, args.model_id, list(lengths_by_file_and_id.values()), lengths_by_image_id, lengths_by_file_and_id, args.canonical_resize, vision_by_key)
+    res = save_manifest(out_path, args.model_id, list(lengths_by_file_and_id.values()), lengths_by_image_id, lengths_by_file_and_id, args.canonical_resize, vision_by_key, slot_budget)
     stats = res.get("stats", {})
     compliance = res.get("compliance", {})
 
@@ -397,10 +458,26 @@ def main():
     print(f"* 99th %ile   : {stats['p99']} tokens")
     print(f"* Max Length  : {stats['max']} tokens")
     print("-" * 80)
-    print("COMPLIANCE AT STATIC SEQUENCE LENGTHS:")
+    print("GPU COST (real tokens; what --max-seq-len is checked against on a GPU) -- COMPLIANCE:")
     for ceiling, count in compliance.items():
         pct = (count / stats['count']) * 100
         print(f"  <= {int(ceiling):5d} tokens: {count:4d} / {stats['count']} ({pct:5.2f}%)")
+    tpu_stats = res.get("stats_tpu_static")
+    if tpu_stats:
+        print("-" * 80)
+        print(f"TPU COST (text + {res['static_vision_tokens']} static vision tokens, --vision-slots "
+              f"{res['vision_slots']['FULL']} {res['vision_slots']['CROP']} {res['vision_slots']['COMPARE']}; "
+              f"what --pad-vision-to-slots is checked against) -- Median {tpu_stats['p50']}, "
+              f"P90 {tpu_stats['p90']}, Max {tpu_stats['max']}:")
+        for ceiling, count in res["compliance_tpu_static"].items():
+            pct = (count / tpu_stats['count']) * 100
+            print(f"  <= {int(ceiling):5d} tokens: {count:4d} / {tpu_stats['count']} ({pct:5.2f}%)")
+        over = {fn: s["over_16384"] for fn, s in res["file_stats_tpu_static"].items() if s["over_16384"]}
+        if over:
+            print("  Over 16384 on TPU, by file: " + ", ".join(f"{fn} {n}" for fn, n in over.items()))
+    elif not args.canonical_resize:
+        print("-" * 80)
+        print("TPU COST: not reported. Slot padding needs canonical views; re-run with --canonical-resize.")
     print("=" * 80)
 
     if args.upload_hf:

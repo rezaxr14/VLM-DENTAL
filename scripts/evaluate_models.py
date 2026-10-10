@@ -53,7 +53,7 @@ load_dotenv()
 from dental_agent.config import load_config, load_env
 from dental_agent.data.dentex import load_dentex_dataset
 from dental_agent.data.fdi_utils import row_to_fdi
-from dental_agent.agent.prompts import ZERO_SHOT_PROMPT, build_agent_system_prompt
+from dental_agent.agent.prompts import FIRST_USER_PROMPT, ZERO_SHOT_PROMPT, build_agent_system_prompt
 from dental_agent.agent.parsing import parse_agent_json
 from dental_agent.agent.tool_dispatch import execute_tool_call
 from dental_agent.tools.registry import ToolRegistry
@@ -287,11 +287,7 @@ def run_with_tools_eval(
             "role": "user",
             "content": [
                 {"type": "image", "image": view_image},
-                {
-                    "type": "text",
-                    "text": f"Analyze this panoramic X-ray (image_id={image_id}). "
-                            f"Identify any abnormal teeth and determine the diagnosis.",
-                },
+                {"type": "text", "text": FIRST_USER_PROMPT},
             ],
         },
     ]

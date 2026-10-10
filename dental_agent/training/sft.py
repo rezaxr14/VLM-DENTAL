@@ -26,6 +26,7 @@ from tqdm import tqdm
 from dental_agent.config import ProjectConfig, TrainingConfig
 from dental_agent.model.backbone import load_model, apply_lora, safe_process_vision_info
 from dental_agent.agent.parsing import parse_agent_json
+from dental_agent.agent.prompts import FIRST_USER_PROMPT
 from dental_agent.utils.canonical import (
     CANONICAL_SIZES,
     PATCH_FEATURE_DIM,
@@ -510,9 +511,7 @@ class BucketedQwenVLCollator:
 
 
 TEACHER_DIRECTIVE_MARKER = "TEACHER DIRECTIVE"
-CLEAN_FIRST_USER_PROMPT = (
-    "Analyze this panoramic X-ray. Identify any abnormal teeth and determine the diagnosis."
-)
+CLEAN_FIRST_USER_PROMPT = FIRST_USER_PROMPT
 
 
 def strip_teacher_directive(text: str) -> str:
@@ -733,7 +732,7 @@ class DentalSFTDataset(Dataset):
                     "role": "user",
                     "content": [
                         {"type": "image", "image": base_image},
-                        {"type": "text", "text": f"Analyze panoramic X-ray (image_id={rec.get('image_id')})."},
+                        {"type": "text", "text": FIRST_USER_PROMPT},
                     ],
                 },
                 {"role": "assistant", "content": json.dumps(rec.get("final_answer", {}))},

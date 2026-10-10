@@ -61,6 +61,7 @@ _repo_root = Path(__file__).resolve().parent.parent
 if str(_repo_root) not in sys.path:
     sys.path.insert(0, str(_repo_root))
 
+from dental_agent.agent.prompts import FIRST_USER_PROMPT
 from dental_agent.config import load_env
 load_env(_repo_root / ".env")
 
@@ -155,7 +156,7 @@ def build_dummy_multimodal_batch(
                 "role": "user",
                 "content": [
                     {"type": "image", "image": dummy_img},
-                    {"type": "text", "text": "Analyze this panoramic X-ray. Identify any abnormal teeth and determine the diagnosis."},
+                    {"type": "text", "text": FIRST_USER_PROMPT},
                 ],
             },
             {"role": "assistant", "content": '{"diagnosis": "caries", "fdi": 16}'},
