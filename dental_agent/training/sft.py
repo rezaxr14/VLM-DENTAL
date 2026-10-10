@@ -509,6 +509,31 @@ class BucketedQwenVLCollator:
         return collated
 
 
+TEACHER_DIRECTIVE_MARKER = "TEACHER DIRECTIVE"
+CLEAN_FIRST_USER_PROMPT = (
+    "Analyze this panoramic X-ray. Identify any abnormal teeth and determine the diagnosis."
+)
+
+
+def strip_teacher_directive(text: str) -> str:
+    """Remove generation-time scaffolding from a stored user prompt (risk R2).
+
+    Traces are generated with a ``TEACHER DIRECTIVE: ...`` suffix appended to
+    the first user message; on pathology scans that suffix embeds the
+    ground-truth finding list (``Q3T6:Periapical Lesion; ...``) and on healthy
+    scans it states the case is verified-normal. Training on it would put the
+    answer inside the prompt while inference never has it, so everything from
+    the marker onward is dropped. When the directive was the entire message
+    (no-tools tracks store it as the whole user turn), the clean instruction
+    replaces it so the rebuilt prompt is never empty.
+    """
+    idx = text.find(TEACHER_DIRECTIVE_MARKER)
+    if idx < 0:
+        return text
+    stripped = text[:idx].strip()
+    return stripped or CLEAN_FIRST_USER_PROMPT
+
+
 class DentalSFTDataset(Dataset):
     """Production SFT dataset ingesting multi-turn or direct CoT traces."""
 
@@ -764,13 +789,18 @@ class DentalSFTDataset(Dataset):
                             txt = item.get("text", "")
                             if "[Earlier tool result omitted" not in txt:
                                 prompt_text += txt + "\n"
+                    # R2 guard: never train on the stored TEACHER DIRECTIVE
+                    # (it carries the ground-truth finding list).
+                    prompt_text = strip_teacher_directive(prompt_text.strip())
                     if not prompt_text.strip():
-                        prompt_text = "Analyze this panoramic X-ray. Identify any abnormal teeth and determine the diagnosis."
+                        prompt_text = CLEAN_FIRST_USER_PROMPT
                     sanitized_content.append({"type": "image", "image": view_image})
                     sanitized_content.append({"type": "text", "text": prompt_text.strip()})
                 elif isinstance(content, str):
+                    # No-tools traces store the directive as the whole user turn;
+                    # strip_teacher_directive substitutes the clean instruction.
                     sanitized_content.append({"type": "image", "image": view_image})
-                    sanitized_content.append({"type": "text", "text": content})
+                    sanitized_content.append({"type": "text", "text": strip_teacher_directive(content)})
                 else:
                     sanitized_content.append({"type": "image", "image": view_image})
                 sanitized_messages.append({"role": "user", "content": sanitized_content})
