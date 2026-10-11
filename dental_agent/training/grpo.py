@@ -879,8 +879,9 @@ def train_grpo(
     for step, (_, img_row) in enumerate(valid_images.iterrows(), start=1):
         img_id = img_row["id"]
         img_annots = annots_df[annots_df["image_id"] == img_id]
-        if img_annots.empty:
-            continue
+        # An image without annotation rows is a HEALTHY image: ground truth [] (reward 1.0 only for an empty
+        # answer). It used to be skipped, so the policy never practised saying "no findings". Callers that want
+        # pathological images only filter the pool (dental_agent.data.dev_split.select_training_pool).
 
         gt = [
             {

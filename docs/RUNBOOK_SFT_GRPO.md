@@ -52,15 +52,21 @@ Watch the progress bar: `peak_gib` is the highest memory PyTorch has allocated s
 | Out of memory | Lower the ceiling, and probe the new ceiling: `python scripts/select_longest_traces.py --traces data/traces/train_cot_traces_dentex.jsonl --manifest data/traces/trace_token_lengths.json --top 4 --at-most 12288 --output data/traces/probe_12288.jsonl`, then repeat A5 with `--dataset-path data/traces/probe_12288.jsonl --max-seq-len 12288`. A3 printed how many traces each ceiling keeps; lower ceilings drop the longest, multi-finding traces. |
 | Still too large | Other levers that cost no data: lower `--lora-r`; on a 24 GB card make sure it is `--precision qlora`. |
 
+**A6a. Create the dev split (once; SFT, GRPO, the K sweep and the ablations all use the same file)**
+```
+python scripts/make_dev_split.py --data-dir data --n 70 --seed 42 --output data/splits/dentex_dev.json
+```
+It draws about 70 of the DENTEX *train* images, keeping the healthy share, and writes `dataset::image_id` keys. Commit the file so every machine holds out the same images. The 50 official validation images stay the untouched test set: GRPO now loads the train images only and refuses any annotation file that looks like the validation split.
+
 **A7. Full SFT** (use the same `--precision` and `--max-seq-len` as A5; other hyperparameters as set in the notebook)
 ```
-python scripts/train_sft.py --track with_tools --stage dentex_alone --canonical-resize --precision qlora --lora-linear-attn --mask-malformed-turns --max-seq-len 16384 --epochs 3 --batch-size 1 --gradient-accumulation-steps 8 --eval-strategy epoch --save-strategy epoch --hf-repo <repo> --push-every-steps 50
+python scripts/train_sft.py --track with_tools --stage dentex_alone --canonical-resize --precision qlora --lora-linear-attn --mask-malformed-turns --dev-split data/splits/dentex_dev.json --max-seq-len 16384 --epochs 3 --batch-size 1 --gradient-accumulation-steps 8 --eval-strategy epoch --save-strategy epoch --hf-repo <repo> --push-every-steps 50
 ```
 The adapter is saved to `data/models/qwen3_5_9b_sft_with_tools_dentex_alone_<precision>` (for example `..._qlora`).
 
 **A8. GRPO** (same `--canonical-resize` and `--precision` as SFT). GRPO does not look for the precision-suffixed folder, so pass the SFT adapter explicitly:
 ```
-python scripts/run_grpo.py --track with_tools --sft-stage dentex_alone --sft-model-dir data/models/qwen3_5_9b_sft_with_tools_dentex_alone_qlora --dataset dentex --group-size 4 --epochs 2 --lr 5e-6 --kl-beta 0.04 --clip-eps 0.2 --temperature 0.7 --canonical-resize --precision qlora --hf-repo <repo> --push-every-steps 25
+python scripts/run_grpo.py --track with_tools --sft-stage dentex_alone --sft-model-dir data/models/qwen3_5_9b_sft_with_tools_dentex_alone_qlora --dataset dentex --dev-split data/splits/dentex_dev.json --group-size 4 --epochs 2 --lr 5e-6 --kl-beta 0.04 --clip-eps 0.2 --temperature 0.7 --canonical-resize --precision qlora --hf-repo <repo> --push-every-steps 25
 ```
 GRPO on a GPU has no sequence-length ceiling: rollout length is set by the agent loop, and memory is dominated by generation. Watch `nvidia-smi` through the first step. If it runs out of memory, report the step it reached.
 
@@ -113,17 +119,17 @@ Read the `[XLA MEMORY | ...]` lines (after forward and after backward) and look 
 
 The same `--max-seq-len`, `--vision-slots`, `--triangular-shim` and `--lora-linear-attn` setting must be used in warmup and SFT (the LoRA targets change the compiled graph), and the same view/shape flags in GRPO.
 
-**B6. Full SFT**
+**B6. Full SFT** (create the dev split first, as in A6a)
 ```
-python scripts/train_sft.py --track with_tools --stage dentex_alone --spmd --fsdp --num-cores 8 --canonical-resize --pad-vision-to-slots --vision-slots 5 10 4 --triangular-shim --lora-linear-attn --mask-malformed-turns --max-seq-len 16384 --epochs 3 --batch-size 1 --eval-strategy epoch --save-strategy epoch --hf-repo <repo> --push-every-steps 50
+python scripts/train_sft.py --track with_tools --stage dentex_alone --spmd --fsdp --num-cores 8 --canonical-resize --pad-vision-to-slots --vision-slots 5 10 4 --triangular-shim --lora-linear-attn --mask-malformed-turns --dev-split data/splits/dentex_dev.json --max-seq-len 16384 --epochs 3 --batch-size 1 --eval-strategy epoch --save-strategy epoch --hf-repo <repo> --push-every-steps 50
 ```
 `--gradient-accumulation-steps` defaults to 1 on multi-core TPU (effective batch 8). Output: `data/models/qwen3_5_9b_sft_with_tools_dentex_alone_bf16`.
 
 **B7. GRPO** (same view and shape flags as B6)
 ```
-python scripts/run_grpo.py --track with_tools --sft-stage dentex_alone --sft-model-dir data/models/qwen3_5_9b_sft_with_tools_dentex_alone_bf16 --dataset dentex --num-cores 8 --spmd --fsdp --canonical-resize --pad-vision-to-slots --max-seq-len 16384 --vision-slots 5 10 4 --triangular-shim --group-size 4 --epochs 2 --lr 5e-6 --kl-beta 0.04 --clip-eps 0.2 --temperature 0.7 --hf-repo <repo> --push-every-steps 25
+python scripts/run_grpo.py --track with_tools --sft-stage dentex_alone --sft-model-dir data/models/qwen3_5_9b_sft_with_tools_dentex_alone_bf16 --dataset dentex --dev-split data/splits/dentex_dev.json --num-cores 8 --spmd --fsdp --canonical-resize --pad-vision-to-slots --max-seq-len 16384 --vision-slots 5 10 4 --triangular-shim --group-size 4 --epochs 2 --lr 5e-6 --kl-beta 0.04 --clip-eps 0.2 --temperature 0.7 --hf-repo <repo> --push-every-steps 25
 ```
-The policy update runs at the same static shapes as SFT. Rollout generation does not: its shapes still vary and will recompile on XLA (see `docs/CANONICAL_VISION_AND_TPU_PIPELINE.md` section 7). Rollouts longer than `--max-seq-len` are excluded from the update and counted.
+The policy update runs at the same static shapes as SFT. Rollout generation does not: its shapes still vary and will recompile on XLA (see `docs/CANONICAL_VISION_AND_TPU_PIPELINE.md` section 7). Rollouts longer than `--max-seq-len` are excluded from the update and counted. `--max-images N` trains on a seeded random subset of the pool (one GRPO step = one image), `--include-healthy` keeps healthy images with ground truth `[]`.
 
 **B8. Evaluate** on a GPU or CPU machine, at original size, as in A9.
 

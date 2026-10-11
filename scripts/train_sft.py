@@ -76,6 +76,7 @@ from dental_agent.training.sft import (
 )
 from dental_agent.model.backbone import get_model_classes, lora_coverage, lora_target_modules, projector_module_names
 from dental_agent.utils.canonical import SLOT_BUDGET, parse_slot_budget, slot_totals
+from dental_agent.data.dev_split import load_dev_keys
 
 
 def parse_args():
@@ -124,6 +125,13 @@ def parse_args():
         default="bf16",
         choices=["bf16", "fp16", "qlora"],
         help="Numerical precision: bf16 (TPU/Ampere+), fp16, or qlora (4-bit NF4, GPU only)",
+    )
+    parser.add_argument(
+        "--dev-split",
+        type=str,
+        default=None,
+        help="Dev split JSON (scripts/make_dev_split.py). Traces of these DENTEX train images are excluded from SFT so "
+             "they can serve as the K-sweep / ablation set. Omit to train on every trace.",
     )
     parser.add_argument(
         "--mask-malformed-turns",
@@ -864,6 +872,7 @@ def run_training(index: int, args: argparse.Namespace):
         pad_vision_to_slots=pad_vision_to_slots,
         slot_budget=slot_budget,
         mask_malformed_turns=args.mask_malformed_turns,
+        exclude_keys=load_dev_keys(args.dev_split),
     )
     val_size = max(int(len(full_dataset) * 0.05), 1) if len(full_dataset) >= 20 else 0
     train_size = len(full_dataset) - val_size

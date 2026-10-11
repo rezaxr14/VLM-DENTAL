@@ -549,6 +549,7 @@ class DentalSFTDataset(Dataset):
         slot_budget: dict[str, int] | None = None,
         view_cache_max_items: int = 256,
         mask_malformed_turns: bool = False,
+        exclude_keys: set[str] | None = None,
     ) -> None:
         self.processor = processor
         self.track = track
@@ -625,6 +626,13 @@ class DentalSFTDataset(Dataset):
                         r = json.loads(line)
                         r["_origin_file"] = fname
                         raw_records.append(r)
+
+        # Dev-split exclusion: traces of held-out dev images (keyed "dataset::image_id") never enter training.
+        self.dev_excluded = 0
+        if exclude_keys:
+            from dental_agent.data.dev_split import filter_records
+            raw_records, self.dev_excluded = filter_records(raw_records, set(exclude_keys))
+            print(f"[DATASET] Dev split: excluded {self.dev_excluded} traces of {len(exclude_keys)} held-out dev images.")
 
         if max_seq_len is not None and token_map:
             if self.pad_vision_to_slots and not vision_map:

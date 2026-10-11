@@ -25,6 +25,7 @@ if repo_root not in sys.path:
 
 from dental_agent.config import load_config
 from dental_agent.data.dentex import load_dentex_dataset
+from dental_agent.data.dev_split import load_dev_keys, select_training_pool
 from dental_agent.data.tufts import load_tufts_dataset
 from dental_agent.training.grpo import train_grpo
 from dental_agent.utils.canonical import SLOT_BUDGET, parse_slot_budget
@@ -97,6 +98,13 @@ def parse_args():
         default=False,
         help="Roll out with canonical views; must match the SFT stage's --canonical-resize setting.",
     )
+    parser.add_argument("--dev-split", type=str, default=None,
+                        help="Dev split JSON (scripts/make_dev_split.py); its images are held out of every K run.")
+    parser.add_argument("--max-images", type=int, default=None,
+                        help="Train every K on the same seeded subset of this many images (default: whole pool).")
+    parser.add_argument("--seed", type=int, default=42, help="Seed of the image-pool shuffle.")
+    parser.add_argument("--include-healthy", action=argparse.BooleanOptionalAction, default=True,
+                        help="Keep healthy images (ground truth []) in the pool.")
     return parser.parse_args()
 
 
@@ -136,7 +144,13 @@ def main():
     print("======================================================================")
 
     # Load dataset
-    images_df, annots_df, categories_df = load_dentex_dataset(cfg.data_dir)
+    # TRAIN images only (the default split of load_dentex_dataset is the official validation = test set).
+    images_df, annots_df, categories_df = load_dentex_dataset(cfg.data_dir, split_name="train")
+    images_df = select_training_pool(
+        images_df, annots_df, dataset="dentex", dev_keys=load_dev_keys(args.dev_split),
+        include_healthy=args.include_healthy, max_images=args.max_images, seed=args.seed,
+    )
+    print(f"* Training pool: {len(images_df)} images (dev split: {args.dev_split or 'none'})")
 
     results_table = []
 

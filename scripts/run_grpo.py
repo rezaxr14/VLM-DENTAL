@@ -35,6 +35,7 @@ if repo_root not in sys.path:
 
 from dental_agent.config import load_config
 from dental_agent.data.dentex import load_dentex_dataset
+from dental_agent.data.dev_split import load_dev_keys, select_training_pool
 from dental_agent.data.tufts import load_tufts_dataset
 from dental_agent.training.grpo import train_grpo
 from dental_agent.utils.canonical import SLOT_BUDGET, parse_slot_budget, slot_totals
@@ -223,6 +224,25 @@ def main() -> None:
              "match the SFT run that produced --sft-stage (train_sft.py --canonical-resize), otherwise the policy is "
              "optimised on a different image distribution than it was fine-tuned on.",
     )
+    parser.add_argument(
+        "--dev-split",
+        type=str,
+        default=None,
+        help="Dev split JSON (scripts/make_dev_split.py). Its images are held out of GRPO training (same file as SFT).",
+    )
+    parser.add_argument(
+        "--max-images",
+        type=int,
+        default=None,
+        help="Train on a seeded random subset of this many images (default: the whole pool). One GRPO step = one image.",
+    )
+    parser.add_argument("--seed", type=int, default=42, help="Seed of the image-pool shuffle (also fixes which --max-images are drawn).")
+    parser.add_argument(
+        "--include-healthy",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Keep healthy images (no annotations, ground truth []) in the pool so the policy learns to answer 'no findings'.",
+    )
     args = parser.parse_args()
 
     is_tpu = False
@@ -320,7 +340,17 @@ def run_worker(index: int, args: argparse.Namespace):
     if dataset_name == "tufts":
         images_df, annots_df, categories_df = load_tufts_dataset(cfg.data_dir)
     else:
-        images_df, annots_df, categories_df = load_dentex_dataset(cfg.data_dir)
+        # TRAIN images only. The default split of load_dentex_dataset is the official validation set = the test set.
+        images_df, annots_df, categories_df = load_dentex_dataset(cfg.data_dir, split_name="train")
+    images_df = select_training_pool(
+        images_df,
+        annots_df,
+        dataset=dataset_name,
+        dev_keys=load_dev_keys(args.dev_split),
+        include_healthy=args.include_healthy,
+        max_images=args.max_images,
+        seed=args.seed,
+    )
 
     # Legacy xmp.spawn only: each process owns a shard of the images. SPMD is one process driving every core.
     if is_tpu and args.num_cores > 1 and not args.spmd:
@@ -334,7 +364,7 @@ def run_worker(index: int, args: argparse.Namespace):
         print(f"* SFT Ref Dir : {resolved_sft_dir}")
         print(f"* Target Ckpt : {out_dir}")
         print(f"* HF Repo Sync: {args.hf_repo} ({path_in_repo_prefix})")
-        print(f"* Dataset     : {args.dataset}")
+        print(f"* Dataset     : {args.dataset} ({len(images_df)} training images; dev split: {args.dev_split or 'none'})")
         print(f"* KL Beta     : {args.kl_beta}")
         print(f"* Learning Rate: {args.lr}")
         print(f"* Replicas    : {args.num_cores} device cores ({'SPMD single process' if args.spmd else 'xmp.spawn'})")
