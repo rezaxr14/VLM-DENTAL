@@ -26,7 +26,7 @@ from tqdm import tqdm
 from dental_agent.config import ProjectConfig, TrainingConfig
 from dental_agent.model.backbone import load_model, apply_lora, safe_process_vision_info
 from dental_agent.agent.parsing import parse_agent_json
-from dental_agent.agent.prompts import FIRST_USER_PROMPT
+from dental_agent.agent.prompts import FIRST_USER_PROMPT, NO_TOOLS_SYSTEM_PROMPT, build_agent_system_prompt
 from dental_agent.utils.canonical import (
     CANONICAL_SIZES,
     PATCH_FEATURE_DIM,
@@ -565,6 +565,10 @@ class DentalSFTDataset(Dataset):
         self._static_vision_tokens = slot_totals(slot_budget if slot_budget is not None else SLOT_BUDGET)["tokens"]
         self.records: list[dict[str, Any]] = []
         self.registry = ToolRegistry.create_default()
+        # The system prompt the model sees at GRPO/eval time. Stored traces carry whatever prompt was current when they
+        # were generated (an older one: no healthy-scan instruction; for no-tools traces, the teacher prompt that talks
+        # about a directive), so it is substituted at load like the teacher directive is stripped from the user turn.
+        self._tools_system_prompt = build_agent_system_prompt(self.registry.format_tool_descriptions(), dataset="dentex")
         # LRU of finished model-facing tool views. Previously an unbounded dict of NATIVE-resolution tool outputs
         # (up to ~13 MB each for whole-image operators), which grows without limit over epochs on host RAM.
         self._crop_cache: collections.OrderedDict[str, Image.Image] = collections.OrderedDict()
@@ -689,6 +693,15 @@ class DentalSFTDataset(Dataset):
                 f"[DATASET] {self.malformed_turn_count} malformed assistant turns in {sum(1 for n in per_trace if n)} of "
                 f"{len(self.records)} traces ({'masked from the loss' if self.mask_malformed_turns else 'TRAINED ON as targets'})."
             )
+
+    def _system_prompt_for(self, rec: dict[str, Any], stored: Any) -> Any:
+        """Prompt to train under: the current inference prompt of the track. Non-DENTEX with-tools traces keep their
+        stored prompt (a record does not say which Tufts class list it was generated with)."""
+        if self.track == "no_tools":
+            return NO_TOOLS_SYSTEM_PROMPT
+        if str(rec.get("dataset") or "dentex").lower().strip() == "dentex":
+            return self._tools_system_prompt
+        return stored
 
     @staticmethod
     def _manifest_lookup(
@@ -904,6 +917,9 @@ class DentalSFTDataset(Dataset):
                     sanitized_messages.append({"role": "user", "content": sanitized_content})
                 else:
                     sanitized_messages.append(msg)
+
+            elif role == "system":
+                sanitized_messages.append({**msg, "content": self._system_prompt_for(rec, content)})
 
             else:
                 sanitized_messages.append(msg)

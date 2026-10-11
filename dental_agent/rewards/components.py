@@ -31,21 +31,17 @@ def _iter_tool_calls(trajectory: Mapping[str, Any]):
 
 
 def _is_valid_final_answer(ans: Any) -> bool:
-    """A valid final answer is a non-empty dict OR a non-empty list of dicts
-    (prompts.py: "A patient may have multiple findings; your final answer
-    must be a list covering all of them") -- not dict-only."""
-    if isinstance(ans, dict):
-        return True
-    if isinstance(ans, list) and len(ans) > 0:
-        return True
-    return False
+    """A valid final answer is a dict OR a list of dicts (prompts.py: "A patient may have multiple findings; your
+    final answer must be a list covering all of them") -- not dict-only. An EMPTY list is valid too: it is the
+    prescribed answer for a healthy scan ("final_answer": []), and is scored by the accuracy reward, not here."""
+    return isinstance(ans, (dict, list))
 
 
 def reward_format(trajectory: Mapping[str, Any]) -> float:
     """Format adherence reward (R_format in §5.5).
 
     Returns 1.0 if the agent produced a valid final answer (a single-finding
-    dict, or a non-empty list for multiple findings), 0.0 otherwise.
+    dict, or a list of findings -- empty for a healthy scan), 0.0 otherwise.
     """
     if trajectory.get("format_ok"):
         return 1.0
@@ -205,10 +201,10 @@ def reward_accuracy(
     gts = _normalize_findings(ground_truth)
 
     if not gts:
-        # No ground-truth findings at all (shouldn't happen for DENTEX, which
-        # always has at least one annotation per image, but handle it rather
-        # than divide by zero): correct if the model also predicted nothing.
-        return 1.0 if not preds else 0.0
+        # Healthy image (no ground-truth findings; GRPO trains on these, ground truth []): correct if the model
+        # ANSWERED with no findings. "No answer" (unparseable output, a turn/token cap hit, no final_answer at all)
+        # is not that answer: without this check a failed episode scored full accuracy and beat a wrong finding.
+        return 1.0 if (isinstance(trajectory.get("final_answer"), list) and not preds) else 0.0
     if not preds:
         return 0.0  # nothing predicted, every ground-truth finding missed
 

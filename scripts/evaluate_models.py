@@ -2,13 +2,16 @@
 """
 Unified Model Evaluation CLI for VLM-DENTAL (§6, §20, §26).
 
-Evaluates all 6 experimental conditions on the DENTEX test split:
-  1. base_no_tools:   Base Qwen/Qwen3.5-9B, zero-shot single-turn (ZERO_SHOT_PROMPT)
+Evaluates all 6 experimental conditions on the DENTEX test split, through the SAME agent loop GRPO rolls out with
+(dental_agent/agent/loop.py), so evaluation, rollouts and SFT share prompts, observation format and views:
+  1. base_no_tools:   Base Qwen/Qwen3.5-9B, single turn, unified no-tools prompt (thought + final_answer)
   2. base_with_tools:  Base Qwen/Qwen3.5-9B, multi-turn agent loop with registered tools
-  3. sft_no_tools:    Stage 1 SFT model, single-turn (ZERO_SHOT_PROMPT)
+  3. sft_no_tools:    Stage 1 SFT model, single turn, unified no-tools prompt
   4. sft_with_tools:   Stage 1 SFT model, multi-turn agent loop with tools
-  5. grpo_no_tools:   Stage 2 GRPO RL policy, single-turn (ZERO_SHOT_PROMPT)
+  5. grpo_no_tools:   Stage 2 GRPO RL policy, single turn, unified no-tools prompt
   6. grpo_with_tools:  Stage 2 GRPO RL policy, multi-turn agent loop with tools
+(--reuse-cached for base_no_tools loads the earlier ZERO_SHOT_PROMPT run instead; its records are tagged
+prompt="zero_shot_cached" and are not comparable to the unified-prompt conditions.)
 
 Usage:
     # Re-use cached base zero-shot results:
@@ -56,6 +59,7 @@ from dental_agent.data.fdi_utils import row_to_fdi
 from dental_agent.agent.prompts import FIRST_USER_PROMPT, ZERO_SHOT_PROMPT, build_agent_system_prompt
 from dental_agent.agent.parsing import parse_agent_json
 from dental_agent.agent.tool_dispatch import execute_tool_call
+from dental_agent.agent.loop import run_agent, run_agent_no_tools
 from dental_agent.tools.registry import ToolRegistry
 from dental_agent.evaluation.baselines import parse_zero_shot_response
 from dental_agent.evaluation.metrics import (
@@ -399,6 +403,45 @@ def run_with_tools_eval(
 
 
 # ---------------------------------------------------------------------------
+# Shared-loop Evaluation (what evaluate_condition runs)
+# ---------------------------------------------------------------------------
+
+def run_agent_condition(
+    model, processor, images_df, image_id: int, registry: ToolRegistry | None, args: argparse.Namespace,
+) -> tuple[list[dict], str, bool, int, int]:
+    """Evaluate one image with the SAME loop GRPO rolls out with (``dental_agent.agent.loop``).
+
+    Evaluation, GRPO rollouts and SFT therefore share the system prompt, the ``Result of <tool>:`` observation format,
+    canonical views, KV-cache reuse and the per-turn token cap. Greedy decoding (temperature 0).
+    ``run_with_tools_eval`` / ``run_no_tools_eval`` above are the earlier stand-alone loops and are no longer called.
+
+    Returns (pred_findings, raw_output, format_ok, turn_count, tool_call_count).
+    """
+    if registry is not None:
+        traj = run_agent(
+            image_id=image_id, images_df=images_df, model=model, processor=processor, registry=registry,
+            max_tool_calls=args.max_tool_calls, verbose=False, canonical_resize=args.canonical_resize,
+            temperature=0.0, dataset=args.dataset, max_new_tokens=args.max_new_tokens,
+            max_turns=args.max_turns, malformed_retries=args.malformed_retries,
+        )
+    else:
+        traj = run_agent_no_tools(
+            image_id=image_id, images_df=images_df, model=model, processor=processor, verbose=False,
+            canonical_resize=args.canonical_resize, temperature=0.0, max_new_tokens=args.max_new_tokens,
+        )
+
+    final_answer = traj.final_answer
+    if isinstance(final_answer, list):
+        pred_findings = extract_predicted_findings({"final_answer": final_answer})
+    elif isinstance(final_answer, dict):
+        pred_findings = extract_predicted_findings({"final_answer": [final_answer]})
+    else:
+        pred_findings = []
+    raw_output = "\n---\n".join(str(t.get("raw_output", "")) for t in traj.turns)
+    return pred_findings, raw_output, bool(traj.format_ok), len(traj.turns), int(traj.tool_calls)
+
+
+# ---------------------------------------------------------------------------
 # Cached Results Loader
 # ---------------------------------------------------------------------------
 
@@ -527,7 +570,10 @@ def evaluate_condition(
     split_name = args.split.strip().lower()
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / f"eval_{dataset_name}_{split_name}_{condition}.jsonl"
+    # Original-size results keep their historical file name; canonical-size results get a suffix so the two views of
+    # one condition never share (and never append to) a file.
+    size_tag = "_canonical" if args.canonical_resize else ""
+    output_path = output_dir / f"eval_{dataset_name}_{split_name}_{condition}{size_tag}.jsonl"
 
     # For base_no_tools: check if we can reuse cached zero-shot results
     if condition == "base_no_tools" and args.reuse_cached:
@@ -539,6 +585,7 @@ def evaluate_condition(
             with open(output_path, "w", encoding="utf-8") as f:
                 for r in records:
                     r["condition"] = condition
+                    r["prompt"] = "zero_shot_cached"  # ZERO_SHOT_PROMPT, not the unified no-tools prompt
                     f.write(json.dumps(to_jsonable(r)) + "\n")
             return records
         else:
@@ -579,20 +626,9 @@ def evaluate_condition(
 
         gt_findings = extract_ground_truth(image_id, annots_df, cats_df)
 
-        if is_tools:
-            pred_findings, raw_output, format_ok, turns, tools_used = run_with_tools_eval(
-                model, processor, image, image_id, device,
-                registry=registry, dataset=args.dataset,
-                max_turns=args.max_turns, max_tool_calls=args.max_tool_calls,
-                canonical_resize=args.canonical_resize,
-            )
-        else:
-            pred_findings, raw_output, format_ok = run_no_tools_eval(
-                model, processor, image, image_id, device,
-                canonical_resize=args.canonical_resize,
-            )
-            turns = 1
-            tools_used = 0
+        pred_findings, raw_output, format_ok, turns, tools_used = run_agent_condition(
+            model, processor, eligible_imgs, image_id, registry, args,
+        )
 
         # Multi-finding set-level matching (Rule 13)
         match_res = match_multi_findings(gt_findings, pred_findings)
@@ -620,6 +656,7 @@ def evaluate_condition(
             "dataset": args.dataset,
             "split": args.split,
             "model_id": args.model_id,
+            "image_view": "canonical" if args.canonical_resize else "original",
             "adapter_path": adapter_path or "",
             "ground_truth": gt_findings,
             "predictions": pred_findings,
@@ -702,8 +739,25 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=str, default=DEFAULT_OUTPUT_DIR, help="Evaluation output directory")
     parser.add_argument("--reuse-cached", action="store_true", help="For base_no_tools: load existing zero-shot results instead of recomputing")
     parser.add_argument("--limit", type=int, default=None, help="Optional sample limit for quick smoke tests")
-    parser.add_argument("--max-turns", type=int, default=15, help="Maximum turns for multi-turn agent loop (with_tools conditions)")
-    parser.add_argument("--max-tool-calls", type=int, default=25, help="Maximum tool calls per radiograph (with_tools conditions)")
+    parser.add_argument(
+        "--max-turns", type=int, default=None,
+        help="Maximum assistant turns (with_tools conditions). Default: --max-tool-calls + 15, the bound GRPO rollouts use. "
+             "The SFT traces average 11 turns and run to 35, so a small cap truncates episodes the model was trained to finish.",
+    )
+    parser.add_argument(
+        "--max-tool-calls", type=int, default=50,
+        help="Maximum tool calls per radiograph (with_tools conditions); the same budget GRPO rollouts use. "
+             "The SFT traces make 23 calls at the median and up to 71.",
+    )
+    parser.add_argument(
+        "--max-new-tokens", type=int, default=2048,
+        help="Token cap of ONE assistant turn. Use the same value as GRPO (run_grpo.py --max-new-tokens).",
+    )
+    parser.add_argument(
+        "--malformed-retries", type=int, default=0,
+        help="How many unparseable replies are answered with an error message before the episode ends (with_tools "
+             "conditions). 0 = the first one ends it, exactly as in GRPO rollouts.",
+    )
     parser.add_argument(
         "--precision",
         type=str,

@@ -66,17 +66,18 @@ The adapter is saved to `data/models/qwen3_5_9b_sft_with_tools_dentex_alone_<pre
 
 **A8. GRPO** (same `--canonical-resize` and `--precision` as SFT). GRPO does not look for the precision-suffixed folder, so pass the SFT adapter explicitly:
 ```
-python scripts/run_grpo.py --track with_tools --sft-stage dentex_alone --sft-model-dir data/models/qwen3_5_9b_sft_with_tools_dentex_alone_qlora --dataset dentex --dev-split data/splits/dentex_dev.json --group-size 4 --epochs 2 --lr 5e-6 --kl-beta 0.04 --clip-eps 0.2 --temperature 0.7 --canonical-resize --precision qlora --hf-repo <repo> --push-every-steps 25
+python scripts/run_grpo.py --track with_tools --sft-stage dentex_alone --sft-model-dir data/models/qwen3_5_9b_sft_with_tools_dentex_alone_qlora --dataset dentex --dev-split data/splits/dentex_dev.json --group-size 4 --epochs 2 --lr 5e-6 --kl-beta 0.04 --clip-eps 0.2 --temperature 0.7 --canonical-resize --precision qlora --max-new-tokens 2048 --hf-repo <repo> --push-every-steps 25
 ```
 GRPO starts its trainable adapter as a copy of the SFT adapter. To continue a run that was interrupted, repeat the same command with `--resume` (same `--dev-split`, `--seed`, `--max-images`, `--include-healthy` and `--group-size`); on a fresh Kaggle/Colab session add `--resume-hf <repo>` to download the newest step checkpoint first. `--resume-hf` alone is refused, because it only downloads.
 
 GRPO on a GPU has no sequence-length ceiling: rollout length is set by the agent loop, and memory is dominated by generation. Watch `nvidia-smi` through the first step. If it runs out of memory, report the step it reached.
 
-**A9. Evaluate at original size** (no `--canonical-resize`, whichever way the model was trained)
+**A9. Evaluate** (canonical size is the primary result; run it again without `--canonical-resize` for original size)
 ```
-python scripts/evaluate_models.py --condition sft_with_tools --adapter-path data/models/qwen3_5_9b_sft_with_tools_dentex_alone_qlora --dataset dentex --split test --precision qlora
-python scripts/evaluate_models.py --condition grpo_with_tools --adapter-path data/models/qwen3_5_9b_grpo_with_tools_k4_dentex_alone/grpo-with_tools-final --dataset dentex --split test --precision qlora
+python scripts/evaluate_models.py --condition sft_with_tools --adapter-path data/models/qwen3_5_9b_sft_with_tools_dentex_alone_qlora --dataset dentex --split test --precision qlora --canonical-resize --max-tool-calls 50 --max-new-tokens 2048
+python scripts/evaluate_models.py --condition grpo_with_tools --adapter-path data/models/qwen3_5_9b_grpo_with_tools_k4_dentex_alone/grpo-with_tools-final --dataset dentex --split test --precision qlora --canonical-resize --max-tool-calls 50 --max-new-tokens 2048
 ```
+Evaluation runs the same agent loop as GRPO rollouts, so keep `--max-new-tokens` equal to the GRPO run's. Canonical results go to `..._canonical.jsonl`.
 A GRPO checkpoint folder holds the trained `grpo_policy` and a frozen `reference` adapter; evaluation uses `grpo_policy` automatically when you pass the checkpoint folder. Conditions: `base_no_tools`, `base_with_tools`, `sft_no_tools`, `sft_with_tools`, `grpo_no_tools`, `grpo_with_tools`, or `all`.
 
 ---
@@ -129,11 +130,11 @@ python scripts/train_sft.py --track with_tools --stage dentex_alone --spmd --fsd
 
 **B7. GRPO** (same view and shape flags as B6)
 ```
-python scripts/run_grpo.py --track with_tools --sft-stage dentex_alone --sft-model-dir data/models/qwen3_5_9b_sft_with_tools_dentex_alone_bf16 --dataset dentex --dev-split data/splits/dentex_dev.json --num-cores 8 --spmd --fsdp --canonical-resize --pad-vision-to-slots --max-seq-len 16384 --vision-slots 5 10 4 --triangular-shim --group-size 4 --epochs 2 --lr 5e-6 --kl-beta 0.04 --clip-eps 0.2 --temperature 0.7 --hf-repo <repo> --push-every-steps 25
+python scripts/run_grpo.py --track with_tools --sft-stage dentex_alone --sft-model-dir data/models/qwen3_5_9b_sft_with_tools_dentex_alone_bf16 --dataset dentex --dev-split data/splits/dentex_dev.json --num-cores 8 --spmd --fsdp --canonical-resize --pad-vision-to-slots --max-seq-len 16384 --vision-slots 5 10 4 --triangular-shim --group-size 4 --epochs 2 --lr 5e-6 --kl-beta 0.04 --clip-eps 0.2 --temperature 0.7 --max-new-tokens 2048 --hf-repo <repo> --push-every-steps 25
 ```
 The policy update runs at the same static shapes as SFT. Rollout generation does not: its shapes still vary and will recompile on XLA (see `docs/CANONICAL_VISION_AND_TPU_PIPELINE.md` section 7). Rollouts longer than `--max-seq-len` are excluded from the update and counted. `--max-images N` trains on a seeded random subset of the pool (one GRPO step = one image), `--include-healthy` keeps healthy images with ground truth `[]`.
 
-**B8. Evaluate** on a GPU or CPU machine, at original size, as in A9.
+**B8. Evaluate** on a GPU or CPU machine, as in A9.
 
 ---
 

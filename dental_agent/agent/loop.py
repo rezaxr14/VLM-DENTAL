@@ -54,11 +54,22 @@ def run_agent(
     verbose: bool = True,
     canonical_resize: bool = False,
     temperature: float = 0.0,
+    dataset: str = "dentex",
+    max_new_tokens: int = 2048,
+    max_turns: int | None = None,
+    malformed_retries: int = 0,
 ) -> AgentTrajectory:
     """Run the multi-turn agent loop on a single dental radiograph.
 
+    This ONE loop serves GRPO rollouts and evaluation, so both see exactly what SFT trained on (system prompt,
+    ``Result of <tool>:`` observations, canonical views, KV-cache reuse).
+
     ``temperature`` is the sampling temperature of every turn (0.0 = greedy, the right choice for evaluation; GRPO
     rollouts must sample, otherwise every rollout of an image is identical and all advantages are zero).
+    ``max_new_tokens`` caps ONE assistant turn (the old implicit 512 cut off about 2% of the turns the SFT traces teach).
+    ``max_turns`` caps assistant turns; None = ``max_tool_calls + 15``, the bound GRPO rollouts always had.
+    ``malformed_retries``: how many unparseable replies are answered with an error message (as in the SFT traces) before
+    the episode ends; 0 ends it at the first one.
 
     Executes:
     1. Load full panoramic image.
@@ -72,7 +83,7 @@ def run_agent(
     # Native base_image is what tools execute on; view_image is what the model sees (matches SFT).
     view_image = to_canonical(base_image, "FULL") if canonical_resize else base_image
 
-    system_prompt = build_agent_system_prompt(registry.format_tool_descriptions())
+    system_prompt = build_agent_system_prompt(registry.format_tool_descriptions(), dataset=dataset)
 
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system_prompt},
@@ -102,11 +113,13 @@ def run_agent(
     pkv = None
     cache_state = None
 
-    for turn_idx in range(max_tool_calls + 15):
+    malformed_used = 0
+    for turn_idx in range(max_turns if max_turns is not None else max_tool_calls + 15):
         reply, prompt_len, gen_ids, pkv, cache_state = generate_agent_reply(
             model,
             processor,
             messages,
+            max_new_tokens=max_new_tokens,
             temperature=temperature,
             return_ids=True,
             past_key_values=pkv,
@@ -128,6 +141,14 @@ def run_agent(
             # Keep the reply in the transcript: its tokens must be present when the trajectory is re-encoded, otherwise
             # the span is dropped from the policy-gradient loss and malformed output can never be penalised.
             messages.append({"role": "assistant", "content": reply})
+            if malformed_used < malformed_retries:
+                malformed_used += 1
+                messages.append({
+                    "role": "user",
+                    "content": "Error: your response was not a single valid JSON object. "
+                               "Respond with exactly one JSON object.",
+                })
+                continue
             break
 
         # Check for final answer
@@ -229,18 +250,10 @@ def run_agent(
         messages.append({"role": "assistant", "content": reply})
         messages.append({"role": "user", "content": observation_content})
 
-    # A valid multi-finding answer is a non-empty list (see prompts.py: "A
-    # patient may have multiple findings; your final answer must be a list
-    # covering all of them"), not just a single dict -- this previously only
-    # accepted a dict, meaning every correctly-formatted multi-finding answer
-    # would have been scored as a format failure.
-    format_ok = bool(
-        final_answer is not None
-        and (
-            isinstance(final_answer, dict)
-            or (isinstance(final_answer, list) and len(final_answer) > 0)
-        )
-    )
+    # A valid answer is a dict or a list (see prompts.py: "A patient may have multiple findings; your final answer
+    # must be a list covering all of them"). An EMPTY list is the prescribed answer for a healthy scan, so it is valid:
+    # counting it as a format failure cost correct healthy answers their format reward and marked them wrong in eval.
+    format_ok = isinstance(final_answer, (dict, list))
 
     trajectory = AgentTrajectory(
         image_id=image_id,
@@ -269,8 +282,10 @@ def run_agent_no_tools(
     processor: Any,
     verbose: bool = True,
     canonical_resize: bool = False,
+    temperature: float = 0.0,
+    max_new_tokens: int = 2048,
 ) -> AgentTrajectory:
-    """H1 Ablation condition: One-turn direct reasoning without tool access."""
+    """H1 Ablation condition: One-turn direct reasoning without tool access (``NO_TOOLS_SYSTEM_PROMPT``)."""
     row = images_df[images_df["id"] == image_id].iloc[0]
     image = Image.open(row["local_path"]).convert("RGB")
     if canonical_resize:
@@ -288,12 +303,12 @@ def run_agent_no_tools(
     ]
 
     reply, prompt_len, gen_ids = generate_agent_reply(
-        model, processor, messages, return_ids=True
+        model, processor, messages, max_new_tokens=max_new_tokens, temperature=temperature, return_ids=True
     )
     parsed = parse_agent_json(reply)
 
     final_ans = (parsed or {}).get("final_answer")
-    format_ok = bool(parsed and "final_answer" in parsed)
+    format_ok = isinstance(final_ans, (dict, list))
 
     trajectory = AgentTrajectory(
         image_id=image_id,

@@ -239,6 +239,13 @@ def main() -> None:
              "optimised on a different image distribution than it was fine-tuned on.",
     )
     parser.add_argument(
+        "--max-new-tokens",
+        type=int,
+        default=2048,
+        help="Token cap of ONE assistant turn during rollouts (the SFT traces contain turns up to ~2,700 tokens; the old "
+             "implicit 512 truncated about 2% of them). Use the same value as evaluation.",
+    )
+    parser.add_argument(
         "--dev-split",
         type=str,
         default=None,
@@ -409,6 +416,7 @@ def run_worker(index: int, args: argparse.Namespace):
         pad_vision_to_slots=args.pad_vision_to_slots,
         slot_budget=slot_budget,
         resume=args.resume,
+        max_new_tokens=args.max_new_tokens,
     )
 
 

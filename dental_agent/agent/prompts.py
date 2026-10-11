@@ -8,9 +8,11 @@ no-tools prompt":
     (dentex-agentic-vlm-proposal.md §6) -- a raw, untrained frontier model
     (GPT-4o, base Qwen3.5-9B) prompted directly at eval time, no CoT, no
     training involved at all. Used by dental_agent/evaluation/baselines.py.
-  - `NO_TOOLS_SYSTEM_PROMPT`: for baseline #3's GRPO rollout loop
-    (dental_agent/agent/loop.py) -- final_answer only, no "thought" field,
-    used live during RL rollouts for the tool-free policy.
+  - `NO_TOOLS_SYSTEM_PROMPT`: THE prompt of the tool-free policy (baseline #3) at
+    every stage after trace generation -- SFT (it replaces the teacher prompt stored
+    in each no-tools trace when the dataset is loaded), GRPO rollouts and evaluation
+    (dental_agent/agent/loop.py). One turn, a "thought" followed by "final_answer",
+    the same schema the SFT traces teach.
   - `NO_TOOLS_COT_TEACHER_PROMPT`: for generating SFT training traces for
     baseline #3's Stage 1 (proposal §6, baseline #3 needs the SAME SFT+RL
     recipe as the main system to cleanly isolate tool contribution, not RL
@@ -96,12 +98,16 @@ Turn 4: {{"thought": "Lamina dura is intact, periodontal ligament space is norma
 
 
 NO_TOOLS_SYSTEM_PROMPT = (
-    "You are a dental radiograph analysis agent. You do NOT have access to any tools -- "
-    "reason directly from the single image you are given, in one turn. Respond with "
-    'EXACTLY one JSON object: {"final_answer": [{"quadrant": <1-4>, "tooth_position": '
-    '<1-8>, "diagnosis": "<Caries|Deep Caries|Periapical Lesion|Impacted Tooth>", '
-    '"confidence": <0-1>}, ...]}. For healthy scans with no pathology, return {"final_answer": []}. '
-    "Do not include any other text outside the JSON object."
+    "You are an expert dental radiologist AI analyzing a panoramic dental X-ray (OPG). You do NOT have access to any "
+    "tools -- reason directly from the single image you are given, in ONE turn, then commit to a diagnosis.\n\n"
+    "Identify abnormal teeth (Caries, Deep Caries, Periapical Lesion, Impacted Tooth) using FDI notation "
+    "(quadrants 1-4, tooth positions 1-8). A patient may have several findings: list all of them in final_answer. "
+    "If the dentition is clinically healthy, return an empty list.\n\n"
+    "Respond with EXACTLY ONE valid JSON object, no markdown and no text outside it:\n"
+    '{"thought": "<clinical reasoning covering the regions you examined>", "final_answer": [{"quadrant": <1-4>, '
+    '"tooth_position": <1-8>, "diagnosis": "<Caries|Deep Caries|Periapical Lesion|Impacted Tooth>", '
+    '"confidence": <0.0-1.0>}, ...]}\n'
+    '(For a clinically normal radiograph: {"thought": "<reasoning confirming normal anatomy>", "final_answer": []})'
 )
 
 

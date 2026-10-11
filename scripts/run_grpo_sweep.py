@@ -98,6 +98,8 @@ def parse_args():
         default=False,
         help="Roll out with canonical views; must match the SFT stage's --canonical-resize setting.",
     )
+    parser.add_argument("--max-new-tokens", type=int, default=2048,
+                        help="Token cap of ONE assistant turn during rollouts (same as run_grpo.py).")
     parser.add_argument("--dev-split", type=str, default=None,
                         help="Dev split JSON (scripts/make_dev_split.py); its images are held out of every K run.")
     parser.add_argument("--max-images", type=int, default=None,
@@ -198,6 +200,7 @@ def main():
             max_seq_len=args.max_seq_len,
             pad_vision_to_slots=args.pad_vision_to_slots,
             slot_budget=parse_slot_budget(*args.vision_slots),
+            max_new_tokens=args.max_new_tokens,
         )
 
         elapsed = time.time() - start_time

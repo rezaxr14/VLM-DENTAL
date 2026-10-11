@@ -204,6 +204,7 @@ def collect_grpo_group_batched_no_tools(
     temperature: float = 0.7,
     canonical_resize: bool = False,
     compute_old_log_probs: bool = True,
+    max_new_tokens: int = 2048,
 ) -> tuple[list[dict], list[float], list[torch.Tensor], list[torch.Tensor]]:
     """Sample K candidate trajectories simultaneously in ONE batched forward pass (Track B)."""
     row = images_df[images_df["id"] == image_id].iloc[0]
@@ -242,7 +243,7 @@ def collect_grpo_group_batched_no_tools(
     }
 
     gen_kwargs = {
-        "max_new_tokens": 1024,
+        "max_new_tokens": max_new_tokens,
         "do_sample": True,
         "temperature": temperature,
         "pad_token_id": getattr(processor.tokenizer, "pad_token_id", None) or getattr(processor.tokenizer, "eos_token_id", None),
@@ -269,7 +270,7 @@ def collect_grpo_group_batched_no_tools(
             "turns": [{"turn": 0, "raw_output": reply, "parsed": parsed}],
             "tool_calls": 0,
             "final_answer": final_answer,
-            "format_ok": bool(final_answer is not None),
+            "format_ok": isinstance(final_answer, (dict, list)),
             "assistant_token_spans": [{"prompt_len": prompt_len, "token_ids": new_ids[0].tolist()}],
             "messages": traj_messages,
         }
@@ -305,6 +306,7 @@ def collect_grpo_group_batched_with_tools(
     canonical_resize: bool = False,
     compute_old_log_probs: bool = True,
     temperature: float = 0.7,
+    max_new_tokens: int = 2048,
 ) -> tuple[list[dict], list[float], list[torch.Tensor], list[torch.Tensor]]:
     """Sample K candidate multi-turn trajectories with workstation tools (Track A), at ``temperature`` (> 0)."""
     trajectories, rewards, old_log_probs_list, masks_list = [], [], [], []
@@ -322,6 +324,7 @@ def collect_grpo_group_batched_with_tools(
             verbose=False,
             canonical_resize=canonical_resize,
             temperature=temperature,
+            max_new_tokens=max_new_tokens,
         )
         traj_dict = traj.to_dict() if hasattr(traj, "to_dict") else traj
         reward, _ = combine_reward(traj_dict, ground_truth, max_tool_calls=max_tool_calls)
@@ -359,6 +362,7 @@ def collect_grpo_group(
     canonical_resize: bool = False,
     compute_old_log_probs: bool = True,
     temperature: float = 0.7,
+    max_new_tokens: int = 2048,
 ) -> tuple[list[dict], list[float], list[torch.Tensor], list[torch.Tensor]]:
     """Unified group rollout entrypoint supporting Track A and Track B."""
     if track == "no_tools":
@@ -372,6 +376,7 @@ def collect_grpo_group(
             canonical_resize=canonical_resize,
             compute_old_log_probs=compute_old_log_probs,
             temperature=temperature,
+            max_new_tokens=max_new_tokens,
         )
     else:
         if registry is None:
@@ -388,6 +393,7 @@ def collect_grpo_group(
             canonical_resize=canonical_resize,
             compute_old_log_probs=compute_old_log_probs,
             temperature=temperature,
+            max_new_tokens=max_new_tokens,
         )
 
 
@@ -513,6 +519,7 @@ def grpo_step(
     spmd_mesh: Any = None,
     use_spmd: bool = False,
     temperature: float = 0.7,
+    max_new_tokens: int = 2048,
 ) -> tuple[dict[str, Any], float]:
     """One GRPO update cycle over on-policy sampled groups.
 
@@ -565,6 +572,7 @@ def grpo_step(
             canonical_resize=canonical_resize,
             compute_old_log_probs=train_collator is None,
             temperature=temperature,
+            max_new_tokens=max_new_tokens,
         )
         advantages, current_baseline = compute_group_advantages(
             rewards=rewards,
@@ -799,6 +807,7 @@ def train_grpo(
     pad_vision_to_slots: bool = False,
     slot_budget: dict[str, int] | None = None,
     resume: bool = False,
+    max_new_tokens: int = 2048,
 ) -> str:
     """Execute Stage 2 GRPO policy optimization with dual-adapter reference and group advantage normalization."""
     from peft import PeftModel, LoraConfig
@@ -950,6 +959,7 @@ def train_grpo(
             spmd_mesh=spmd_mesh,
             use_spmd=bool(use_spmd and is_tpu),
             temperature=temperature,
+            max_new_tokens=max_new_tokens,
         )
         log_grpo_step(stats, extra={"step": step, "image_id": int(img_id)})
         print(f"[GRPO Step {step}/{total_steps}] mean_reward={stats['mean_reward']:.3f} kl={stats['kl_divergence']:.4f}")

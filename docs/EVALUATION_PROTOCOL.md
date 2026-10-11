@@ -30,11 +30,32 @@ Base, SFT and GRPO checkpoints, each with and without tools, on the test set. Ab
 chosen configuration is then evaluated once on the test set.
 
 **Image size.** Every condition is evaluated at both canonical size and original size. Canonical size is the primary
-result because it is what the model was trained on; original size is reported alongside it. (planned)
+result because it is what the model was trained on; original size is reported alongside it. `evaluate_models.py
+--canonical-resize` selects the view; canonical results are written to `..._canonical.jsonl`, so the two never share a
+file. Running both for every condition in one go is planned.
 
-**No-tools prompt.** The no-tools track uses one prompt, with `thought` and `final_answer`. At SFT load it replaces the
-system prompt stored in each trace, the same way the teacher directive is stripped from the first user turn, so old
-trace files stay valid. Evaluation and GRPO rollouts use the same prompt. (planned)
+**One loop for training and evaluation.** Evaluation runs the same `run_agent` loop GRPO rolls out with, so prompts,
+the `Result of <tool>:` observation format, canonical views and KV-cache reuse are identical. Evaluation used to have
+its own loop with a different tool-result format and no cache reuse. Budgets are the training ones, set explicitly:
+50 tool calls, turns bounded at tool calls plus 15, 2048 new tokens per turn (`--max-tool-calls`, `--max-turns`,
+`--max-new-tokens`; GRPO takes `--max-new-tokens` too). The earlier defaults (15 turns, 25 tool calls) would have cut
+off about a quarter and 43% of the training traces, and the implicit 512-token cap about 2% of their turns.
+`--malformed-retries` (default 0, as in GRPO) answers an unparseable reply with an error message instead of ending
+the episode.
+
+**Prompts.** Both tracks train, roll out and evaluate under the current prompt of the track. At SFT load it replaces
+the system prompt stored in each trace, the same way the teacher directive is stripped from the first user turn, so old
+trace files stay valid. Without it, most stored with-tools traces carried an older prompt that lacks the healthy-scan
+instruction, and the no-tools traces carried the teacher prompt. The no-tools prompt has a `thought` and a
+`final_answer`. Stored Tufts traces keep their own prompt, since a record does not say which class list it used.
+Recompute the token-length manifest after this change (`scripts/compute_exact_trace_lengths.py`).
+
+**Healthy scans.** `final_answer: []` is a valid, correct answer. It used to count as a format failure, and a failed
+episode (unparseable, or cut off by a cap) scored full accuracy on a healthy image. Both are fixed in the reward.
+
+**Base no-tools.** `base_no_tools` uses the unified prompt like the other no-tools conditions. The earlier zero-shot
+runs (a different prompt, used for the cross-model comparison) stay valid for that table; `--reuse-cached` loads them
+and tags the records `zero_shot_cached`, which are not comparable with the unified-prompt conditions.
 
 ## 3. Metrics
 

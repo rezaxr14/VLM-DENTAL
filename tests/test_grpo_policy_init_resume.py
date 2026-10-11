@@ -176,6 +176,8 @@ def _run_train(monkeypatch, tmp_path, sft_dir, n_images=5, resume=False, kill_at
         return TinyLM(), Proc()
 
     monkeypatch.setattr(grpo, "load_model", fake_load_model)
+    # wrap_distributed_model moves the model to CUDA whenever a GPU exists; keep the tiny model on CPU with IDS.
+    monkeypatch.setattr(grpo, "wrap_distributed_model", lambda m, **kw: m)
     monkeypatch.setattr(grpo, "log_grpo_step", lambda *a, **k: None)
 
     def fake_step(model, image_ids_and_gts, running_ema_baseline, **_k):
