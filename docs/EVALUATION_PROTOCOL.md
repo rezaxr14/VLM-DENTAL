@@ -46,6 +46,17 @@ trace files stay valid. Evaluation and GRPO rollouts use the same prompt. (plann
 ## 4. Provenance to state in the paper
 
 - The trace generator and verifier models are described generically, as role plus the cohort each handled.
-- The YOLO grounding checkpoint behind `locate_tooth` must be chosen on data other than the test set. The fold used
-  today was ranked on the official validation images; confirm which fold the runs use before reporting.
+- `locate_tooth` uses one fixed YOLO grounding checkpoint in every run. It is a supporting tool, not a contribution;
+  state the checkpoint and that it is held fixed across all conditions. (The checkpoint was ranked on the validation
+  images, so describe it as the grounding tool in use, not as a tuned component.)
 - The base-model zero-shot file is missing one test image; rerun it so every condition covers the same 50 images.
+
+## 5. GRPO start and resume
+
+The trainable `grpo_policy` adapter is initialised as a copy of the frozen SFT `reference` adapter, so the first
+rollout comes from the SFT model and the KL term is exactly zero at step 1. (Before this it started from the bare
+base model while the reference was the SFT model.)
+
+A GRPO run is resumable from its step checkpoints: policy adapter, step counter and reward baseline are restored and
+the images already trained on are skipped. It refuses to resume if the image pool or group size differ. Optimizer
+moments are not stored, so Adam restarts cold at the resumed step; report any resumed run as such.

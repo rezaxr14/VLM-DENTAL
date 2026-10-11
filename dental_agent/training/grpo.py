@@ -34,6 +34,12 @@ from dental_agent.agent.parsing import parse_agent_json
 from dental_agent.data.fdi_utils import row_to_fdi
 from dental_agent.rewards.composite import combine_reward
 from dental_agent.tools.registry import ToolRegistry
+from dental_agent.training.grpo_resume import (
+    find_latest_step_checkpoint,
+    init_policy_from_reference,
+    load_policy_state,
+    pool_fingerprint,
+)
 from dental_agent.training.sft import (
     build_conversational_labels,
     unwrap_peft_model,
@@ -792,6 +798,7 @@ def train_grpo(
     max_seq_len: int | None = None,
     pad_vision_to_slots: bool = False,
     slot_budget: dict[str, int] | None = None,
+    resume: bool = False,
 ) -> str:
     """Execute Stage 2 GRPO policy optimization with dual-adapter reference and group advantage normalization."""
     from peft import PeftModel, LoraConfig
@@ -819,10 +826,39 @@ def train_grpo(
             task_type="CAUSAL_LM",
         )
         model.add_adapter("grpo_policy", grpo_config)
+        # add_adapter makes a zero-init LoRA; start the policy AT the SFT weights (KL = 0 at step 1, rollouts from SFT).
+        n_copied = init_policy_from_reference(model)
+        print(f"[GRPO] Policy adapter initialised from the SFT adapter ({n_copied} LoRA tensors copied).")
         model.set_adapter("grpo_policy")
     else:
         print(f"WARNING: No SFT model found at {sft_model_dir}. Applying fresh LoRA adapter.")
         model = apply_lora(model, config)
+
+    # Resume: reload the trained policy adapter and skip the images already trained on (before any TPU/FSDP wrapping).
+    pool_fp = pool_fingerprint(images_df.dropna(subset=["local_path"])["id"])
+    start_step, resume_baseline = 0, 0.0
+    if resume:
+        if not (sft_model_dir and os.path.exists(sft_model_dir)):
+            raise ValueError("resume needs the SFT reference adapter (sft_model_dir); none was found.")
+        final_meta = Path(checkpoint_dir) / f"grpo-{track}-final" / "checkpoint_meta.json"
+        if final_meta.is_file():
+            print(f"[RESUME] {final_meta.parent} already exists: this run is complete; nothing to resume.")
+            return str(final_meta.parent)
+        found = find_latest_step_checkpoint(checkpoint_dir, track)
+        if found is None:
+            raise FileNotFoundError(f"--resume given but no 'grpo-{track}-step-N' checkpoint was found under {checkpoint_dir}.")
+        ckpt_path, meta = found
+        if meta.get("pool_fingerprint") != pool_fp or int(meta.get("group_size", G)) != G:
+            raise ValueError(
+                f"Checkpoint {ckpt_path.name} was trained on a different image pool or group size "
+                f"(pool {meta.get('pool_fingerprint')} vs {pool_fp}, K {meta.get('group_size')} vs {G}). Resume with the same "
+                "--dev-split, --seed, --max-images, --include-healthy and --group-size, or start a new run without --resume."
+            )
+        load_policy_state(model, ckpt_path)
+        start_step = int(meta["step"])
+        resume_baseline = float(meta.get("baseline", 0.0))
+        print(f"[RESUME] Policy adapter restored from {ckpt_path.name}; continuing at step {start_step + 1}. "
+              "Optimizer moments restart cold (not stored in checkpoints).")
 
     is_tpu = False
     try:
@@ -872,11 +908,13 @@ def train_grpo(
 
     valid_images = images_df.dropna(subset=["local_path"])
     total_steps = len(valid_images)
-    current_baseline = 0.0
+    current_baseline = resume_baseline
 
     repo_prefix = path_in_repo_prefix or f"grpo/{Path(checkpoint_dir).name}"
 
     for step, (_, img_row) in enumerate(valid_images.iterrows(), start=1):
+        if step <= start_step:
+            continue
         img_id = img_row["id"]
         img_annots = annots_df[annots_df["image_id"] == img_id]
         # An image without annotation rows is a HEALTHY image: ground truth [] (reward 1.0 only for an empty
@@ -923,7 +961,10 @@ def train_grpo(
                 processor=processor,
                 tag=step_tag,
                 checkpoint_dir=checkpoint_dir,
-                extra_metadata={"step": step, "mean_reward": stats["mean_reward"], "track": track},
+                extra_metadata={
+                    "step": step, "mean_reward": stats["mean_reward"], "track": track, "baseline": float(current_baseline),
+                    "group_size": G, "pool_fingerprint": pool_fp, "pool_size": total_steps,
+                },
             )
             if hf_repo:
                 upload_checkpoint_to_hf(

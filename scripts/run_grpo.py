@@ -152,7 +152,21 @@ def main() -> None:
         help="Hugging Face Hub repository for checkpoint sync (default: Reza-Nadimi/vlm-dental-models)",
     )
     parser.add_argument("--push-every-steps", type=int, default=25, help="Frequency of HF checkpoint upload in steps")
-    parser.add_argument("--resume-hf", type=str, default=None, help="Hugging Face repo to resume latest checkpoint from")
+    parser.add_argument(
+        "--resume-hf",
+        type=str,
+        default=None,
+        help="Hugging Face repo to download the NEWEST step checkpoint of this run from (a fresh Kaggle/Colab session). "
+             "Only downloads; add --resume to continue from it.",
+    )
+    parser.add_argument(
+        "--resume",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Continue from the newest grpo-<track>-step-N checkpoint under the output folder: policy adapter, step and EMA "
+             "baseline are restored and the images already trained on are skipped. Needs the same --dev-split, --seed, "
+             "--max-images, --include-healthy and --group-size. Adam moments restart cold.",
+    )
     parser.add_argument(
         "--num-cores",
         type=int,
@@ -295,6 +309,8 @@ def run_worker(index: int, args: argparse.Namespace):
 
     if args.temperature <= 0:
         raise SystemExit("--temperature must be > 0 (greedy rollouts give identical samples and zero advantages).")
+    if args.resume_hf and not args.resume:
+        raise SystemExit("--resume-hf only downloads the newest checkpoint; add --resume to continue training from it.")
     if args.precision == "qlora" and is_tpu:
         raise SystemExit("--precision qlora is not supported on TPU/XLA (bitsandbytes is CUDA-only). Use --precision bf16.")
     if args.pad_vision_to_slots and not is_tpu:
@@ -322,17 +338,15 @@ def run_worker(index: int, args: argparse.Namespace):
     out_dir.mkdir(parents=True, exist_ok=True)
     path_in_repo_prefix = f"grpo/{target_name}"
 
-    # Handle resume from HF Hub across Kaggle accounts
+    # Download the newest step checkpoint of this run from the Hub (Kaggle/Colab sessions do not persist).
     if args.resume_hf and is_master:
-        print(f"[RESUME] Checking HF Hub for latest checkpoint in {args.resume_hf}/{path_in_repo_prefix}...")
+        print(f"[RESUME] Checking HF Hub for the newest checkpoint in {args.resume_hf}/{path_in_repo_prefix}...")
         try:
-            from huggingface_hub import snapshot_download
-            snapshot_download(
-                repo_id=args.resume_hf,
-                allow_patterns=[f"{path_in_repo_prefix}/*"],
-                local_dir=str(Path(args.output_dir)),
+            from dental_agent.training.grpo_resume import fetch_latest_checkpoint_from_hub
+            tag = fetch_latest_checkpoint_from_hub(
+                args.resume_hf, path_in_repo_prefix, args.track, out_dir, Path(args.output_dir) / "_hf_resume",
             )
-            print(f"[RESUME] Restored checkpoint from {args.resume_hf} under {path_in_repo_prefix}.")
+            print(f"[RESUME] Downloaded {tag} to {out_dir}." if tag else "[RESUME] The Hub holds no step checkpoint for this run.")
         except Exception as e:
             print(f"[RESUME WARNING] Could not restore from HF Hub: {e}")
 
@@ -394,6 +408,7 @@ def run_worker(index: int, args: argparse.Namespace):
         max_seq_len=args.max_seq_len,
         pad_vision_to_slots=args.pad_vision_to_slots,
         slot_budget=slot_budget,
+        resume=args.resume,
     )
 
 

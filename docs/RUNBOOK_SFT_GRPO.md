@@ -68,6 +68,8 @@ The adapter is saved to `data/models/qwen3_5_9b_sft_with_tools_dentex_alone_<pre
 ```
 python scripts/run_grpo.py --track with_tools --sft-stage dentex_alone --sft-model-dir data/models/qwen3_5_9b_sft_with_tools_dentex_alone_qlora --dataset dentex --dev-split data/splits/dentex_dev.json --group-size 4 --epochs 2 --lr 5e-6 --kl-beta 0.04 --clip-eps 0.2 --temperature 0.7 --canonical-resize --precision qlora --hf-repo <repo> --push-every-steps 25
 ```
+GRPO starts its trainable adapter as a copy of the SFT adapter. To continue a run that was interrupted, repeat the same command with `--resume` (same `--dev-split`, `--seed`, `--max-images`, `--include-healthy` and `--group-size`); on a fresh Kaggle/Colab session add `--resume-hf <repo>` to download the newest step checkpoint first. `--resume-hf` alone is refused, because it only downloads.
+
 GRPO on a GPU has no sequence-length ceiling: rollout length is set by the agent loop, and memory is dominated by generation. Watch `nvidia-smi` through the first step. If it runs out of memory, report the step it reached.
 
 **A9. Evaluate at original size** (no `--canonical-resize`, whichever way the model was trained)
