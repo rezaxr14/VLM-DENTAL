@@ -85,6 +85,12 @@ python scripts/evaluate_models.py --condition sft_with_tools --adapter-path data
 python scripts/evaluate_models.py --condition grpo_with_tools --adapter-path data/models/qwen3_5_9b_grpo_with_tools_k4_dentex_alone/grpo-with_tools-final --dataset dentex --split test --precision qlora --canonical-resize --max-tool-calls 50 --max-new-tokens 2048
 ```
 Evaluation runs the same agent loop as GRPO rollouts, so keep `--max-new-tokens` equal to the GRPO run's. Canonical results go to `..._canonical.jsonl`.
+**Evaluation matrix (all conditions, both sizes, one command).** Loads each checkpoint once; results and the pooled tables go to `data/evaluations/`:
+```
+python scripts/run_eval_matrix.py --split test --sft-adapter data/models/qwen3_5_9b_sft_with_tools_dentex_alone_qlora --grpo-adapter data/models/qwen3_5_9b_grpo_with_tools_k4_dentex_alone/grpo-with_tools-final --precision qlora --max-tool-calls 50 --max-new-tokens 2048 --existing-results error
+```
+Use `--split dev --dev-split data/splits/dentex_dev.json` for ablations and the K sweep, never `test`. After an interruption repeat the command with `--existing-results resume`. Read `data/evaluations/matrix_dentex_test/matrix_summary.md`; recompute the tables from the result files with `python scripts/aggregate_eval.py --output-dir data/evaluations --dataset dentex --split test`. The two commands above this paragraph run a single cell; `evaluate_models.py` also takes `--existing-results`.
+
 A GRPO checkpoint folder holds the trained `grpo_policy` and a frozen `reference` adapter; evaluation uses `grpo_policy` automatically when you pass the checkpoint folder. Conditions: `base_no_tools`, `base_with_tools`, `sft_no_tools`, `sft_with_tools`, `grpo_no_tools`, `grpo_with_tools`, or `all`.
 
 ---

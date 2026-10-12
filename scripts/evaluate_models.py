@@ -55,6 +55,7 @@ load_dotenv()
 
 from dental_agent.config import load_config, load_env
 from dental_agent.data.dentex import load_dentex_dataset
+from dental_agent.data.dev_split import assert_not_test_split, image_key, load_dev_keys
 from dental_agent.data.fdi_utils import row_to_fdi
 from dental_agent.agent.prompts import FIRST_USER_PROMPT, ZERO_SHOT_PROMPT, build_agent_system_prompt
 from dental_agent.agent.parsing import parse_agent_json
@@ -406,39 +407,73 @@ def run_with_tools_eval(
 # Shared-loop Evaluation (what evaluate_condition runs)
 # ---------------------------------------------------------------------------
 
-def run_agent_condition(
+def run_condition_trajectory(
     model, processor, images_df, image_id: int, registry: ToolRegistry | None, args: argparse.Namespace,
-) -> tuple[list[dict], str, bool, int, int]:
-    """Evaluate one image with the SAME loop GRPO rolls out with (``dental_agent.agent.loop``).
+):
+    """Run ONE image through the SAME loop GRPO rolls out with (``dental_agent.agent.loop``) and return the trajectory.
 
     Evaluation, GRPO rollouts and SFT therefore share the system prompt, the ``Result of <tool>:`` observation format,
     canonical views, KV-cache reuse and the per-turn token cap. Greedy decoding (temperature 0).
-    ``run_with_tools_eval`` / ``run_no_tools_eval`` above are the earlier stand-alone loops and are no longer called.
-
-    Returns (pred_findings, raw_output, format_ok, turn_count, tool_call_count).
     """
     if registry is not None:
-        traj = run_agent(
+        return run_agent(
             image_id=image_id, images_df=images_df, model=model, processor=processor, registry=registry,
             max_tool_calls=args.max_tool_calls, verbose=False, canonical_resize=args.canonical_resize,
             temperature=0.0, dataset=args.dataset, max_new_tokens=args.max_new_tokens,
             max_turns=args.max_turns, malformed_retries=args.malformed_retries,
         )
-    else:
-        traj = run_agent_no_tools(
-            image_id=image_id, images_df=images_df, model=model, processor=processor, verbose=False,
-            canonical_resize=args.canonical_resize, temperature=0.0, max_new_tokens=args.max_new_tokens,
-        )
+    return run_agent_no_tools(
+        image_id=image_id, images_df=images_df, model=model, processor=processor, verbose=False,
+        canonical_resize=args.canonical_resize, temperature=0.0, max_new_tokens=args.max_new_tokens,
+    )
 
+
+def findings_from_trajectory(traj) -> list[dict[str, Any]]:
+    """Predicted findings of a trajectory: a list answer, a single-finding dict, or nothing."""
     final_answer = traj.final_answer
     if isinstance(final_answer, list):
-        pred_findings = extract_predicted_findings({"final_answer": final_answer})
-    elif isinstance(final_answer, dict):
-        pred_findings = extract_predicted_findings({"final_answer": [final_answer]})
-    else:
-        pred_findings = []
+        return extract_predicted_findings({"final_answer": final_answer})
+    if isinstance(final_answer, dict):
+        return extract_predicted_findings({"final_answer": [final_answer]})
+    return []
+
+
+def run_agent_condition(
+    model, processor, images_df, image_id: int, registry: ToolRegistry | None, args: argparse.Namespace,
+) -> tuple[list[dict], str, bool, int, int]:
+    """Evaluate one image with the shared loop (see ``run_condition_trajectory``).
+
+    ``run_with_tools_eval`` / ``run_no_tools_eval`` above are the earlier stand-alone loops and are no longer called.
+
+    Returns (pred_findings, raw_output, format_ok, turn_count, tool_call_count).
+    """
+    traj = run_condition_trajectory(model, processor, images_df, image_id, registry, args)
     raw_output = "\n---\n".join(str(t.get("raw_output", "")) for t in traj.turns)
-    return pred_findings, raw_output, bool(traj.format_ok), len(traj.turns), int(traj.tool_calls)
+    return findings_from_trajectory(traj), raw_output, bool(traj.format_ok), len(traj.turns), int(traj.tool_calls)
+
+
+def transcript_for_record(traj) -> dict[str, Any]:
+    """Compact, JSON-safe transcript stored in every record: all messages except the (constant) system prompt, with
+    images replaced by ``<image>``, plus each turn's status and tool calls. Failure analysis and qualitative figures
+    read it; the metrics never do."""
+    messages = []
+    for m in getattr(traj, "messages", None) or []:
+        if m.get("role") == "system":
+            continue
+        content = m.get("content")
+        if isinstance(content, str):
+            text = content
+        else:
+            text = "\n".join(
+                part.get("text", "") if part.get("type") == "text" else "<image>"
+                for part in (content or []) if isinstance(part, dict)
+            )
+        messages.append({"role": m.get("role"), "content": text})
+    turns = [
+        {"turn": t.get("turn"), "status": t.get("status"), "tool_calls": t.get("tool_calls_this_turn", [])}
+        for t in traj.turns
+    ]
+    return {"messages": messages, "turns": turns}
 
 
 # ---------------------------------------------------------------------------
@@ -555,6 +590,88 @@ def print_condition_summary(summary: dict[str, Any]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Image set, settings fingerprint and resume
+# ---------------------------------------------------------------------------
+
+def load_eval_split(args: argparse.Namespace):
+    """Images, annotations and categories of the split to evaluate.
+
+    * ``test``: the official DENTEX validation set (50 images). The final numbers and nothing else.
+    * ``dev``: the dev images carved out of the DENTEX TRAIN set (``--dev-split``, see scripts/make_dev_split.py), held
+      out of SFT and GRPO. The group-size sweep and the ablations are measured here, never on ``test``.
+    """
+    split = args.split.strip().lower()
+    if split == "dev":
+        if not getattr(args, "dev_split", None):
+            raise SystemExit("--split dev needs --dev-split (the file written by scripts/make_dev_split.py).")
+        imgs_df, annots_df, cats_df = load_dentex_dataset(data_dir=args.data_dir, split_name="train")
+        assert_not_test_split(imgs_df)
+        keys = load_dev_keys(args.dev_split)
+        imgs_df = imgs_df[[image_key(args.dataset, i) in keys for i in imgs_df["id"]]].reset_index(drop=True)
+        if len(imgs_df) != len(keys):
+            raise SystemExit(f"Dev split lists {len(keys)} images but only {len(imgs_df)} are in the DENTEX train data.")
+        annots_df = annots_df[annots_df["image_id"].isin(set(imgs_df["id"]))]
+        return imgs_df, annots_df, cats_df
+    return load_dentex_dataset(data_dir=args.data_dir, split_name=args.split)
+
+
+def eligible_images(imgs_df, limit: int | None = None):
+    """Images with a readable local file (optionally the first ``limit``)."""
+    eligible = imgs_df[imgs_df["local_path"].notna() & (imgs_df["local_path"] != "None")].copy()
+    eligible = eligible[eligible["local_path"].apply(lambda p: os.path.exists(str(p)) if p else False)]
+    if limit is not None and limit > 0:
+        eligible = eligible.iloc[:limit]
+    return eligible
+
+
+def eval_settings(args: argparse.Namespace, condition: str, adapter_path: str | None) -> dict[str, Any]:
+    """Everything that changes what a condition's numbers mean. Stored in every record; a resume must match it."""
+    return {
+        "condition": condition,
+        "model_id": args.model_id,
+        "adapter_path": adapter_path or "",
+        "precision": args.precision,
+        "canonical_resize": bool(args.canonical_resize),
+        "max_tool_calls": int(args.max_tool_calls),
+        "max_turns": args.max_turns,
+        "max_new_tokens": int(args.max_new_tokens),
+        "malformed_retries": int(args.malformed_retries),
+        "temperature": 0.0,
+        "prompt": "unified",
+    }
+
+
+def prepare_output_file(output_path: Path, mode: str, settings: dict[str, Any]) -> dict[int, dict[str, Any]]:
+    """Apply ``--existing-results`` to a result file. Returns the already-finished records (by image id) to keep.
+
+    ``error``     refuse when the file already has records (the old behaviour silently appended duplicates);
+    ``resume``    keep the finished images and run only the rest, provided they were produced with identical settings;
+    ``overwrite`` start the file again.
+    """
+    if not output_path.is_file() or output_path.stat().st_size == 0:
+        return {}
+    if mode == "overwrite":
+        output_path.unlink()
+        return {}
+    if mode != "resume":
+        raise SystemExit(
+            f"{output_path} already has results. Add --existing-results resume to continue it, or "
+            "--existing-results overwrite to start it again."
+        )
+    done: dict[int, dict[str, Any]] = {}
+    for rec in load_cached_results(output_path):
+        done[int(rec["image_id"])] = rec
+    for rec in done.values():
+        old = rec.get("eval_settings")
+        if old is None:
+            raise SystemExit(f"{output_path} was written before settings were recorded; it cannot be resumed safely. Use --existing-results overwrite.")
+        diff = {k: (old.get(k), v) for k, v in settings.items() if old.get(k) != v}
+        if diff:
+            raise SystemExit(f"{output_path} was produced with different settings {diff}; resuming would mix them. Use --existing-results overwrite.")
+    return done
+
+
+# ---------------------------------------------------------------------------
 # Main Evaluation Dispatcher
 # ---------------------------------------------------------------------------
 
@@ -564,8 +681,13 @@ def evaluate_condition(
     imgs_df,
     annots_df,
     cats_df,
+    loaded: tuple | None = None,
 ) -> list[dict[str, Any]]:
-    """Evaluate a single condition and return per-image records."""
+    """Evaluate a single condition and return per-image records.
+
+    ``loaded`` = (model, processor) reuses an already loaded model (the matrix runner loads each checkpoint once and
+    runs all of its cells); it is then not reloaded and not freed here.
+    """
     dataset_name = args.dataset.strip().lower()
     split_name = args.split.strip().lower()
     output_dir = Path(args.output_dir)
@@ -592,20 +714,23 @@ def evaluate_condition(
             print(f"[WARNING] --reuse-cached specified but cached file not found: {cached_path}")
             print("[WARNING] Falling back to live evaluation...")
 
-    # Filter eligible images
-    eligible_imgs = imgs_df[imgs_df["local_path"].notna() & (imgs_df["local_path"] != "None")].copy()
-    eligible_imgs = eligible_imgs[eligible_imgs["local_path"].apply(lambda p: os.path.exists(str(p)) if p else False)]
-
-    if args.limit is not None and args.limit > 0:
-        eligible_imgs = eligible_imgs.iloc[:args.limit]
+    eligible_imgs = eligible_images(imgs_df, args.limit)
 
     print_condition_banner(condition, len(eligible_imgs), output_path)
 
-    # Load model
     is_tools = "with_tools" in condition
     adapter_path = args.adapter_path if condition.startswith(("sft_", "grpo_")) else None
-    device, dtype, is_tpu = setup_eval_hardware(args.precision)
-    model, processor = load_eval_model(args.model_id, adapter_path, device, dtype, condition, quantize_4bit=args.precision == "qlora")
+    settings = eval_settings(args, condition, adapter_path)
+    done = prepare_output_file(output_path, getattr(args, "existing_results", "error"), settings)
+    if done:
+        print(f"[RESUME] {len(done)} image(s) already finished in {output_path.name}; running the remaining ones.")
+
+    # Load model (unless the caller already did)
+    if loaded is None:
+        device, dtype, is_tpu = setup_eval_hardware(args.precision)
+        model, processor = load_eval_model(args.model_id, adapter_path, device, dtype, condition, quantize_4bit=args.precision == "qlora")
+    else:
+        model, processor = loaded
 
     registry = None
     if is_tools:
@@ -616,6 +741,9 @@ def evaluate_condition(
     for idx, (_, img_row) in enumerate(eligible_imgs.iterrows(), start=1):
         image_id = int(img_row["id"])
         image_path = str(img_row["local_path"])
+        if image_id in done:
+            records.append(done[image_id])
+            continue
         print(f"[{idx}/{len(eligible_imgs)}] Image ID {image_id}...", end=" ", flush=True)
 
         try:
@@ -626,9 +754,12 @@ def evaluate_condition(
 
         gt_findings = extract_ground_truth(image_id, annots_df, cats_df)
 
-        pred_findings, raw_output, format_ok, turns, tools_used = run_agent_condition(
-            model, processor, eligible_imgs, image_id, registry, args,
-        )
+        t_start = time.time()
+        traj = run_condition_trajectory(model, processor, eligible_imgs, image_id, registry, args)
+        seconds = time.time() - t_start
+        pred_findings = findings_from_trajectory(traj)
+        raw_output = "\n---\n".join(str(t.get("raw_output", "")) for t in traj.turns)
+        format_ok, turns, tools_used = bool(traj.format_ok), len(traj.turns), int(traj.tool_calls)
 
         # Multi-finding set-level matching (Rule 13)
         match_res = match_multi_findings(gt_findings, pred_findings)
@@ -678,6 +809,10 @@ def evaluate_condition(
             "turns": turns,
             "tool_calls": tools_used,
             "raw_output": raw_output,
+            "prompt": "unified",
+            "seconds": seconds,
+            "eval_settings": settings,
+            "trajectory": transcript_for_record(traj),
             "timestamp": time.time(),
         })
         records.append(record)
@@ -686,16 +821,17 @@ def evaluate_condition(
         with open(output_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(record) + "\n")
 
-    # Clean up model to free memory before next condition
-    del model, processor
-    import gc
-    gc.collect()
-    try:
-        import torch
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-    except Exception:
-        pass
+    # Clean up model to free memory before next condition (a caller-owned model stays loaded)
+    if loaded is None:
+        del model, processor
+        import gc
+        gc.collect()
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
 
     return records
 
@@ -729,7 +865,20 @@ def parse_args() -> argparse.Namespace:
         help="Path or HF Hub repo for fine-tuned LoRA adapter (required for sft_* and grpo_* conditions)",
     )
     parser.add_argument("--dataset", type=str, default="dentex", help="Dataset name ('dentex')")
-    parser.add_argument("--split", type=str, default="test", help="Dataset split ('test', 'validation')")
+    parser.add_argument(
+        "--split", type=str, default="test",
+        help="'test' = the official DENTEX validation set (final numbers only); 'dev' = the dev images held out of training "
+             "(needs --dev-split; group-size sweep and ablations are measured here).",
+    )
+    parser.add_argument(
+        "--dev-split", type=str, default=None,
+        help="Dev split JSON (scripts/make_dev_split.py). Used by --split dev.",
+    )
+    parser.add_argument(
+        "--existing-results", type=str, default="error", choices=["error", "resume", "overwrite"],
+        help="What to do when this condition's result file already has records: error (default), resume (skip finished "
+             "images; settings must be identical) or overwrite (start again).",
+    )
     parser.add_argument(
         "--data-dir",
         type=str,
@@ -784,7 +933,7 @@ def main() -> None:
 
     # Load dataset
     print(f"\n[DATA] Loading {args.dataset.upper()} dataset (split='{args.split}')...")
-    imgs_df, annots_df, cats_df = load_dentex_dataset(data_dir=args.data_dir, split_name=args.split)
+    imgs_df, annots_df, cats_df = load_eval_split(args)
     print(f"[DATA] Loaded {len(imgs_df)} images, {len(annots_df)} annotations.\n")
 
     # Determine conditions to run

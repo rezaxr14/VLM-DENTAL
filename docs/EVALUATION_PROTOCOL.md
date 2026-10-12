@@ -59,10 +59,20 @@ and tags the records `zero_shot_cached`, which are not comparable with the unifi
 
 ## 3. Metrics
 
-- Finding-level precision, recall and F1, pooled over all test images, using `match_multi_findings` (never the first
-  annotation row, Rule 13). Image-level "exact match" is kept as a secondary number.
-- Paired bootstrap confidence intervals for differences between conditions on the same images.
-- Per-class results, and the healthy images reported separately (false-positive behaviour).
+**Implemented** in `dental_agent/evaluation/matrix.py`.
+
+- Finding-level precision, recall and F1, pooled over all images, using `match_multi_findings` (never the first
+  annotation row, Rule 13), at two levels: exact (right tooth and diagnosis) and FDI (right tooth). Counts are recomputed
+  from the stored ground truth and predictions. Image-level "all findings right" is kept as a secondary number.
+  Worked example: three images with (2 GT, 2 predicted, 1 exact), (1 GT, nothing predicted) and (healthy, 1 invented
+  finding) pool to TP 1, predicted 3, GT 3, so precision 1/3, recall 1/3, F1 = 2 TP / (predicted + GT) = 2/6. The pooled
+  numbers are repeated for pathological images only.
+- Confidence intervals resample whole images, since the findings of one image are not independent.
+- Paired bootstrap differences between conditions on the images both cover, using the same resample for both: tools vs
+  no tools, SFT vs base, GRPO vs SFT, canonical vs original. A two-sided bootstrap p-value accompanies each.
+- Per-class precision/recall/F1 (a right tooth with the wrong diagnosis is a miss for the true class and a false
+  positive for the predicted one), and the healthy images on their own: how many get invented findings.
+- A format failure counts as an empty answer in the pooled numbers and is reported separately (format ok rate).
 
 ## 4. Provenance to state in the paper
 
@@ -98,3 +108,20 @@ moments are not stored, so Adam restarts cold at the resumed step; report any re
   averaging 600 s per step over a pool of 635 images projects to 635 x 600 s = 106 h, and K=8 to 211 h.
 
 The projection is an estimate from the probe images; the logged turns and tool calls show whether they were typical.
+
+## 7. Running the matrix
+
+**Implemented.** `scripts/run_eval_matrix.py` runs the grid (checkpoints x tools x image size) on one split. `--split
+test` is the official validation set and is for final numbers only; `--split dev` evaluates the dev images held out of
+training (`--dev-split`), which is where the ablations and the group-size sweep are measured. Each cell writes
+`eval_<dataset>_<split>_<condition>[_canonical].jsonl`, one record per image. A record keeps the settings it was run with,
+the seconds taken, and a compact transcript (every message except the constant system prompt, images replaced by
+`<image>`, plus each turn's status and tool calls), so failures can be read and qualitative figures drawn without
+re-running anything.
+
+`--existing-results` decides what happens to a file that already has records: `error` (the default, instead of the old
+silent appending of duplicates), `resume` (finished images are kept, only the rest run; refused when the settings differ,
+so two settings can never be mixed in one file) or `overwrite`. A finished cell is skipped without loading the model.
+The tables (`matrix_summary.md` and CSVs, including per-class and paired comparisons) are written to
+`<output-dir>/matrix_<dataset>_<split>/` and can be recomputed without a model with `scripts/aggregate_eval.py`.
+The cached zero-shot file used another prompt, so the matrix always runs live under the unified prompt.
