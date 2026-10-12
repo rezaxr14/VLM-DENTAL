@@ -71,6 +71,7 @@ from dental_agent.evaluation.metrics import (
     bootstrap_metric_ci,
 )
 from dental_agent.evaluation.reporting import generate_summary_table, generate_markdown_report
+from dental_agent.evaluation.tool_ablation import ToolProbe, spec_from_args
 from dental_agent.utils.serialization import to_jsonable
 from dental_agent.utils.canonical import (
     family_for_tool, to_canonical,
@@ -213,12 +214,19 @@ def extract_ground_truth(image_id: int, annots_df, cats_df) -> list[dict[str, An
             except (ValueError, TypeError):
                 d_id_int = None
             d_raw = cat_lookup.get(d_id, cat_lookup.get(d_id_int, DENTEX_DEFAULT_DIAGNOSES.get(d_id_int, "Caries")))
-            gt_findings.append({
+            finding = {
                 "quadrant": q,
                 "tooth_position": pos,
                 "diagnosis": normalize_dental_diagnosis(d_raw),
                 "raw_diagnosis": str(d_raw),
-            })
+            }
+            bbox = ann_row.get("bbox") if hasattr(ann_row, "get") else None
+            try:
+                if bbox is not None and len(bbox) == 4:
+                    finding["bbox"] = [float(v) for v in bbox]   # annotated tooth box [x, y, w, h], used for box-vs-GT IoU
+            except (TypeError, ValueError):
+                pass
+            gt_findings.append(finding)
     return gt_findings
 
 
@@ -695,7 +703,11 @@ def evaluate_condition(
     # Original-size results keep their historical file name; canonical-size results get a suffix so the two views of
     # one condition never share (and never append to) a file.
     size_tag = "_canonical" if args.canonical_resize else ""
-    output_path = output_dir / f"eval_{dataset_name}_{split_name}_{condition}{size_tag}.jsonl"
+    spec = spec_from_args(args)
+    if spec.active and "with_tools" not in condition:
+        raise SystemExit(f"Tool ablations (--remove-tools, --locate-shift-frac, --locate-scale) apply to with_tools conditions; got {condition}.")
+    # An ablation gets its own file (tag after the size tag), so it never mixes with the unablated results.
+    output_path = output_dir / f"eval_{dataset_name}_{split_name}_{condition}{size_tag}{spec.tag()}.jsonl"
 
     # For base_no_tools: check if we can reuse cached zero-shot results
     if condition == "base_no_tools" and args.reuse_cached:
@@ -721,6 +733,8 @@ def evaluate_condition(
     is_tools = "with_tools" in condition
     adapter_path = args.adapter_path if condition.startswith(("sft_", "grpo_")) else None
     settings = eval_settings(args, condition, adapter_path)
+    if spec.active:
+        settings["ablation"] = spec.settings()
     done = prepare_output_file(output_path, getattr(args, "existing_results", "error"), settings)
     if done:
         print(f"[RESUME] {len(done)} image(s) already finished in {output_path.name}; running the remaining ones.")
@@ -754,8 +768,11 @@ def evaluate_condition(
 
         gt_findings = extract_ground_truth(image_id, annots_df, cats_df)
 
+        # With tools, every image runs on a per-image registry that logs the localization calls and applies the
+        # requested ablation (none by default, in which case the tools behave exactly as before).
+        probe = ToolProbe(registry, spec, image_id) if registry is not None else None
         t_start = time.time()
-        traj = run_condition_trajectory(model, processor, eligible_imgs, image_id, registry, args)
+        traj = run_condition_trajectory(model, processor, eligible_imgs, image_id, probe.registry if probe else None, args)
         seconds = time.time() - t_start
         pred_findings = findings_from_trajectory(traj)
         raw_output = "\n---\n".join(str(t.get("raw_output", "")) for t in traj.turns)
@@ -813,6 +830,7 @@ def evaluate_condition(
             "seconds": seconds,
             "eval_settings": settings,
             "trajectory": transcript_for_record(traj),
+            "ablation": probe.summary(gt_findings, traj.turns) if probe else None,
             "timestamp": time.time(),
         })
         records.append(record)
@@ -873,6 +891,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dev-split", type=str, default=None,
         help="Dev split JSON (scripts/make_dev_split.py). Used by --split dev.",
+    )
+    parser.add_argument(
+        "--remove-tools", nargs="+", default=[], metavar="TOOL",
+        help="Ablation (with_tools conditions): withhold these tools (e.g. nudge_crop). Results go to a file tagged with the "
+             "ablation. Measures how much the trained agent depends on the tool.",
+    )
+    parser.add_argument(
+        "--locate-shift-frac", type=float, default=0.0,
+        help="Ablation: move every locate_tooth box by this fraction of its own size in a fixed pseudo-random direction "
+             "(0 = untouched). Tests whether the agent corrects a wrong box with nudge_crop.",
+    )
+    parser.add_argument(
+        "--locate-scale", type=float, default=1.0,
+        help="Ablation: rescale every locate_tooth box about its centre (1 = untouched).",
+    )
+    parser.add_argument(
+        "--ablation-seed", type=int, default=0,
+        help="Seed of the perturbation direction (same seed = same wrong box for every condition and run).",
     )
     parser.add_argument(
         "--existing-results", type=str, default="error", choices=["error", "resume", "overwrite"],

@@ -25,15 +25,16 @@ def main() -> None:
     p.add_argument("--split", type=str, default="test", choices=["test", "dev"])
     p.add_argument("--n-boot", type=int, default=2000)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--iou-threshold", type=float, default=0.5, help="IoU at which a box counts as hitting the annotated tooth.")
     args = p.parse_args()
 
-    cells = matrix.load_matrix(args.output_dir, args.dataset, args.split)
-    if not cells:
+    summary = matrix.build_full_summary(args.output_dir, args.dataset, args.split, n_boot=args.n_boot, seed=args.seed,
+                                        iou_threshold=args.iou_threshold)
+    if not summary["cells"] and not summary["ablations"]:
         raise SystemExit(f"No eval_{args.dataset}_{args.split}_*.jsonl files in {args.output_dir}.")
-    summary = matrix.build_summary(cells, n_boot=args.n_boot, seed=args.seed)
     out_dir = Path(args.output_dir) / f"matrix_{args.dataset}_{args.split}"
     paths = matrix.write_matrix_outputs(summary, out_dir)
-    print(f"{len(cells)} cell(s) -> {out_dir}")
+    print(f"{len(summary['cells'])} cell(s), {len(summary['ablations'])} ablation run(s) -> {out_dir}")
     print(paths["markdown"].read_text(encoding="utf-8"))
 
 

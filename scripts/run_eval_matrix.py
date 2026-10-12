@@ -28,6 +28,7 @@ if repo_root not in sys.path:
 
 from scripts import evaluate_models as ev  # noqa: E402
 from dental_agent.evaluation import matrix  # noqa: E402
+from dental_agent.evaluation.tool_ablation import spec_from_args  # noqa: E402
 
 CHECKPOINTS = ("base", "sft", "grpo")
 
@@ -54,6 +55,14 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--max-tool-calls", type=int, default=50, help="Tool-call budget per image (the GRPO budget).")
     p.add_argument("--max-new-tokens", type=int, default=2048, help="Token cap of ONE assistant turn (the GRPO value).")
     p.add_argument("--malformed-retries", type=int, default=0)
+    p.add_argument("--remove-tools", nargs="+", default=[], metavar="TOOL",
+                   help="Ablation: withhold these tools (e.g. nudge_crop). Only with_tools cells run; results go to files "
+                        "tagged with the ablation, so the unablated results are untouched.")
+    p.add_argument("--locate-shift-frac", type=float, default=0.0,
+                   help="Ablation: move every locate_tooth box by this fraction of its own size (fixed pseudo-random direction).")
+    p.add_argument("--locate-scale", type=float, default=1.0, help="Ablation: rescale every locate_tooth box about its centre.")
+    p.add_argument("--ablation-seed", type=int, default=0, help="Seed of the perturbation direction.")
+    p.add_argument("--iou-threshold", type=float, default=0.5, help="IoU at which a box counts as hitting the annotated tooth.")
     p.add_argument("--precision", type=str, default="bf16", choices=["bf16", "fp16", "fp32", "qlora"])
     p.add_argument("--existing-results", type=str, default="error", choices=["error", "resume", "overwrite"],
                    help="When a cell's result file already has records: error (default), resume (finished images are "
@@ -76,6 +85,8 @@ def plan_cells(args: argparse.Namespace) -> list[tuple[str, list[tuple[str, str]
     groups = []
     for ck in CHECKPOINTS:
         conds = [c for c in matrix.CONDITIONS if c in args.conditions and checkpoint_of(c) == ck]
+        if spec_from_args(args).active:
+            conds = [c for c in conds if c.endswith("with_tools")]  # a tool ablation has nothing to change without tools
         if not conds:
             continue
         if ck != "base" and not adapter_for(ck, args):
@@ -95,20 +106,21 @@ def cell_args(args: argparse.Namespace, condition: str, size: str) -> argparse.N
 
 def run_matrix(args: argparse.Namespace, imgs_df, annots_df, cats_df) -> dict[str, list]:
     groups = plan_cells(args)
+    tag = spec_from_args(args).tag()
     n_eligible = len(ev.eligible_images(imgs_df, args.limit))
     print(f"[MATRIX] {sum(len(c) for _, c in groups)} cell(s) on {n_eligible} {args.split} image(s):")
     for _, cells in groups:
         for cond, size in cells:
-            path = matrix.cell_path(args.output_dir, args.dataset, args.split, cond, size)
+            path = matrix.cell_path(args.output_dir, args.dataset, args.split, cond, size, tag)
             print(f"  - {matrix.cell_name(cond, size):<32} {path}")
 
     if args.existing_results == "error":
         # Refuse before the first model load, not after the first cells have already run.
         existing = [
-            str(matrix.cell_path(args.output_dir, args.dataset, args.split, c, z))
+            str(matrix.cell_path(args.output_dir, args.dataset, args.split, c, z, tag))
             for _, cells in groups for c, z in cells
-            if matrix.cell_path(args.output_dir, args.dataset, args.split, c, z).is_file()
-            and matrix.cell_path(args.output_dir, args.dataset, args.split, c, z).stat().st_size > 0
+            if matrix.cell_path(args.output_dir, args.dataset, args.split, c, z, tag).is_file()
+            and matrix.cell_path(args.output_dir, args.dataset, args.split, c, z, tag).stat().st_size > 0
         ]
         if existing:
             raise SystemExit("These result files already have records:\n  " + "\n  ".join(existing) +
@@ -120,7 +132,7 @@ def run_matrix(args: argparse.Namespace, imgs_df, annots_df, cats_df) -> dict[st
         loaded = None
         for cond, size in cells:
             ns = cell_args(args, cond, size)
-            path = matrix.cell_path(args.output_dir, args.dataset, args.split, cond, size)
+            path = matrix.cell_path(args.output_dir, args.dataset, args.split, cond, size, tag)
             if args.existing_results == "resume":
                 # a finished cell must not cost a model load; its settings are still verified
                 done = ev.prepare_output_file(path, "resume", ev.eval_settings(ns, cond, adapter))
@@ -146,8 +158,8 @@ def run_matrix(args: argparse.Namespace, imgs_df, annots_df, cats_df) -> dict[st
 
 
 def write_tables(args: argparse.Namespace) -> Path:
-    cells = matrix.load_matrix(args.output_dir, args.dataset, args.split)
-    summary = matrix.build_summary(cells, n_boot=args.n_boot, seed=args.seed)
+    summary = matrix.build_full_summary(args.output_dir, args.dataset, args.split, n_boot=args.n_boot, seed=args.seed,
+                                        iou_threshold=args.iou_threshold)
     out_dir = Path(args.output_dir) / f"matrix_{args.dataset}_{args.split}"
     paths = matrix.write_matrix_outputs(summary, out_dir)
     print(f"[MATRIX] Tables written to {out_dir} ({paths['markdown'].name}, matrix_pooled.csv, matrix_per_class.csv, matrix_comparisons.csv).")

@@ -218,7 +218,39 @@ def healthy_report(counts: list[dict[str, Any]]) -> dict[str, float]:
 # One matrix cell
 # ---------------------------------------------------------------------------
 
-def summarize_cell(records: list[dict[str, Any]], n_boot: int = 2000, seed: int = 0) -> dict[str, Any]:
+def localization_summary(records: list[dict[str, Any]], iou_threshold: float = 0.5) -> dict[str, Any] | None:
+    """How well the working box matches the annotated tooth (see ``tool_ablation.py``), over the ground-truth findings that
+    have an annotated box. ``None`` for conditions without tools. A finding is *hit* when the box IoU reaches
+    ``iou_threshold``; *recovered* when the first box missed and the box after the agent's nudges hit.
+
+    Worked example, three located findings with (initial, final) IoU (0.33, 1.0), (0.8, 0.8), (0.2, 0.3): hit_initial
+    1/3, hit_final 2/3, recoverable 2 (the first and the third missed), recovered 1, recovery rate 1/2."""
+    entries = [e for r in records for e in ((r.get("ablation") or {}).get("box_vs_gt") or [])]
+    with_probe = [r for r in records if r.get("ablation")]
+    if not with_probe:
+        return None
+    found = [e for e in entries if e.get("found")]
+    nf = len(found)
+    recoverable = [e for e in found if e["iou_initial"] < iou_threshold]
+    coverages = [e["crop_coverage"] for e in found if e.get("crop_coverage") is not None]
+    return {
+        "iou_threshold": iou_threshold,
+        "n_findings_with_box": len(entries),
+        "located_rate": nf / len(entries) if entries else 0.0,
+        "mean_iou_initial": float(np.mean([e["iou_initial"] for e in found])) if found else 0.0,
+        "mean_iou_final": float(np.mean([e["iou_final"] for e in found])) if found else 0.0,
+        "hit_initial": sum(1 for e in found if e["iou_initial"] >= iou_threshold) / nf if nf else 0.0,
+        "hit_final": sum(1 for e in found if e["iou_final"] >= iou_threshold) / nf if nf else 0.0,
+        "n_recoverable": len(recoverable),
+        "n_recovered": sum(1 for e in recoverable if e["iou_final"] >= iou_threshold),
+        "recovery_rate": (sum(1 for e in recoverable if e["iou_final"] >= iou_threshold) / len(recoverable)) if recoverable else None,
+        "mean_nudges": float(np.mean([e["n_nudges"] for e in found])) if found else 0.0,
+        "mean_crop_coverage": float(np.mean(coverages)) if coverages else None,
+        "removed_tool_attempts_per_image": float(np.mean([r["ablation"].get("removed_tool_attempts", 0) for r in with_probe])),
+    }
+
+
+def summarize_cell(records: list[dict[str, Any]], n_boot: int = 2000, seed: int = 0, iou_threshold: float = 0.5) -> dict[str, Any]:
     """Everything the paper reports for one (condition, image size) cell."""
     counts = counts_for(records)
     n = len(counts)
@@ -242,6 +274,7 @@ def summarize_cell(records: list[dict[str, Any]], n_boot: int = 2000, seed: int 
         summary[f"{level}_pathological_only"] = pooled_prf(pathological, level)
     summary["per_class"] = per_class_prf(counts)
     summary["healthy"] = healthy_report(counts)
+    summary["localization"] = localization_summary(records, iou_threshold)
     return summary
 
 
@@ -261,23 +294,33 @@ def cell_name(condition: str, size: str) -> str:
     return f"{condition}@{size}"
 
 
-def cell_path(output_dir: str | Path, dataset: str, split: str, condition: str, size: str) -> Path:
-    """File ``evaluate_models.py`` writes for one cell (original size has no suffix, canonical size has ``_canonical``)."""
+def cell_path(output_dir: str | Path, dataset: str, split: str, condition: str, size: str, ablation: str = "") -> Path:
+    """File ``evaluate_models.py`` writes for one cell (original size has no suffix, canonical size has ``_canonical``).
+    A tool-ablation run adds its tag (``AblationSpec.tag()``, e.g. ``__no-nudge_crop``) after the size suffix."""
     tag = "_canonical" if size == "canonical" else ""
-    return Path(output_dir) / f"eval_{dataset}_{split}_{condition}{tag}.jsonl"
+    return Path(output_dir) / f"eval_{dataset}_{split}_{condition}{tag}{ablation}.jsonl"
 
 
-def load_matrix(output_dir: str | Path, dataset: str, split: str) -> dict[str, list[dict[str, Any]]]:
-    """Every cell that has a result file, keyed ``condition@size``."""
+def load_matrix(output_dir: str | Path, dataset: str, split: str, ablation: str = "") -> dict[str, list[dict[str, Any]]]:
+    """Every cell that has a result file, keyed ``condition@size``. ``ablation`` selects a tool-ablation run (default: the
+    unablated results)."""
     cells: dict[str, list[dict[str, Any]]] = {}
     for size in SIZES:
         for cond in CONDITIONS:
-            path = cell_path(output_dir, dataset, split, cond, size)
+            path = cell_path(output_dir, dataset, split, cond, size, ablation)
             if path.is_file():
                 recs = load_records(path)
                 if recs:
                     cells[cell_name(cond, size)] = recs
     return cells
+
+
+def discover_ablation_tags(output_dir: str | Path, dataset: str, split: str) -> list[str]:
+    """Tags (``__...``) of the tool-ablation runs that have result files in ``output_dir``."""
+    tags = set()
+    for path in Path(output_dir).glob(f"eval_{dataset}_{split}_*__*.jsonl"):
+        tags.add("__" + path.stem.split("__", 1)[1])
+    return sorted(tags)
 
 
 def default_comparisons(cells: Iterable[str]) -> list[tuple[str, str, str]]:
@@ -296,23 +339,48 @@ def default_comparisons(cells: Iterable[str]) -> list[tuple[str, str, str]]:
     return [p for p in pairs if p[1] in present and p[2] in present]
 
 
-def build_summary(cells: dict[str, list[dict[str, Any]]], n_boot: int = 2000, seed: int = 0) -> dict[str, Any]:
+def build_summary(cells: dict[str, list[dict[str, Any]]], n_boot: int = 2000, seed: int = 0, iou_threshold: float = 0.5) -> dict[str, Any]:
     keys = {name: {record_key(r) for r in recs} for name, recs in cells.items()}
     union = set().union(*keys.values()) if keys else set()
     summary: dict[str, Any] = {
         "n_boot": n_boot,
         "seed": seed,
-        "cells": {name: summarize_cell(recs, n_boot=n_boot, seed=seed) for name, recs in cells.items()},
+        "cells": {name: summarize_cell(recs, n_boot=n_boot, seed=seed, iou_threshold=iou_threshold) for name, recs in cells.items()},
         "coverage": {
             "images_in_union": len(union),
             "cells_missing_images": {name: sorted(union - k) for name, k in keys.items() if union - k},
         },
         "comparisons": [],
+        "ablations": {},
     }
     for label, a, b in default_comparisons(cells):
         for level in LEVELS:
             res = paired_bootstrap_diff(cells[a], cells[b], level=level, metric="f1", n_boot=n_boot, seed=seed)
             summary["comparisons"].append({"label": label, "a": a, "b": b, **res})
+    return summary
+
+
+def build_full_summary(
+    output_dir: str | Path, dataset: str, split: str, n_boot: int = 2000, seed: int = 0, iou_threshold: float = 0.5,
+) -> dict[str, Any]:
+    """The matrix of unablated results plus, for every tool-ablation run found, its cells and its effect: ablated minus
+    unablated pooled F1 on the images both cover, with a paired bootstrap interval."""
+    base = load_matrix(output_dir, dataset, split)
+    summary = build_summary(base, n_boot=n_boot, seed=seed, iou_threshold=iou_threshold)
+    for tag in discover_ablation_tags(output_dir, dataset, split):
+        cells = load_matrix(output_dir, dataset, split, ablation=tag)
+        if not cells:
+            continue
+        entry: dict[str, Any] = {
+            "cells": {name: summarize_cell(recs, n_boot=n_boot, seed=seed, iou_threshold=iou_threshold) for name, recs in cells.items()},
+            "effects": [],
+        }
+        for name in cells:
+            if name in base:
+                for level in LEVELS:
+                    res = paired_bootstrap_diff(cells[name], base[name], level=level, metric="f1", n_boot=n_boot, seed=seed)
+                    entry["effects"].append({"cell": name, **res})
+        summary["ablations"][tag] = entry
     return summary
 
 
@@ -361,19 +429,54 @@ def summary_markdown(summary: dict[str, Any]) -> str:
             f"{_fmt(c['per_class'][d]['f1'])} ({c['per_class'][d]['tp']}/{c['per_class'][d]['n_gt']})" if d in c["per_class"] else "-"
             for d in DIAGNOSES) + " |")
     lines.append("")
+
+    loc_cells = [(n, c["localization"]) for n, c in cells.items() if c.get("localization")]
+    if loc_cells:
+        lines += _localization_table("Localization: working box vs annotated tooth", loc_cells)
+    for tag, entry in summary.get("ablations", {}).items():
+        lines += [f"## Ablation `{tag}`", "",
+                  "Effect = ablated minus unablated pooled F1 on the images both cover (paired bootstrap, 95% interval). "
+                  "Tool removal measures a trained agent's dependence on the tool; it is not a model trained without it.", ""]
+        effects = [e for e in entry["effects"] if e["level"] == "exact"]
+        if effects:
+            lines += ["| cell | paired images | ablated exact F1 | unablated exact F1 | effect [95% CI] | p |", "|---|---|---|---|---|---|"]
+            for e in effects:
+                lines.append(f"| {e['cell']} | {e['n_paired']} | {_fmt(e['a_value'])} | {_fmt(e['b_value'])} | "
+                             f"{e['diff']:+.3f} [{e['ci_low']:+.3f}, {e['ci_high']:+.3f}] | {e['p_value']:.3f} |")
+            lines.append("")
+        abl_loc = [(n, c["localization"]) for n, c in entry["cells"].items() if c.get("localization")]
+        if abl_loc:
+            lines += _localization_table("Localization under this ablation", abl_loc, level=3)
     return "\n".join(lines)
 
 
+def _localization_table(title: str, rows: list[tuple[str, dict[str, Any]]], level: int = 2) -> list[str]:
+    thr = rows[0][1]["iou_threshold"]
+    out = ["#" * level + f" {title}", "",
+           f"IoU of the box the agent works with against the annotated tooth box; hit = IoU >= {thr:g}. Initial = right after "
+           "`locate_tooth` (after any perturbation), final = after the agent's `nudge_crop` calls.", "",
+           "| cell | findings with box | located | mean IoU initial | mean IoU final | hit initial | hit final | recovered | nudges per finding | crop coverage | attempts at removed tool per image |",
+           "|---|---|---|---|---|---|---|---|---|---|---|"]
+    for name, m in rows:
+        rec = "n/a" if m["recovery_rate"] is None else f"{m['n_recovered']}/{m['n_recoverable']}"
+        out.append(f"| {name} | {m['n_findings_with_box']} | {_fmt(m['located_rate'])} | {_fmt(m['mean_iou_initial'])} | "
+                   f"{_fmt(m['mean_iou_final'])} | {_fmt(m['hit_initial'])} | {_fmt(m['hit_final'])} | {rec} | "
+                   f"{_fmt(m['mean_nudges'], 2)} | {_fmt(m['mean_crop_coverage'])} | {_fmt(m['removed_tool_attempts_per_image'], 2)} |")
+    out.append("")
+    return out
+
+
 def write_matrix_outputs(summary: dict[str, Any], out_dir: str | Path) -> dict[str, Path]:
-    """Write ``matrix_summary.json``, ``matrix_pooled.csv``, ``matrix_per_class.csv``, ``matrix_comparisons.csv`` and
-    ``matrix_summary.md`` into ``out_dir``."""
+    """Write ``matrix_summary.json``, ``matrix_pooled.csv``, ``matrix_per_class.csv``, ``matrix_comparisons.csv``,
+    ``matrix_localization.csv``, ``matrix_ablations.csv`` and ``matrix_summary.md`` into ``out_dir``."""
     import csv
 
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     paths = {k: out / v for k, v in {
         "json": "matrix_summary.json", "pooled": "matrix_pooled.csv", "per_class": "matrix_per_class.csv",
-        "comparisons": "matrix_comparisons.csv", "markdown": "matrix_summary.md"}.items()}
+        "comparisons": "matrix_comparisons.csv", "localization": "matrix_localization.csv",
+        "ablations": "matrix_ablations.csv", "markdown": "matrix_summary.md"}.items()}
     paths["json"].write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
     with open(paths["pooled"], "w", newline="", encoding="utf-8") as f:
@@ -399,5 +502,23 @@ def write_matrix_outputs(summary: dict[str, Any], out_dir: str | Path) -> dict[s
         for c in summary["comparisons"]:
             w.writerow([c["label"], c["a"], c["b"], c["level"], c["n_paired"], c["a_value"], c["b_value"], c["diff"],
                         c["ci_low"], c["ci_high"], c["p_value"]])
+    loc_fields = ["iou_threshold", "n_findings_with_box", "located_rate", "mean_iou_initial", "mean_iou_final", "hit_initial",
+                  "hit_final", "n_recoverable", "n_recovered", "recovery_rate", "mean_nudges", "mean_crop_coverage",
+                  "removed_tool_attempts_per_image"]
+    with open(paths["localization"], "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["ablation", "cell"] + loc_fields)
+        groups = [("", summary["cells"])] + [(t, e["cells"]) for t, e in summary.get("ablations", {}).items()]
+        for tag, cells in groups:
+            for name, c in cells.items():
+                if c.get("localization"):
+                    w.writerow([tag, name] + [c["localization"][k] for k in loc_fields])
+    with open(paths["ablations"], "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["ablation", "cell", "level", "n_paired", "ablated_f1", "unablated_f1", "effect", "ci_low", "ci_high", "p_value"])
+        for tag, entry in summary.get("ablations", {}).items():
+            for e in entry["effects"]:
+                w.writerow([tag, e["cell"], e["level"], e["n_paired"], e["a_value"], e["b_value"], e["diff"], e["ci_low"],
+                            e["ci_high"], e["p_value"]])
     paths["markdown"].write_text(summary_markdown(summary), encoding="utf-8")
     return paths

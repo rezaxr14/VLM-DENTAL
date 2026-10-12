@@ -125,3 +125,38 @@ so two settings can never be mixed in one file) or `overwrite`. A finished cell 
 The tables (`matrix_summary.md` and CSVs, including per-class and paired comparisons) are written to
 `<output-dir>/matrix_<dataset>_<split>/` and can be recomputed without a model with `scripts/aggregate_eval.py`.
 The cached zero-shot file used another prompt, so the matrix always runs live under the unified prompt.
+
+## 8. Tool ablations and localization
+
+**Implemented (evaluation switches only; nothing is removed from the repo and nothing is retrained).** The trained agent
+is run with a tool withheld or with a deliberately wrong `locate_tooth` box, to measure how much it depends on its tools
+and whether it can correct itself. Run them on `--split dev`, with `--conditions` of your choice (only `*_with_tools`
+cells run), and read the tagged files next to the normal ones; the unablated results are never touched.
+
+| flag | what it does |
+|---|---|
+| `--remove-tools nudge_crop` | the tool is absent from the tool list and a call to it gets the standard "not recognized" error |
+| `--locate-shift-frac 0.3` | every `locate_tooth` box moves by 30% of its own size in a fixed pseudo-random direction |
+| `--locate-scale 1.5` | every `locate_tooth` box is rescaled about its centre |
+| `--ablation-seed` | seed of that direction; one (seed, image, tooth) always gets the same wrong box, so runs are paired |
+| `--iou-threshold 0.5` | IoU at which a box counts as hitting the annotated tooth |
+
+A result file is named `eval_<dataset>_<split>_<condition>[_canonical]__<tag>.jsonl`, for example
+`..._sft_with_tools_canonical__no-nudge_crop.jsonl`.
+
+**Reading the results.** `matrix_summary.md` gets an "Ablation" section per tag: the ablated exact F1, the unablated one
+on the same images, and their difference with a paired bootstrap interval. Removing a tool measures a trained agent's
+*dependence* on it. The prompt the checkpoint was trained with still mentions the tool, so how often the model asked for
+it anyway is reported as attempts per image. It is not a model trained without the tool, and the paper should say so.
+
+**Localization** (every `with_tools` cell, ablated or not). For each annotated finding whose tooth the agent located,
+the IoU of its working box with the annotated tooth box is taken right after `locate_tooth` (initial) and after its
+`nudge_crop` calls (final); a box counts as hitting at IoU >= the threshold. Worked example: annotated box
+[100, 100, 100, 100], located box [150, 100, 100, 100] has IoU 5000 / 15000 = 0.33 (a miss); after a nudge by
+dx_frac -0.5 the box is the annotated one, IoU 1.0 (a hit, recovered). Three findings with (initial, final) IoU of
+(0.33, 1.0), (0.8, 0.8), (0.2, 0.3) give a hit rate of 1/3 initially and 2/3 finally, and 1 of the 2 initial misses
+recovered. Also reported: how much of the annotated tooth the last `zoom_crop` of that box shows, nudges per finding, and
+the share of findings whose tooth was located at all. Tables: `matrix_localization.csv`, `matrix_ablations.csv`.
+
+Only findings with an annotated tooth box count; DENTEX annotations carry one. The detector (YOLOv8m) is the fixed
+supporting tool, so the perturbation is a stress test of the agent's self-correction, not an evaluation of the detector.

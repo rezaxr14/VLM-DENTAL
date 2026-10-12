@@ -91,6 +91,13 @@ python scripts/run_eval_matrix.py --split test --sft-adapter data/models/qwen3_5
 ```
 Use `--split dev --dev-split data/splits/dentex_dev.json` for ablations and the K sweep, never `test`. After an interruption repeat the command with `--existing-results resume`. Read `data/evaluations/matrix_dentex_test/matrix_summary.md`; recompute the tables from the result files with `python scripts/aggregate_eval.py --output-dir data/evaluations --dataset dentex --split test`. The two commands above this paragraph run a single cell; `evaluate_models.py` also takes `--existing-results`.
 
+**Tool ablations (dev split, evaluation only).** Same command with a switch; only `*_with_tools` cells run and the files are tagged, so the normal results stay untouched:
+```
+python scripts/run_eval_matrix.py --split dev --dev-split data/splits/dentex_dev.json --conditions sft_with_tools grpo_with_tools --sizes canonical --sft-adapter <sft> --grpo-adapter <grpo> --precision qlora --remove-tools nudge_crop
+python scripts/run_eval_matrix.py --split dev --dev-split data/splits/dentex_dev.json --conditions sft_with_tools grpo_with_tools --sizes canonical --sft-adapter <sft> --grpo-adapter <grpo> --precision qlora --locate-shift-frac 0.3
+```
+Run the unablated dev matrix for the same conditions first: the effect is ablated minus unablated on the same images. Protocol and how to read it: `docs/EVALUATION_PROTOCOL.md` section 8.
+
 A GRPO checkpoint folder holds the trained `grpo_policy` and a frozen `reference` adapter; evaluation uses `grpo_policy` automatically when you pass the checkpoint folder. Conditions: `base_no_tools`, `base_with_tools`, `sft_no_tools`, `sft_with_tools`, `grpo_no_tools`, `grpo_with_tools`, or `all`.
 
 ---
