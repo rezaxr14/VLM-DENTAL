@@ -77,6 +77,7 @@ from dental_agent.training.sft import (
 from dental_agent.model.backbone import get_model_classes, lora_coverage, lora_target_modules, projector_module_names
 from dental_agent.utils.canonical import SLOT_BUDGET, parse_slot_budget, slot_totals
 from dental_agent.data.dev_split import load_dev_keys
+from dental_agent.training.run_meta import keys_fingerprint, write_sft_run_meta
 
 
 def parse_args():
@@ -876,6 +877,22 @@ def run_training(index: int, args: argparse.Namespace):
     )
     val_size = max(int(len(full_dataset) * 0.05), 1) if len(full_dataset) >= 20 else 0
     train_size = len(full_dataset) - val_size
+
+    if is_master:
+        # Read by `run_grpo.py --preflight` so GRPO can be checked against the SFT run it starts from.
+        write_sft_run_meta(
+            out_path,
+            track=args.track,
+            stage=args.stage,
+            precision=args.precision,
+            canonical_resize=bool(canonical_resize),
+            pad_vision_to_slots=bool(pad_vision_to_slots),
+            vision_slots=list(args.vision_slots),
+            max_seq_len=args.max_seq_len,
+            dev_split=args.dev_split,
+            dev_split_fingerprint=keys_fingerprint(load_dev_keys(args.dev_split)),
+            n_records=len(full_dataset),
+        )
 
     if val_size > 0:
         train_dataset, val_dataset = random_split(

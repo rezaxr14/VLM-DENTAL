@@ -556,6 +556,7 @@ def grpo_step(
 
     groups, all_rewards = [], []
     current_baseline = running_ema_baseline
+    t_step_start = time.perf_counter()
 
     # 1. On-policy rollout collection
     for image_id, ground_truth in image_ids_and_gts:
@@ -582,6 +583,7 @@ def grpo_step(
         all_rewards.extend(rewards)
 
     n_total_rollouts = len(image_ids_and_gts) * group_size
+    t_rollout_end = time.perf_counter()
 
     # Static-shape path: encode each trajectory once, drop those that cannot fit the static length, and compute the
     # behaviour-policy log-probs with exactly the shapes used by the update (one compiled graph, no per-length recompiles).
@@ -673,7 +675,15 @@ def grpo_step(
             optimizer.step()
 
     model.eval()
+    if is_tpu:
+        try:
+            xm.wait_device_ops()  # XLA is lazy: without this the update time would be charged to the next rollout
+        except Exception:
+            pass
+    t_step_end = time.perf_counter()
     mean_kl = total_kl / max(kl_count, 1)
+    all_trajs = [t for trajs, _, _, _ in groups for t in trajs]
+    n_traj = max(len(all_trajs), 1)
     stats = {
         "mean_reward": sum(all_rewards) / max(len(all_rewards), 1),
         "kl_divergence": mean_kl,
@@ -681,6 +691,13 @@ def grpo_step(
         "group_size": group_size,
         "track": track,
         "n_dropped_overlength": n_dropped_overlength,
+        # Cost and behaviour diagnostics. Rollout = sampling the K trajectories (incl. tool calls); update = static
+        # old-log-prob pass + the policy epochs. summarize_grpo_log.py projects total run time from these.
+        "rollout_s": t_rollout_end - t_step_start,
+        "update_s": t_step_end - t_rollout_end,
+        "mean_turns": sum(len(t.get("turns", [])) for t in all_trajs) / n_traj,
+        "mean_tool_calls": sum(int(t.get("tool_calls", 0)) for t in all_trajs) / n_traj,
+        "format_ok_rate": sum(1 for t in all_trajs if t.get("format_ok")) / n_traj,
     }
     return stats, current_baseline
 
@@ -808,6 +825,7 @@ def train_grpo(
     slot_budget: dict[str, int] | None = None,
     resume: bool = False,
     max_new_tokens: int = 2048,
+    log_path: str | Path = "data/grpo_training_log.jsonl",
 ) -> str:
     """Execute Stage 2 GRPO policy optimization with dual-adapter reference and group advantage normalization."""
     from peft import PeftModel, LoraConfig
@@ -961,7 +979,7 @@ def train_grpo(
             temperature=temperature,
             max_new_tokens=max_new_tokens,
         )
-        log_grpo_step(stats, extra={"step": step, "image_id": int(img_id)})
+        log_grpo_step(stats, log_path=log_path, extra={"step": step, "image_id": int(img_id)})
         print(f"[GRPO Step {step}/{total_steps}] mean_reward={stats['mean_reward']:.3f} kl={stats['kl_divergence']:.4f}")
 
         if step % push_every_steps == 0 or step == total_steps:

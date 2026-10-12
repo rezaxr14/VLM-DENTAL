@@ -70,6 +70,13 @@ python scripts/run_grpo.py --track with_tools --sft-stage dentex_alone --sft-mod
 ```
 GRPO starts its trainable adapter as a copy of the SFT adapter. To continue a run that was interrupted, repeat the same command with `--resume` (same `--dev-split`, `--seed`, `--max-images`, `--include-healthy` and `--group-size`); on a fresh Kaggle/Colab session add `--resume-hf <repo>` to download the newest step checkpoint first. `--resume-hf` alone is refused, because it only downloads.
 
+**Before a long GRPO run (A8 or B7).** Add `--preflight` to the exact launch command: it checks the SFT adapter and its recorded settings, the dev split, the pool, the image files, any `--resume` state, the hub token and the hardware, and exits without loading the model. Fix every `[FAIL]` first. Then time a probe on a few images, with its own log and no hub uploads:
+```
+python scripts/run_grpo.py <same flags as the real run> --max-images 10 --hf-repo "" --log-path data/grpo_probe_k4.jsonl
+python scripts/summarize_grpo_log.py --log data/grpo_probe_k4.jsonl --pool-size <training images> --project-k 2 4 8 16
+```
+The summary gives seconds per step (rollout and update), turns and tool calls per trajectory, and the projected hours for the whole pool at each K. Delete the probe's checkpoint folder afterwards, so the real run does not find its step checkpoints. In the notebook the same two steps are `PREFLIGHT = True`, and `MAX_IMAGES = 10` with `HF_REPO = ""`.
+
 GRPO on a GPU has no sequence-length ceiling: rollout length is set by the agent loop, and memory is dominated by generation. Watch `nvidia-smi` through the first step. If it runs out of memory, report the step it reached.
 
 **A9. Evaluate** (canonical size is the primary result; run it again without `--canonical-resize` for original size)
@@ -145,6 +152,8 @@ The policy update runs at the same static shapes as SFT. Rollout generation does
 - `[DATASET] N malformed assistant turns ... masked from the loss`: expected. Those turns (empty, truncated or mis-nested JSON that the agent loop rejected) stay as context and are not training targets. `--no-mask-malformed-turns` trains on them.
 - A `[TOOL IMAGE]` warning means an image had no matching tool call and a default crop was rendered. It should not appear on the current traces; send the warning text if it does.
 - GRPO reward is flat and `kl` stays 0.0000 for many steps: check that `--temperature` is above 0 (rollouts of one image must differ) and that the SFT adapter was found (the log prints `[SFT-REF] ...`). With a fresh adapter an early `kl` of 0.0000 is normal.
+- GRPO `--preflight` says `SFT adapter ... not found`: `train_sft.py` writes `..._<precision>` folders (for example `..._qlora`), and GRPO does not search for that suffix. Pass the folder with `--sft-model-dir`. The K sweep script has no such flag; it looks for the unsuffixed folder or the hub copy, so copy or rename the adapter to `data/models/qwen3_5_9b_sft_<track>_<stage>`.
+- `--preflight` says `canonical-resize vs SFT` or `dev split vs SFT` FAIL: GRPO must use the SFT run's `--canonical-resize` and `--dev-split`, otherwise the policy trains on a different image distribution or on images SFT held out.
 - Any crash: run the matching smoke test (A4) on the same machine first; it separates library-version problems from data problems.
 
 **GPU path**

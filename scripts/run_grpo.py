@@ -59,6 +59,15 @@ def upload_checkpoint_to_hf(checkpoint_dir: Path, hf_repo: str, step: int):
         print(f"[HF-HUB WARNING] Failed to upload checkpoint to {hf_repo}: {e}")
 
 
+def sft_reference_candidates(track: str, sft_stage: str) -> list[Path]:
+    """Local folders searched for the SFT adapter when --sft-model-dir is not given (also used by --preflight)."""
+    return [
+        Path(f"data/models/qwen3_5_9b_sft_{track}_{sft_stage}"),
+        Path(f"checkpoints/sft_{track}_{sft_stage}"),
+        Path(f"data/models/qwen3_5_9b_sft_{track}"),
+    ]
+
+
 def resolve_sft_reference(
     sft_dir_arg: str | None,
     track: str,
@@ -73,11 +82,7 @@ def resolve_sft_reference(
             return str(chosen_path)
 
     # Standard candidate directories
-    candidate_paths = [
-        Path(f"data/models/qwen3_5_9b_sft_{track}_{sft_stage}"),
-        Path(f"checkpoints/sft_{track}_{sft_stage}"),
-        Path(f"data/models/qwen3_5_9b_sft_{track}"),
-    ]
+    candidate_paths = sft_reference_candidates(track, sft_stage)
 
     for cand in candidate_paths:
         if cand.exists() and any(cand.iterdir()):
@@ -264,7 +269,24 @@ def main() -> None:
         default=True,
         help="Keep healthy images (no annotations, ground truth []) in the pool so the policy learns to answer 'no findings'.",
     )
+    parser.add_argument(
+        "--log-path",
+        type=str,
+        default="data/grpo_training_log.jsonl",
+        help="JSONL file that receives one record per GRPO step (reward, KL, rollout and update seconds, turns, tool "
+             "calls). Give every run its own file (a probe run, each K of a sweep) so logs do not mix.",
+    )
+    parser.add_argument(
+        "--preflight",
+        action="store_true",
+        help="Check this exact command (SFT adapter, dev split, pool, image files, resume state, hub token, hardware) "
+             "and exit without loading the model. Run it first; every FAIL would have stopped or corrupted the run.",
+    )
     args = parser.parse_args()
+
+    if args.preflight:
+        from dental_agent.training.preflight import run_preflight
+        sys.exit(1 if run_preflight(args, sft_reference_candidates(args.track, args.sft_stage)) else 0)
 
     is_tpu = False
     try:
@@ -417,6 +439,7 @@ def run_worker(index: int, args: argparse.Namespace):
         slot_budget=slot_budget,
         resume=args.resume,
         max_new_tokens=args.max_new_tokens,
+        log_path=args.log_path,
     )
 
 

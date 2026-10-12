@@ -81,3 +81,20 @@ base model while the reference was the SFT model.)
 A GRPO run is resumable from its step checkpoints: policy adapter, step counter and reward baseline are restored and
 the images already trained on are skipped. It refuses to resume if the image pool or group size differ. Optimizer
 moments are not stored, so Adam restarts cold at the resumed step; report any resumed run as such.
+
+## 6. Before a long GRPO run: preflight and time probe
+
+**Implemented.** Two checks, both cheap, both read-only with respect to settings (nothing is changed or switched for you).
+
+- `run_grpo.py ... --preflight` takes the exact launch command and checks it without loading the model: the SFT adapter
+  is where GRPO will look, the SFT run's recorded settings (`sft_run_meta.json`, written next to the adapter by
+  `train_sft.py`) agree with the GRPO command on track, canonical resize and the held-out dev split, the dev split is
+  disjoint from the training pool, every pool image exists on disk, a `--resume` still matches the pool and group size,
+  a hub token is present when uploads are on, and on a TPU the core count matches `--num-cores`. It never downloads data.
+  Adapters trained before the metadata file existed give a warning instead of a comparison.
+- Every GRPO step now logs its rollout seconds, update seconds, mean turns, mean tool calls and format-ok rate.
+  `scripts/summarize_grpo_log.py` turns a short probe (`--max-images 10`, own `--log-path`, no hub uploads) into the
+  projected hours of the full pool and of other group sizes. Time per step scales linearly with K, so a probe at K=4
+  averaging 600 s per step over a pool of 635 images projects to 635 x 600 s = 106 h, and K=8 to 211 h.
+
+The projection is an estimate from the probe images; the logged turns and tool calls show whether they were typical.

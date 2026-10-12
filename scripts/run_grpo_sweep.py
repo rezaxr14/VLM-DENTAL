@@ -201,6 +201,7 @@ def main():
             pad_vision_to_slots=args.pad_vision_to_slots,
             slot_budget=parse_slot_budget(*args.vision_slots),
             max_new_tokens=args.max_new_tokens,
+            log_path=f"{ckpt_dir}/grpo_training_log.jsonl",  # one log per K (they used to share one file)
         )
 
         elapsed = time.time() - start_time
