@@ -17,7 +17,7 @@ import pandas as pd
 from dental_agent.config import ProjectConfig, TrainingConfig, RewardWeights
 from dental_agent.training.grpo import train_grpo
 from dental_agent.agent.loop import run_agent
-from dental_agent.data.fdi_utils import row_to_fdi
+from dental_agent.evaluation.ground_truth import extract_ground_truth
 from dental_agent.rewards.composite import combine_reward
 from dental_agent.tools.registry import ToolRegistry
 
@@ -48,37 +48,13 @@ def sweep_reward_weights(
         weight_grid = DEFAULT_WEIGHT_GRID
 
     registry = ToolRegistry.create_default()
-    cat_lookup = (
-        dict(zip(categories_df["id"], categories_df["name"]))
-        if categories_df is not None and len(categories_df)
-        else {}
-    )
 
     trajectories_and_gts = []
     for image_id in image_ids:
         if annots_df is not None:
-            anns = annots_df[annots_df["image_id"] == image_id]
-            if anns.empty:
-                continue
-            # Every row is a real finding -- .iloc[0] previously kept only the
-            # first and discarded the rest (same root cause fixed in
-            # train_grpo). ground_truth is now a list.
-            #
-            # dentex_row_to_fdi applies the DENTEX 0-index quirk conversion --
-            # this eval sweep previously had the identical bug (raw 0-indexed
-            # category_id_1/category_id_2 used directly against a model
-            # trained on trace_gen's 1-indexed FDI convention), meaning
-            # quadrant+position accuracy (0.50 of R_accuracy) would have
-            # scored wrong for a correct answer in every evaluation run using
-            # this function, not just training.
-            ground_truth = [
-                {
-                    "quadrant": row_to_fdi(row)[0],
-                    "tooth_position": row_to_fdi(row)[1],
-                    "diagnosis": cat_lookup.get(row.get(diag_col), "Caries"),
-                }
-                for _, row in anns.iterrows()
-            ]
+            # Every annotated finding of the image counts and a healthy image has ground truth [] (the same
+            # definition the matrix runner and GRPO use); see dental_agent/evaluation/ground_truth.py.
+            ground_truth = extract_ground_truth(image_id, annots_df, categories_df, diag_col)
         else:
             ground_truth = [{"quadrant": 1, "tooth_position": 1, "diagnosis": "Caries"}]
 
@@ -96,7 +72,7 @@ def sweep_reward_weights(
     for weights in weight_grid:
         rw = RewardWeights(
             accuracy=weights.get("acc", 1.0),
-            format_adherence=weights.get("fmt", 0.2),
+            format=weights.get("fmt", 0.2),
             tool_validity=weights.get("tool", 0.2),
             efficiency=weights.get("eff", 0.1),
         )
@@ -145,6 +121,7 @@ def run_hyperparameter_sweep(
             checkpoint_tag=tag,
             checkpoint_dir=Path(output_dir) / "checkpoints",
             sample_limit=20,
+            categories_df=categories_df,
         )
 
         record = {

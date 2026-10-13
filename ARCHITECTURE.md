@@ -75,7 +75,11 @@ This is the heart of the project containing all reusable logic. It is imported b
 - `batch_runner.py`: **The concurrent tester.** Takes a test dataset and model, executes tests concurrently across hundreds of images, and outputs raw result logs.
 - `metrics.py`: **The math engine.** Takes raw result logs, compares predictions to ground truth, and outputs standard ML metrics (Precision, Recall, F1).
 - `baselines.py` & `diagnosis_baseline.py`: **The zero-shot evaluators.** Takes standard non-agentic VLMs, runs them on the dataset without tools, and outputs baseline accuracy scores.
-- `ablations.py`: **The tool tester.** Takes the agent, iteratively disables one tool at a time, runs evaluations, and outputs how much accuracy is lost (measuring tool importance).
+- `ablations.py`: **The legacy H1/H2 runner.** Runs the same agent with and without tool access (H1) and compares checkpoints, scoring every annotated finding of each image. Evaluation-time tool removal and localizer perturbation live in `tool_ablation.py`.
+- `matrix.py`: **The matrix tables.** Pooled finding-level precision/recall/F1, image-resampling confidence intervals, paired bootstrap comparisons, per-class and healthy-image reports, ablation effects and localization, from the per-image result files.
+- `tool_ablation.py`: **The tool probe.** Removes a tool or perturbs `locate_tooth` boxes at evaluation time and measures how well the working box matches the annotated tooth before and after `nudge_crop`.
+- `ground_truth.py`: **The one definition of a finding.** Every annotation row of an image is a finding, `[]` for a healthy image; shared by the matrix runner and the legacy evaluators.
+- `figures.py`: **The paper figures.** Forest plots of the matrix and the paired comparisons, ablation effects and box hit rate before/after `nudge_crop`, drawn from the aggregate tables (`scripts/plot_eval_figures.py`).
 - `failure_analysis.py`: **The debugger.** Takes failed predictions, logs where and why the agent failed, and outputs categorized error reports for human review.
 - `reporting.py`: **The visualizer.** Takes all calculated metrics, and outputs formatted markdown/CSV evaluation tables.
 - `sweep.py`: **The optimizer.** Takes hyperparameter ranges, runs multiple evaluations, and outputs the optimal configuration settings.

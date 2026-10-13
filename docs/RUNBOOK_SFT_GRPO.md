@@ -98,6 +98,13 @@ python scripts/run_eval_matrix.py --split dev --dev-split data/splits/dentex_dev
 ```
 Run the unablated dev matrix for the same conditions first: the effect is ablated minus unablated on the same images. Protocol and how to read it: `docs/EVALUATION_PROTOCOL.md` section 8.
 
+**Figures** (no model; run after `aggregate_eval.py` for the same split). Forest plots of the matrix with intervals, the paired differences, the tool-ablation effects and the box hit rate before and after `nudge_crop`:
+```
+python scripts/plot_eval_figures.py --output-dir data/evaluations --dataset dentex --split test --formats png pdf
+python scripts/plot_eval_figures.py --output-dir data/evaluations --dataset dentex --split dev --formats png pdf
+```
+Files go to `data/evaluations/matrix_dentex_<split>/figures/`. A figure without rows in its table (no ablation run yet) is skipped and named in the output. What each figure shows: `docs/EVALUATION_WRITEUP.md` section 6.
+
 A GRPO checkpoint folder holds the trained `grpo_policy` and a frozen `reference` adapter; evaluation uses `grpo_policy` automatically when you pass the checkpoint folder. Conditions: `base_no_tools`, `base_with_tools`, `sft_no_tools`, `sft_with_tools`, `grpo_no_tools`, `grpo_with_tools`, or `all`.
 
 ---
@@ -132,6 +139,8 @@ python scripts/warmup_xla_cache.py --spmd --fsdp --num-cores 8 --max-seq-len 163
 python scripts/warmup_xla_cache.py --spmd --fsdp --num-cores 8 --max-seq-len 16384 --pad-vision-to-slots --vision-slots 5 10 4 --no-triangular-shim --lora-linear-attn
 ```
 Read the `[XLA MEMORY | ...]` lines (after forward and after backward) and look for `RESOURCE_EXHAUSTED`. The warmup also fills the XLA cache that training reuses.
+
+The solver replacement (`--triangular-shim`) has not yet been run on a TPU: the native solver ran out of memory, and this test is the first time the replacement is exercised. Treat it as unverified until the `--triangular-shim` line completes without `RESOURCE_EXHAUSTED`.
 
 **B5. Choose the sequence length**
 

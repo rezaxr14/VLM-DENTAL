@@ -56,7 +56,6 @@ load_dotenv()
 from dental_agent.config import load_config, load_env
 from dental_agent.data.dentex import load_dentex_dataset
 from dental_agent.data.dev_split import assert_not_test_split, image_key, load_dev_keys
-from dental_agent.data.fdi_utils import row_to_fdi
 from dental_agent.agent.prompts import FIRST_USER_PROMPT, ZERO_SHOT_PROMPT, build_agent_system_prompt
 from dental_agent.agent.parsing import parse_agent_json
 from dental_agent.agent.tool_dispatch import execute_tool_call
@@ -66,10 +65,10 @@ from dental_agent.evaluation.baselines import parse_zero_shot_response
 from dental_agent.evaluation.metrics import (
     match_multi_findings,
     extract_predicted_findings,
-    normalize_dental_diagnosis,
     expected_calibration_error,
     bootstrap_metric_ci,
 )
+from dental_agent.evaluation.ground_truth import DENTEX_DEFAULT_DIAGNOSES, extract_ground_truth  # noqa: F401
 from dental_agent.evaluation.reporting import generate_summary_table, generate_markdown_report
 from dental_agent.evaluation.tool_ablation import ToolProbe, spec_from_args
 from dental_agent.utils.serialization import to_jsonable
@@ -86,13 +85,6 @@ ALL_CONDITIONS = [
     "sft_no_tools", "sft_with_tools",
     "grpo_no_tools", "grpo_with_tools",
 ]
-
-DENTEX_DEFAULT_DIAGNOSES = {
-    0: "Impacted",
-    1: "Caries",
-    2: "Periapical Lesion",
-    3: "Deep Caries",
-}
 
 DEFAULT_OUTPUT_DIR = "data/evaluations"
 
@@ -195,39 +187,8 @@ def load_eval_model(model_id: str, adapter_path: str | None, device, dtype, cond
 # Ground Truth Extraction
 # ---------------------------------------------------------------------------
 
-def extract_ground_truth(image_id: int, annots_df, cats_df) -> list[dict[str, Any]]:
-    """Extract all ground truth findings for an image using dataset-aware FDI conversion."""
-    cat_lookup = (
-        dict(zip(cats_df["id"], cats_df["name"]))
-        if cats_df is not None and len(cats_df)
-        else DENTEX_DEFAULT_DIAGNOSES
-    )
-
-    anns = annots_df[annots_df["image_id"] == image_id]
-    gt_findings = []
-    if not anns.empty:
-        for _, ann_row in anns.iterrows():
-            q, pos = row_to_fdi(ann_row)
-            d_id = ann_row.get("category_id_3")
-            try:
-                d_id_int = int(d_id)
-            except (ValueError, TypeError):
-                d_id_int = None
-            d_raw = cat_lookup.get(d_id, cat_lookup.get(d_id_int, DENTEX_DEFAULT_DIAGNOSES.get(d_id_int, "Caries")))
-            finding = {
-                "quadrant": q,
-                "tooth_position": pos,
-                "diagnosis": normalize_dental_diagnosis(d_raw),
-                "raw_diagnosis": str(d_raw),
-            }
-            bbox = ann_row.get("bbox") if hasattr(ann_row, "get") else None
-            try:
-                if bbox is not None and len(bbox) == 4:
-                    finding["bbox"] = [float(v) for v in bbox]   # annotated tooth box [x, y, w, h], used for box-vs-GT IoU
-            except (TypeError, ValueError):
-                pass
-            gt_findings.append(finding)
-    return gt_findings
+# extract_ground_truth and DENTEX_DEFAULT_DIAGNOSES live in dental_agent/evaluation/ground_truth.py (imported above), so the
+# ablation, batch and sweep runners use the very same definition of a finding.
 
 
 # ---------------------------------------------------------------------------

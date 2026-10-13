@@ -32,7 +32,7 @@ chosen configuration is then evaluated once on the test set.
 **Image size.** Every condition is evaluated at both canonical size and original size. Canonical size is the primary
 result because it is what the model was trained on; original size is reported alongside it. `evaluate_models.py
 --canonical-resize` selects the view; canonical results are written to `..._canonical.jsonl`, so the two never share a
-file. Running both for every condition in one go is planned.
+file. Running both sizes for every condition in one go is `run_eval_matrix.py` (section 7).
 
 **One loop for training and evaluation.** Evaluation runs the same `run_agent` loop GRPO rolls out with, so prompts,
 the `Result of <tool>:` observation format, canonical views and KV-cache reuse are identical. Evaluation used to have
@@ -160,3 +160,49 @@ the share of findings whose tooth was located at all. Tables: `matrix_localizati
 
 Only findings with an annotated tooth box count; DENTEX annotations carry one. The detector (YOLOv8m) is the fixed
 supporting tool, so the perturbation is a stress test of the agent's self-correction, not an evaluation of the detector.
+
+## 9. Figures
+
+**Implemented.** `scripts/plot_eval_figures.py` draws the paper figures from the tables `scripts/aggregate_eval.py` writes
+(`matrix_pooled.csv`, `matrix_comparisons.csv`, `matrix_ablations.csv`, `matrix_localization.csv`, and `matrix_summary.json`
+for the resample count, cached-prompt cells and coverage). The plotted numbers are the CSV numbers, so a figure and its table
+cannot disagree. No model is needed.
+
+```
+python scripts/aggregate_eval.py --output-dir data/evaluations --dataset dentex --split dev
+python scripts/plot_eval_figures.py --output-dir data/evaluations --dataset dentex --split dev --formats png pdf
+```
+
+Files go to `matrix_<dataset>_<split>/figures/` (`--figures-dir` overrides), one per figure and format; `--levels exact fdi`
+selects the match level and `--dpi` the png resolution. A figure whose table has no rows (no ablation run yet) is skipped and
+named in the output.
+
+| figure | content |
+|---|---|
+| `matrix_forest_<level>` | pooled F1 with 95% interval, every condition, one panel per image size (canonical first) |
+| `paired_comparisons_<level>` | paired F1 differences with paired intervals; a filled marker means the interval excludes zero |
+| `ablation_effects_<level>` | ablated minus unablated F1 for every tool-ablation run |
+| `localization_before_after` | box hit rate after `locate_tooth` (hollow) against after `nudge_crop` (filled), per run |
+
+Worked example for the last one: three located findings with (before, after) IoU of (0.33, 1.0), (0.8, 0.8), (0.2, 0.3) at
+threshold 0.5 draw a dumbbell from 1/3 to 2/3, annotated `recovered 1/2`. Without `nudge_crop` the two markers coincide.
+Footnotes state the resample count and images per cell, flag cells that came from the cached zero-shot run (other prompt), and
+flag cells that cover fewer images than the rest. What each figure means and how to read it: `docs/EVALUATION_WRITEUP.md`.
+
+## 10. The older evaluators use the same ground truth
+
+**Implemented.** `ablations.py` (H1 with/without tools, checkpoint comparison, H2), `batch_runner.py` (`run_agent_batch`,
+`evaluate_dataset`) and `sweep.py` (`sweep_reward_weights`) used to build ground truth from the first annotation row of an
+image (`.iloc[0]`), skipped healthy images, and in `evaluate_dataset` represented a healthy image as one fake finding with
+`quadrant: None`. They now call `dental_agent/evaluation/ground_truth.py::extract_ground_truth`, the function the matrix runner
+uses (it moved there from `scripts/evaluate_models.py`, which still exposes it under the same name): one ground-truth finding
+per annotation row, `[]` for a healthy image, and healthy images are evaluated. Worked example: an image with three annotated
+findings that a model reports in full scored F1 0.5 under first-row ground truth (two predictions charged as false positives)
+and 1.0 under the real one; a model reporting only the first finding scored 1.0 and now scores 0.5.
+
+`evaluate_dataset` takes its calibration per predicted finding (`metrics.finding_calibration_pairs`): ground truth
+[16 Caries, 26 Impacted] against predictions [16 Caries at 0.9, 26 Caries at 0.8] gives the pairs (0.9, correct) and
+(0.8, wrong), because the second has the right tooth and the wrong diagnosis. Its calibration used to read only the first
+answer, and a list-valued answer raised an error. Both functions take an optional `categories_df`; without one the DENTEX
+class names are used, where they used to fall back silently to "Caries". `failure_analysis.py` still reads a single-dict
+ground truth and answer and has not been moved to this definition.

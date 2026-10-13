@@ -20,13 +20,15 @@ from dental_agent.agent.loop import run_agent
 from dental_agent.tools.registry import ToolRegistry
 from dental_agent.model.backbone import load_model
 from dental_agent.model.checkpoints import load_checkpoint
-from dental_agent.data.fdi_utils import row_to_fdi
+from dental_agent.evaluation.ground_truth import extract_ground_truth
 from dental_agent.rewards.composite import combine_reward
 from dental_agent.evaluation.metrics import (
     compute_diagnostic_metrics,
     compute_evaluation_metrics,
     compute_ece,
     bootstrap_metric_ci,
+    extract_predicted_findings,
+    finding_calibration_pairs,
 )
 from dental_agent.evaluation.baselines import majority_class_baseline_metrics
 from dental_agent.evaluation.ablations import run_h1_ablation, compare_checkpoints
@@ -62,25 +64,11 @@ def run_agent_batch(
     if registry is None:
         registry = ToolRegistry.create_default()
 
-    cat_lookup = (
-        dict(zip(categories_df["id"], categories_df["name"]))
-        if categories_df is not None and len(categories_df)
-        else {}
-    )
-
     for image_id in tqdm(image_ids, desc="Running agent batch"):
         if image_id in done_ids:
             continue
-        anns = annots_df[annots_df["image_id"] == image_id]
-        if anns.empty:
-            continue
-        ann0 = anns.iloc[0]
-        quadrant, tooth_position = row_to_fdi(ann0)
-        ground_truth = {
-            "quadrant": quadrant,
-            "tooth_position": tooth_position,
-            "diagnosis": cat_lookup.get(ann0.get(diag_col), "Caries"),
-        }
+        # Every annotated finding of the image counts; a healthy image has ground truth [] and is evaluated too.
+        ground_truth = extract_ground_truth(image_id, annots_df, categories_df, diag_col)
 
         if agent_fn is not None:
             traj = agent_fn(image_id)
@@ -176,8 +164,10 @@ def evaluate_dataset(
     sample_limit: int | None = None,
     diag_col: str = "category_id_3",
     registry: ToolRegistry | None = None,
+    categories_df: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
-    """Evaluate agent across a cohort of dental X-rays (legacy interface)."""
+    """Evaluate agent across a cohort of dental X-rays (legacy interface). Every annotated finding of an image counts
+    (ground truth is the list of its findings, ``[]`` for a healthy image); calibration is per predicted finding."""
     if model is None and checkpoint_tag is not None:
         model, processor = load_checkpoint(checkpoint_dir, checkpoint_tag)
     elif model is None:
@@ -195,29 +185,17 @@ def evaluate_dataset(
 
     for _, row in tqdm(valid_images.iterrows(), total=len(valid_images), desc="Evaluating cohort"):
         img_id = row["id"]
-        matches = annots_df[annots_df["image_id"] == img_id]
-        if not matches.empty:
-            ann = matches.iloc[0]
-            quadrant, tooth_position = row_to_fdi(ann)
-            gt = {
-                "quadrant": quadrant,
-                "tooth_position": tooth_position,
-                "diagnosis": str(ann.get(diag_col, "Caries")).lower(),
-            }
-        else:
-            gt = {"quadrant": None, "tooth_position": None, "diagnosis": ""}
+        gt = extract_ground_truth(img_id, annots_df, categories_df, diag_col)
 
         traj = run_agent(img_id, images_df, model=model, processor=processor, registry=registry, verbose=False)
         traj_dict = traj.to_dict() if hasattr(traj, "to_dict") else traj
         trajectories.append(traj_dict)
         ground_truths.append(gt)
 
-        # Calibration tracking
-        ans = traj_dict.get("final_answer") or {}
-        conf = float(ans.get("confidence", 0.5)) if isinstance(ans, dict) else 0.5
-        d_ok = int(str(ans.get("diagnosis", "")).lower() == gt["diagnosis"]) if gt["diagnosis"] else 0
-        confidences.append(conf)
-        accuracies.append(d_ok)
+        # Calibration tracking: one (confidence, exactly-matched) pair per predicted finding
+        pairs = finding_calibration_pairs(gt, extract_predicted_findings(traj_dict.get("final_answer")))
+        confidences.extend(c for c, _ in pairs)
+        accuracies.extend(a for _, a in pairs)
 
     metrics = compute_diagnostic_metrics(trajectories, ground_truths)
     ece = compute_ece(confidences, accuracies)

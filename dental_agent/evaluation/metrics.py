@@ -42,6 +42,28 @@ def expected_calibration_error(
 compute_ece = expected_calibration_error
 
 
+def finding_calibration_pairs(
+    ground_truths: list[dict[str, Any]],
+    predictions: list[dict[str, Any]],
+    default_confidence: float = 0.5,
+) -> list[tuple[float, int]]:
+    """One (stated confidence, correct) pair per PREDICTED finding of an image, for ``expected_calibration_error``.
+
+    A prediction is correct when the set matching of ``match_multi_findings`` pairs it with a ground-truth finding exactly
+    (right tooth and diagnosis). A finding without a stated confidence uses ``default_confidence``.
+
+    Worked example: ground truth [tooth 16 Caries, tooth 26 Impacted], predictions [16 Caries @0.9, 26 Caries @0.8]
+    -> [(0.9, 1), (0.8, 0)]: the first matches exactly, the second has the right tooth and the wrong diagnosis. Reading only
+    the first prediction (the old single-answer calibration) would have recorded one pair and ignored the second."""
+    matched = match_multi_findings(ground_truths, predictions)
+    exact_ids = {id(m["pred"]) for m in matched["matched_pairs"] if m["exact_match"]}
+    pairs = []
+    for p in predictions:
+        conf = p.get("confidence")
+        pairs.append((float(default_confidence if conf is None else conf), int(id(p) in exact_ids)))
+    return pairs
+
+
 def normalize_dental_diagnosis(val: Any) -> str:
     """Normalize various model diagnosis outputs to canonical DENTEX categories:
     'Impacted', 'Caries', 'Periapical Lesion', 'Deep Caries'."""

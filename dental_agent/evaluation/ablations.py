@@ -16,12 +16,12 @@ from tqdm import tqdm
 from dental_agent.agent.loop import run_agent, run_agent_no_tools
 from dental_agent.tools.registry import ToolRegistry
 from dental_agent.model.backbone import load_model
-from dental_agent.data.fdi_utils import row_to_fdi
 from dental_agent.evaluation.metrics import (
     compute_diagnostic_metrics,
     compute_evaluation_metrics,
     bootstrap_paired_diff_ci,
 )
+from dental_agent.evaluation.ground_truth import extract_ground_truth
 from dental_agent.rewards.composite import combine_reward
 from dental_agent.utils.serialization import to_jsonable
 
@@ -31,27 +31,17 @@ def _prepare_eval_samples(
     annots_df: pd.DataFrame,
     sample_limit: int | None = None,
     diag_col: str = "category_id_3",
-) -> tuple[pd.DataFrame, list[dict[str, Any]]]:
+    categories_df: pd.DataFrame | None = None,
+) -> tuple[pd.DataFrame, list[list[dict[str, Any]]]]:
+    """Images to evaluate and, per image, ALL its ground-truth findings (``[]`` for a healthy image)."""
     valid_images = images_df.dropna(subset=["local_path"])
     if sample_limit:
         valid_images = valid_images.head(sample_limit)
 
-    ground_truths = []
-    for _, row in valid_images.iterrows():
-        img_id = row["id"]
-        matches = annots_df[annots_df["image_id"] == img_id]
-        if not matches.empty:
-            ann = matches.iloc[0]
-            quadrant, tooth_position = row_to_fdi(ann)
-            ground_truths.append({
-                "image_id": img_id,
-                "quadrant": quadrant,
-                "tooth_position": tooth_position,
-                "diagnosis": str(ann.get(diag_col, "Caries")).lower(),
-            })
-        else:
-            ground_truths.append({"image_id": img_id, "quadrant": None, "tooth_position": None, "diagnosis": ""})
-
+    ground_truths = [
+        extract_ground_truth(row["id"], annots_df, categories_df, diag_col)
+        for _, row in valid_images.iterrows()
+    ]
     return valid_images, ground_truths
 
 
@@ -81,11 +71,6 @@ def run_h1_ablation(
         raise ValueError("images_df must be provided if image_ids is a list.")
 
     registry = ToolRegistry.create_default()
-    cat_lookup = (
-        dict(zip(categories_df["id"], categories_df["name"]))
-        if categories_df is not None and len(categories_df)
-        else {}
-    )
 
     with_tools_results = []
     without_tools_results = []
@@ -93,16 +78,8 @@ def run_h1_ablation(
     print(f"--- Running H1 Ablation Study (With vs. Without Tools) on {len(image_ids)} images ---")
 
     for img_id in tqdm(image_ids, desc="H1 Evaluation"):
-        anns = annots_df[annots_df["image_id"] == img_id]
-        if anns.empty:
-            continue
-        ann0 = anns.iloc[0]
-        quadrant, tooth_position = row_to_fdi(ann0)
-        ground_truth = {
-            "quadrant": quadrant,
-            "tooth_position": tooth_position,
-            "diagnosis": cat_lookup.get(ann0.get(diag_col), "Caries"),
-        }
+        # Every annotated finding of the image counts; a healthy image has ground truth [].
+        ground_truth = extract_ground_truth(img_id, annots_df, categories_df, diag_col)
 
         # With tools
         t_traj = run_agent(img_id, images_df, model=model, processor=processor, registry=registry, verbose=False)
@@ -170,11 +147,6 @@ def compare_checkpoints(
 ) -> dict[str, dict[str, Any]]:
     """Reload each named checkpoint and evaluate all of them on the same image_ids."""
     registry = ToolRegistry.create_default()
-    cat_lookup = (
-        dict(zip(categories_df["id"], categories_df["name"]))
-        if categories_df is not None and len(categories_df)
-        else {}
-    )
 
     comparison: dict[str, dict[str, Any]] = {}
 
@@ -190,16 +162,7 @@ def compare_checkpoints(
 
         results = []
         for img_id in image_ids:
-            anns = annots_df[annots_df["image_id"] == img_id]
-            if anns.empty:
-                continue
-            ann0 = anns.iloc[0]
-            quadrant, tooth_position = row_to_fdi(ann0)
-            ground_truth = {
-                "quadrant": quadrant,
-                "tooth_position": tooth_position,
-                "diagnosis": cat_lookup.get(ann0.get(diag_col), "Caries"),
-            }
+            ground_truth = extract_ground_truth(img_id, annots_df, categories_df, diag_col)
 
             traj = run_agent(img_id, images_df, model=active_model, processor=active_processor, registry=registry, verbose=False)
             t_dict = traj.to_dict() if hasattr(traj, "to_dict") else traj
