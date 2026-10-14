@@ -64,7 +64,7 @@ python scripts/train_sft.py --track with_tools --stage dentex_alone --canonical-
 ```
 The adapter is saved to `data/models/qwen3_5_9b_sft_with_tools_dentex_alone_<precision>` (for example `..._qlora`).
 
-**A8. GRPO** (same `--canonical-resize` and `--precision` as SFT). GRPO does not look for the precision-suffixed folder, so pass the SFT adapter explicitly:
+**A8. GRPO** (same `--canonical-resize` and `--precision` as SFT). Without `--sft-model-dir` GRPO searches `data/models/qwen3_5_9b_sft_<track>_<stage>_<precision>` for its own `--precision` first, then the unsuffixed folders; the command below names the folder, which is the explicit form:
 ```
 python scripts/run_grpo.py --track with_tools --sft-stage dentex_alone --sft-model-dir data/models/qwen3_5_9b_sft_with_tools_dentex_alone_qlora --dataset dentex --dev-split data/splits/dentex_dev.json --group-size 4 --epochs 2 --lr 5e-6 --kl-beta 0.04 --clip-eps 0.2 --temperature 0.7 --canonical-resize --precision qlora --max-new-tokens 2048 --hf-repo <repo> --push-every-steps 25
 ```
@@ -104,6 +104,16 @@ python scripts/plot_eval_figures.py --output-dir data/evaluations --dataset dent
 python scripts/plot_eval_figures.py --output-dir data/evaluations --dataset dentex --split dev --formats png pdf
 ```
 Files go to `data/evaluations/matrix_dentex_<split>/figures/`. A figure without rows in its table (no ablation run yet) is skipped and named in the output. What each figure shows: `docs/EVALUATION_WRITEUP.md` section 6.
+
+**GRPO group-size (K) sweep (dev split).** Train every K from the same SFT adapter on the same seeded images, evaluate each on dev next to the SFT reference, then tabulate and plot. The sweep launcher takes the flags of `run_grpo.py` (note `--epochs`: its default is 1 here and 2 in `run_grpo.py`, so pass it explicitly to make a K of the sweep equal a single run of that K), `--checkpoint-dir` for what `run_grpo.py` calls `--output-dir`, and `--preflight`, which checks every K without loading the model.
+```
+python scripts/run_grpo_sweep.py --track with_tools --sft-stage dentex_alone --sft-model-dir <sft> --k-values <K ...> --epochs 2 --lr 5e-6 --kl-beta 0.04 --clip-eps 0.2 --push-every-steps 25 --checkpoint-dir data/models --canonical-resize --precision qlora --temperature 0.7 --max-new-tokens 2048 --dev-split data/splits/dentex_dev.json --seed 42 --hf-repo <repo>
+python scripts/run_eval_matrix.py --split dev --dev-split data/splits/dentex_dev.json --conditions sft_with_tools --sizes canonical --sft-adapter <sft> --precision qlora --output-dir data/evaluations --existing-results resume
+python scripts/run_eval_matrix.py --split dev --dev-split data/splits/dentex_dev.json --conditions grpo_with_tools --sizes canonical --grpo-adapter data/models/qwen3_5_9b_grpo_with_tools_k<K>_dentex_alone/grpo-with_tools-final --precision qlora --output-dir data/evaluations/k_sweep/k<K> --existing-results resume
+python scripts/aggregate_k_sweep.py --sweep-dir data/evaluations/k_sweep --reference-dir data/evaluations --log-template "data/models/qwen3_5_9b_grpo_with_tools_k{k}_dentex_alone/grpo_training_log.jsonl"
+python scripts/plot_k_sweep.py --sweep-dir data/evaluations/k_sweep --formats png pdf
+```
+Repeat the second-to-last evaluation command for every K (the notebook loops it). After an interrupted sweep repeat the sweep command with `--resume` (a K whose final checkpoint exists is skipped without loading the model; on a fresh session add `--resume-hf <repo>`). Tables and figures land in `data/evaluations/k_sweep/ksweep_dentex_dev_grpo_with_tools_canonical/`; read `k_sweep_summary.md`. The table reports which K are not distinguishable from the best and which of those is cheapest; it does not pick one. Add `--sizes canonical original` and run the aggregation with `--size original` for the second size. What it shows and its limits (one training run per K): `docs/EVALUATION_WRITEUP.md` section 7.
 
 A GRPO checkpoint folder holds the trained `grpo_policy` and a frozen `reference` adapter; evaluation uses `grpo_policy` automatically when you pass the checkpoint folder. Conditions: `base_no_tools`, `base_with_tools`, `sft_no_tools`, `sft_with_tools`, `grpo_no_tools`, `grpo_with_tools`, or `all`.
 
@@ -174,7 +184,7 @@ The policy update runs at the same static shapes as SFT. Rollout generation does
 - `[DATASET] N malformed assistant turns ... masked from the loss`: expected. Those turns (empty, truncated or mis-nested JSON that the agent loop rejected) stay as context and are not training targets. `--no-mask-malformed-turns` trains on them.
 - A `[TOOL IMAGE]` warning means an image had no matching tool call and a default crop was rendered. It should not appear on the current traces; send the warning text if it does.
 - GRPO reward is flat and `kl` stays 0.0000 for many steps: check that `--temperature` is above 0 (rollouts of one image must differ) and that the SFT adapter was found (the log prints `[SFT-REF] ...`). With a fresh adapter an early `kl` of 0.0000 is normal.
-- GRPO `--preflight` says `SFT adapter ... not found`: `train_sft.py` writes `..._<precision>` folders (for example `..._qlora`), and GRPO does not search for that suffix. Pass the folder with `--sft-model-dir`. The K sweep script has no such flag; it looks for the unsuffixed folder or the hub copy, so copy or rename the adapter to `data/models/qwen3_5_9b_sft_<track>_<stage>`.
+- GRPO `--preflight` says `SFT adapter ... not found`: `train_sft.py` writes `..._<precision>` folders (for example `..._qlora`). GRPO and the K sweep search the suffix of their own `--precision` (a bf16 run does not pick up a `_qlora` adapter, and nothing switches it), so a mismatch means the adapter was trained with the other precision or lives elsewhere: pass the folder with `--sft-model-dir` (the sweep takes the same flag).
 - `--preflight` says `canonical-resize vs SFT` or `dev split vs SFT` FAIL: GRPO must use the SFT run's `--canonical-resize` and `--dev-split`, otherwise the policy trains on a different image distribution or on images SFT held out.
 - Any crash: run the matching smoke test (A4) on the same machine first; it separates library-version problems from data problems.
 

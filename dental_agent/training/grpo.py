@@ -555,6 +555,7 @@ def grpo_step(
         return moved
 
     groups, all_rewards = [], []
+    n_tied_groups = 0
     current_baseline = running_ema_baseline
     t_step_start = time.perf_counter()
 
@@ -579,6 +580,9 @@ def grpo_step(
             rewards=rewards,
             running_ema_baseline=current_baseline,
         )
+        # A tie (all K rewards equal, K >= 2) gives every advantage 0: its K rollouts carry no learning signal.
+        if group_size >= 2 and float(advantages.abs().max()) == 0.0:
+            n_tied_groups += 1
         groups.append((trajs, advantages, old_lps, masks))
         all_rewards.extend(rewards)
 
@@ -691,6 +695,8 @@ def grpo_step(
         "group_size": group_size,
         "track": track,
         "n_dropped_overlength": n_dropped_overlength,
+        "n_groups": len(groups),
+        "n_tied_groups": n_tied_groups,
         # Cost and behaviour diagnostics. Rollout = sampling the K trajectories (incl. tool calls); update = static
         # old-log-prob pass + the policy epochs. summarize_grpo_log.py projects total run time from these.
         "rollout_s": t_rollout_end - t_step_start,

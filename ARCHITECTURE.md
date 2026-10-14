@@ -79,7 +79,8 @@ This is the heart of the project containing all reusable logic. It is imported b
 - `matrix.py`: **The matrix tables.** Pooled finding-level precision/recall/F1, image-resampling confidence intervals, paired bootstrap comparisons, per-class and healthy-image reports, ablation effects and localization, from the per-image result files.
 - `tool_ablation.py`: **The tool probe.** Removes a tool or perturbs `locate_tooth` boxes at evaluation time and measures how well the working box matches the annotated tooth before and after `nudge_crop`.
 - `ground_truth.py`: **The one definition of a finding.** Every annotation row of an image is a finding, `[]` for a healthy image; shared by the matrix runner and the legacy evaluators.
-- `figures.py`: **The paper figures.** Forest plots of the matrix and the paired comparisons, ablation effects and box hit rate before/after `nudge_crop`, drawn from the aggregate tables (`scripts/plot_eval_figures.py`).
+- `figures.py`: **The paper figures.** Forest plots of the matrix and the paired comparisons, ablation effects and box hit rate before/after `nudge_crop`, drawn from the aggregate tables (`scripts/plot_eval_figures.py`); also the K-sweep figures (`scripts/plot_k_sweep.py`).
+- `k_sweep.py`: **The group-size comparison.** Pooled F1 per GRPO group size K on the dev split, paired against SFT, the best K and the next smaller K, with training cost and tie rate from the step logs; reports, never selects (`scripts/aggregate_k_sweep.py`).
 - `failure_analysis.py`: **The debugger.** Takes failed predictions, logs where and why the agent failed, and outputs categorized error reports for human review.
 - `reporting.py`: **The visualizer.** Takes all calculated metrics, and outputs formatted markdown/CSV evaluation tables.
 - `sweep.py`: **The optimizer.** Takes hyperparameter ranges, runs multiple evaluations, and outputs the optimal configuration settings.

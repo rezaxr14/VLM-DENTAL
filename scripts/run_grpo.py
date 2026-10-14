@@ -59,9 +59,14 @@ def upload_checkpoint_to_hf(checkpoint_dir: Path, hf_repo: str, step: int):
         print(f"[HF-HUB WARNING] Failed to upload checkpoint to {hf_repo}: {e}")
 
 
-def sft_reference_candidates(track: str, sft_stage: str) -> list[Path]:
-    """Local folders searched for the SFT adapter when --sft-model-dir is not given (also used by --preflight)."""
-    return [
+def sft_reference_candidates(track: str, sft_stage: str, precision: str | None = None) -> list[Path]:
+    """Local folders searched for the SFT adapter when --sft-model-dir is not given (also used by --preflight).
+
+    ``train_sft.py`` writes ``data/models/qwen3_5_9b_sft_<track>_<stage>_<precision>``. With ``precision`` (the run's own
+    explicit ``--precision``, never guessed) that folder is searched first, so a QLoRA SFT adapter is found by a QLoRA GRPO
+    run and a bf16 one by a bf16 run; the other precision's folder is not a candidate."""
+    suffixed = [Path(f"data/models/qwen3_5_9b_sft_{track}_{sft_stage}_{precision}")] if precision else []
+    return suffixed + [
         Path(f"data/models/qwen3_5_9b_sft_{track}_{sft_stage}"),
         Path(f"checkpoints/sft_{track}_{sft_stage}"),
         Path(f"data/models/qwen3_5_9b_sft_{track}"),
@@ -73,6 +78,7 @@ def resolve_sft_reference(
     track: str,
     sft_stage: str,
     hf_repo: str | None = None,
+    precision: str | None = None,
 ) -> str:
     """Resolve local path to SFT reference model or auto-download from Hugging Face Models repo."""
     if sft_dir_arg:
@@ -82,7 +88,7 @@ def resolve_sft_reference(
             return str(chosen_path)
 
     # Standard candidate directories
-    candidate_paths = sft_reference_candidates(track, sft_stage)
+    candidate_paths = sft_reference_candidates(track, sft_stage, precision)
 
     for cand in candidate_paths:
         if cand.exists() and any(cand.iterdir()):
@@ -286,7 +292,7 @@ def main() -> None:
 
     if args.preflight:
         from dental_agent.training.preflight import run_preflight
-        sys.exit(1 if run_preflight(args, sft_reference_candidates(args.track, args.sft_stage)) else 0)
+        sys.exit(1 if run_preflight(args, sft_reference_candidates(args.track, args.sft_stage, args.precision)) else 0)
 
     is_tpu = False
     try:
@@ -359,6 +365,7 @@ def run_worker(index: int, args: argparse.Namespace):
         track=args.track,
         sft_stage=args.sft_stage,
         hf_repo=args.hf_repo,
+        precision=args.precision,
     )
 
     # Checkpoint directory naming: qwen3_5_9b_grpo_{track}_k{group_size}_{sft_stage}

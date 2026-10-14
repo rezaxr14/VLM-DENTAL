@@ -453,3 +453,164 @@ def make_all(matrix_dir: str | Path, out_dir: str | Path | None = None, formats:
         if fig is not None:
             written[name] = save_figure(fig, out / name, formats, dpi)
     return written
+
+
+# ---------------------------------------------------------------------------
+# GRPO group-size (K) sweep: figures from the tables ``scripts/aggregate_k_sweep.py`` writes
+# ---------------------------------------------------------------------------
+#
+# * ``k_sweep_<level>``   top: pooled F1 with 95% interval per K, the SFT reference as a dashed line; bottom: paired
+#                         difference to SFT per K (hollow marker = the interval includes 0).
+# * ``k_sweep_training``  per K: training hours, share of groups whose K rewards tied (no gradient), and mean reward of the
+#                         first against the last quarter of the steps.
+#
+# Worked example: K = 1, 2, 4 pool to exact F1 0.40, 0.55, 0.57 against an SFT reference of 0.45; the paired differences
+# -0.05 [-0.15, +0.05], +0.10 [+0.02, +0.18], +0.12 [+0.04, +0.20] draw K = 1 hollow (no difference established) and K = 2
+# and 4 filled (above SFT).
+
+K_TABLE_CSV = "k_sweep_table.csv"
+K_TRAINING_CSV = "k_sweep_training.csv"
+K_SUMMARY_JSON = "k_sweep_summary.json"
+
+
+def load_k_sweep_tables(k_dir: str | Path) -> dict[str, Any]:
+    """The tables of one ``ksweep_<dataset>_<split>/`` folder; a missing table is an empty list."""
+    d = Path(k_dir)
+    out: dict[str, Any] = {"table": [], "training": [], "summary": {}}
+    if (d / K_TABLE_CSV).is_file():
+        out["table"] = read_table(d / K_TABLE_CSV)
+    if (d / K_TRAINING_CSV).is_file():
+        out["training"] = read_table(d / K_TRAINING_CSV)
+    if (d / K_SUMMARY_JSON).is_file():
+        out["summary"] = json.loads((d / K_SUMMARY_JSON).read_text(encoding="utf-8"))
+    return out
+
+
+def k_sweep_rows(table: Iterable[dict[str, Any]], level: str = "exact") -> list[dict[str, Any]]:
+    """Plot rows of one level, ascending in K: F1 with interval, the SFT reference F1 and the paired difference to it."""
+    rows = []
+    for r in sorted((r for r in table if r["level"] == level), key=lambda r: r["k"]):
+        has_ref = r.get("ref_diff") is not None
+        rows.append({
+            "k": int(r["k"]), "value": r["f1"], "low": r["f1_ci_low"], "high": r["f1_ci_high"], "images": int(r["images"]),
+            "reference": r.get("ref_f1"), "diff": r["ref_diff"] if has_ref else None,
+            "diff_low": r["ref_ci_low"] if has_ref else None, "diff_high": r["ref_ci_high"] if has_ref else None,
+            "significant": has_ref and (r["ref_ci_low"] > 0 or r["ref_ci_high"] < 0),
+            "is_best": bool(r.get("is_best")), "within_noise": bool(r.get("within_noise_of_best")),
+        })
+    return rows
+
+
+def _k_axes(ax: Any) -> None:
+    ax.set_facecolor(SURFACE)
+    ax.grid(axis="y", color=GRID, linewidth=0.7, linestyle="-")
+    ax.set_axisbelow(True)
+    for side in ("top", "right"):
+        ax.spines[side].set_visible(False)
+    ax.tick_params(axis="x", length=3, color=AXIS)
+    ax.tick_params(axis="y", length=0)
+
+
+def plot_k_sweep(table: Sequence[dict[str, Any]], summary: dict[str, Any] | None = None, level: str = "exact") -> Figure | None:
+    """Pooled F1 per K with the SFT reference, and the paired difference to SFT (when a reference was given)."""
+    rows = k_sweep_rows(table, level)
+    if not rows:
+        return None
+    summary = summary or {}
+    has_ref = rows[0]["diff"] is not None
+    xs = list(range(len(rows)))
+    with mpl.rc_context(_style()):
+        fig = Figure(figsize=(7.2, 4.8 if has_ref else 3.0), facecolor=SURFACE, layout="constrained")
+        axes = list(fig.subplots(2 if has_ref else 1, 1, sharex=True))if has_ref else [fig.subplots()]
+        top = axes[0]
+        _k_axes(top)
+        for x, r in zip(xs, rows):
+            top.vlines(x, r["low"], r["high"], color=SERIES_TOOLS, linewidth=1.6, zorder=3, capstyle="round")
+            _dot(top, x, r["value"], SERIES_TOOLS)
+            top.text(x + 0.08, r["value"], f"{r['value']:.2f}", fontsize=7, color=INK_2, va="center", ha="left")
+        if has_ref and rows[0]["reference"] is not None:
+            ref = rows[0]["reference"]
+            top.axhline(ref, color=MUTED, linewidth=1.0, linestyle="--", zorder=2)
+            top.text(1.0, ref, f"SFT reference {ref:.2f} ", transform=top.get_yaxis_transform(), fontsize=7, color=INK_2,
+                     va="bottom", ha="right")
+        top.set_ylabel(f"Pooled {LEVEL_SHORT[level]} F1", fontsize=8)
+        top.set_ylim(max(0.0, min(r["low"] for r in rows) - 0.05), min(1.0, max(r["high"] for r in rows) + 0.06))
+        if has_ref:
+            bot = axes[1]
+            _k_axes(bot)
+            bot.axhline(0.0, color=AXIS, linewidth=1.0, zorder=2)
+            for x, r in zip(xs, rows):
+                bot.vlines(x, r["diff_low"], r["diff_high"], color=SERIES_TOOLS, linewidth=1.6, zorder=3, capstyle="round")
+                _dot(bot, x, r["diff"], SERIES_TOOLS, filled=r["significant"])
+                bot.text(x + 0.08, r["diff"], f"{r['diff']:+.2f}", fontsize=7, color=INK_2, va="center", ha="left")
+            bot.set_ylabel("GRPO minus SFT (paired)", fontsize=8)
+        axes[-1].set_xticks(xs)
+        axes[-1].set_xticklabels([f"K={r['k']}" for r in rows], fontsize=8)
+        axes[-1].set_xlim(-0.5, len(rows) - 0.4)
+        n_boot, imgs = summary.get("n_boot"), sorted({r["images"] for r in rows})
+        _footnote(fig, "Pooled over all findings on the dev images; intervals resample whole images"
+                  + (f" ({n_boot} resamples, 95%)" if n_boot else " (95%)") + f"; {imgs[0]}" + (f"-{imgs[-1]}" if len(imgs) > 1 else "")
+                  + " images per K.\nOne training run per K: the intervals do not include variation between training runs."
+                  + (" Hollow marker: the paired interval includes 0." if has_ref else ""))
+    return fig
+
+
+def plot_k_sweep_training(training: Sequence[dict[str, Any]], summary: dict[str, Any] | None = None) -> Figure | None:
+    """Training hours, tie rate and first-versus-last-quarter reward per K, from the GRPO step logs."""
+    rows = [{**r, "k": int(r["k"])} for r in sorted(training, key=lambda r: r["k"])]
+    panels = []
+    if any(r.get("hours") is not None for r in rows):
+        panels.append("hours")
+    if any(r.get("tie_rate") is not None for r in rows):
+        panels.append("tie")
+    if any(r.get("reward_first_quarter") is not None for r in rows):
+        panels.append("reward")
+    if not panels:
+        return None
+    xs = list(range(len(rows)))
+    with mpl.rc_context(_style()):
+        fig = Figure(figsize=(7.2, 2.9), facecolor=SURFACE, layout="constrained")
+        axes = fig.subplots(1, len(panels), sharex=True)
+        axes = [axes] if len(panels) == 1 else list(axes)
+        for ax, kind in zip(axes, panels):
+            _k_axes(ax)
+            if kind == "hours":
+                for x, r in zip(xs, rows):
+                    if r.get("hours") is not None:
+                        ax.bar(x, r["hours"], width=0.55, color=SERIES_TOOLS, zorder=3)
+                        ax.text(x, r["hours"], f"{r['hours']:.1f}", fontsize=7, color=INK_2, ha="center", va="bottom")
+                ax.set_ylabel("Training hours", fontsize=8)
+            elif kind == "tie":
+                for x, r in zip(xs, rows):
+                    if r.get("tie_rate") is not None:
+                        ax.bar(x, r["tie_rate"], width=0.55, color=SERIES_TOOLS, zorder=3)
+                        ax.text(x, r["tie_rate"], f"{r['tie_rate']:.2f}", fontsize=7, color=INK_2, ha="center", va="bottom")
+                ax.set_ylim(0, 1.05)
+                ax.set_ylabel("Share of groups with all rewards equal", fontsize=8)
+            else:
+                for x, r in zip(xs, rows):
+                    if r.get("reward_first_quarter") is not None:
+                        ax.vlines(x, r["reward_first_quarter"], r["reward_last_quarter"], color=SERIES_TOOLS, linewidth=1.6, zorder=3)
+                        _dot(ax, x, r["reward_first_quarter"], SERIES_TOOLS, filled=False)
+                        _dot(ax, x, r["reward_last_quarter"], SERIES_TOOLS, filled=True)
+                ax.set_ylabel("Mean rollout reward", fontsize=8)
+            ax.set_xticks(xs)
+            ax.set_xticklabels([f"K={r['k']}" for r in rows], fontsize=7.5)
+            ax.set_xlim(-0.6, len(rows) - 0.4)
+        _footnote(fig, "From the GRPO step logs, one run per K. Ties need K >= 2 (no bar at K=1). Reward: hollow = first quarter of the steps, "
+                       "filled = last quarter.")
+    return fig
+
+
+def k_sweep_figure_names(levels: Sequence[str] = LEVELS) -> list[str]:
+    return [f"k_sweep_{lv}" for lv in levels] + ["k_sweep_training"]
+
+
+def make_k_sweep_figures(k_dir: str | Path, out_dir: str | Path | None = None, formats: Sequence[str] = ("png", "pdf"),
+                         levels: Sequence[str] = LEVELS, dpi: int = 300) -> dict[str, list[Path]]:
+    """Draw the K-sweep figures whose tables exist in ``k_dir`` (default output ``<k_dir>/figures``); returns ``{name: files}``."""
+    t = load_k_sweep_tables(k_dir)
+    out = Path(out_dir) if out_dir else Path(k_dir) / "figures"
+    jobs = [(f"k_sweep_{lv}", plot_k_sweep(t["table"], t["summary"], lv)) for lv in levels]
+    jobs.append(("k_sweep_training", plot_k_sweep_training(t["training"], t["summary"])))
+    return {name: save_figure(fig, out / name, formats, dpi) for name, fig in jobs if fig is not None}

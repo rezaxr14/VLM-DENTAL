@@ -15,7 +15,7 @@ with its own comparison and nothing else changed between the two arms:
 2. Do the tools help? The same checkpoint with and without tool access.
 3. How much does the trained agent depend on a particular tool, and can it repair a wrong grounding box? Evaluation-time
    ablations of the trained agent, section 5.
-4. Which GRPO group size K to use? A sweep on held-out development images, **to run**.
+4. Which GRPO group size K to use? A sweep on held-out development images, section 7, **to run**.
 
 ## 2. Held-out data
 
@@ -129,7 +129,43 @@ zero.
 of images per cell, flags any cell that came from the cached zero-shot run (different prompt, not comparable) and any cell
 that covers fewer images than the others.
 
-## 7. Decisions, in one place
+## 7. The GRPO group-size sweep
+
+K is the number of rollouts GRPO samples for each training image. The cost grows with K (twice the rollouts per image for
+twice the K), and a group whose K rewards are all equal teaches nothing, because every advantage is zero. The sweep asks how
+much K the policy needs.
+
+**Design.** One GRPO run per K, each from the same SFT adapter, on the same seeded training images in the same order
+(`--dev-split`, `--seed`, `--max-images`), with every other setting identical. Each final checkpoint is evaluated on the
+dev images with the agent loop and budgets of training, canonical size, next to the SFT reference on the same images. The
+split is dev, never test: choosing K by test score would leak the test set.
+
+**What is compared, all paired over the same images.** Each K against SFT (did GRPO at this K beat its starting point), each
+K against the best K (is it distinguishable from the best), and each K against the next smaller one (does doubling still
+pay). Illustrative numbers: K = 4 and K = 8 pool to exact F1 0.58 and 0.60. The 0.02 gap is inside the evaluation noise if the
+paired interval of K = 4 minus K = 8 is [-0.09, +0.05], which contains 0, so K = 4 is not distinguishable from K = 8 and costs
+half the rollouts. A paired interval of [-0.19, -0.02] for K = 2 minus K = 8 excludes 0, so K = 2 is worse at this sample size.
+
+**What it cost.** From the step log of each run: hours, and the tie rate, the share of groups whose K rewards were all
+equal. Worked example: 40 steps at K = 2 with 14 tied groups is a tie rate of 0.35, so about a third of the K = 2 rollouts
+carried no learning signal. K = 1 has no group to tie; it uses a running-mean baseline instead of group normalization, so
+K = 1 against K >= 2 differs in the estimator as well as in the group size. Hours are measured, not projected: on the TPU
+path a policy forward carries one rollout per core, so a K below the core count leaves rows idle and the cost is not linear in K.
+
+**Decision rule.** The aggregator reports, and does not apply, which K are not distinguishable from the best and which of them
+is cheapest. The rule used in the paper (for example: the smallest K whose paired interval to the best K contains 0) is
+fixed before the table is read and stated with it. The chosen K is then run once on the test split, at canonical and at
+original size.
+
+**Limits.** One training run per K: the intervals describe the sampling of the evaluation images, not the variation between
+training runs with another seed, so a small gap between two K is not evidence about K. With about 70 dev images the
+intervals are wide.
+
+Figures: `k_sweep_<level>` (pooled F1 per K with the SFT reference, and the paired difference to SFT, hollow marker = the
+interval includes 0) and `k_sweep_training` (hours, tie rate, first against last quarter reward). Each has its table twin in
+the same folder.
+
+## 8. Decisions, in one place
 
 - Hyper-parameters, the K sweep and every ablation are chosen or run on the dev split; the test split is used once.
 - Canonical size is primary; original size is reported with it for every condition.
@@ -139,14 +175,16 @@ that covers fewer images than the others.
   table.
 - Tool removal is reported as dependence of a trained agent, never as the value of a tool-free model.
 - The trace generator and verifier models are described by role and by the cohort each handled, not by product name.
+- K is chosen on the dev split from the sweep table and a rule fixed beforehand; the test split sees only the chosen K.
 - The grounding detector is a fixed supporting tool. Its checkpoint was ranked on the validation images, so it is
   described as the tool in use and not as a tuned part of the method.
 
-## 8. Limits to state in the paper
+## 9. Limits to state in the paper
 
 - The test set has 50 images (four of them healthy); intervals are wide and several comparisons will not separate.
 - Many comparisons are shown without a multiplicity correction. The figures flag screening results, not confirmed effects.
 - The ablations are evaluation-time interventions on one trained agent, not retrained models.
+- The K sweep has one training run per K; its intervals do not cover training-run variation.
 - A resumed GRPO run restarts the optimizer moments cold; a resumed run is reported as such.
 - The base zero-shot file lacks one test image (id 38); it must be rerun so that every condition covers the same 50 images
   before any paired claim involving the zero-shot condition.
@@ -156,7 +194,7 @@ that covers fewer images than the others.
   native solver ran out of memory. That replacement has not yet been run on a TPU, so TPU-trained checkpoints must not be
   described as validated until the memory test in the runbook (B4) has passed.
 
-## 9. Status
+## 10. Status
 
 | Item | State |
 |---|---|
@@ -164,11 +202,12 @@ that covers fewer images than the others.
 | Tool removal and localizer perturbation, localization measure | implemented |
 | One ground-truth definition shared by all evaluators; healthy images evaluated | implemented |
 | Figures from the aggregate tables | implemented |
-| Unablated and ablated dev runs, GRPO group-size K sweep | to run |
+| K-sweep launcher (same flags as `run_grpo.py`, resume, preflight), per-K dev evaluation, tables and figures | implemented |
+| Unablated and ablated dev runs, GRPO group-size K sweep (training and evaluation) | to run |
 | Test-set run of the chosen configuration at both image sizes | to run |
 | Rerun of the base zero-shot condition so it covers the same 50 images | to run |
 
-## 10. Reproducing it
+## 11. Reproducing it
 
 Every setting is explicit on the command line; nothing is switched for you.
 
@@ -180,6 +219,18 @@ python scripts/run_eval_matrix.py --split dev --dev-split data/splits/dentex_dev
 python scripts/aggregate_eval.py --output-dir data/evaluations --dataset dentex --split dev
 python scripts/plot_eval_figures.py --output-dir data/evaluations --dataset dentex --split dev --formats png pdf
 ```
+
+The K sweep, after the SFT adapter and the dev split exist (the sweep and its evaluation share every setting with the single runs):
+
+```
+python scripts/run_grpo_sweep.py --track with_tools --sft-stage dentex_alone --sft-model-dir <sft> --k-values 2 4 8 --epochs 2 --lr 5e-6 --kl-beta 0.04 --clip-eps 0.2 --push-every-steps 25 --checkpoint-dir data/models --canonical-resize --precision qlora --temperature 0.7 --max-new-tokens 2048 --dev-split data/splits/dentex_dev.json --seed 42 --hf-repo <repo>
+python scripts/run_eval_matrix.py --split dev --dev-split data/splits/dentex_dev.json --conditions sft_with_tools --sizes canonical --sft-adapter <sft> --precision qlora --output-dir data/evaluations --existing-results resume
+python scripts/run_eval_matrix.py --split dev --dev-split data/splits/dentex_dev.json --conditions grpo_with_tools --sizes canonical --grpo-adapter data/models/qwen3_5_9b_grpo_with_tools_k4_dentex_alone/grpo-with_tools-final --precision qlora --output-dir data/evaluations/k_sweep/k4 --existing-results resume
+python scripts/aggregate_k_sweep.py --sweep-dir data/evaluations/k_sweep --reference-dir data/evaluations --log-template "data/models/qwen3_5_9b_grpo_with_tools_k{k}_dentex_alone/grpo_training_log.jsonl"
+python scripts/plot_k_sweep.py --sweep-dir data/evaluations/k_sweep --formats png pdf
+```
+
+(The K values above are placeholders; the sweep takes whatever `--k-values` the notebook sets, and the evaluation command is repeated for every K.)
 
 The test run is the same matrix command with `--split test` and no ablation flag, followed by the same two scripts with
 `--split test`.

@@ -206,3 +206,20 @@ and 1.0 under the real one; a model reporting only the first finding scored 1.0 
 answer, and a list-valued answer raised an error. Both functions take an optional `categories_df`; without one the DENTEX
 class names are used, where they used to fall back silently to "Caries". `failure_analysis.py` still reads a single-dict
 ground truth and answer and has not been moved to this definition.
+
+## 11. GRPO group-size (K) sweep
+
+**Implemented** (training and evaluation to run). `scripts/run_grpo_sweep.py` trains one run per K from the same SFT adapter on
+the same seeded images; it takes the settings of `run_grpo.py` (`--sft-model-dir`, `--kl-beta`, `--clip-eps`,
+`--push-every-steps`, `--resume`, `--resume-hf`, `--preflight`, and `--checkpoint-dir` for `run_grpo.py`'s `--output-dir`),
+finds the SFT adapter by the same search (including the `_<precision>` suffix of its own `--precision`), and writes one step log per K.
+Each GRPO step log now also carries `n_groups` and `n_tied_groups` (groups whose K rewards were all equal, K >= 2).
+
+Each K's final checkpoint is evaluated on the dev split with `run_eval_matrix.py --output-dir <sweep-dir>/k<K>`; the SFT
+reference comes from the ordinary dev matrix. `scripts/aggregate_k_sweep.py` writes, per condition and image size, the pooled
+exact and FDI F1 per K with image-resampling intervals, the paired differences to SFT, to the best K and between neighbouring K,
+a `within_noise_of_best` flag, the cheapest K among those, and the training cost per K from the step logs (hours, rollouts,
+tie rate, reward, KL). `scripts/plot_k_sweep.py` draws `k_sweep_exact`, `k_sweep_fdi` and `k_sweep_training`. Nothing selects K:
+the flag and the cheapest-K line are facts about the intervals, and the rule that turns them into a choice is fixed before the
+table is read. The test split is run once, for the chosen K. Definitions, a worked example and the limits (one training run per
+K, about 70 dev images): `dental_agent/evaluation/k_sweep.py` and `docs/EVALUATION_WRITEUP.md` section 7.

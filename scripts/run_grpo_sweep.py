@@ -29,6 +29,7 @@ from dental_agent.data.dev_split import load_dev_keys, select_training_pool
 from dental_agent.data.tufts import load_tufts_dataset
 from dental_agent.training.grpo import train_grpo
 from dental_agent.utils.canonical import SLOT_BUDGET, parse_slot_budget
+from scripts.run_grpo import resolve_sft_reference, sft_reference_candidates
 
 
 def parse_args():
@@ -54,8 +55,26 @@ def parse_args():
         default=[1, 2, 4, 8, 16],
         help="List of group sizes to evaluate in sweep",
     )
-    parser.add_argument("--epochs", "-e", type=int, default=1, help="Optimization epochs per batch")
+    parser.add_argument("--epochs", "-e", type=int, default=1,
+                        help="Optimization epochs per batch (run_grpo.py defaults to 2: pass the same value to both so a K of the "
+                             "sweep equals a single run of that K).")
     parser.add_argument("--lr", type=float, default=5e-6, help="Policy gradient learning rate")
+    parser.add_argument("--kl-beta", type=float, default=0.04, help="Schulman k3 KL penalty weight (same as run_grpo.py).")
+    parser.add_argument("--clip-eps", type=float, default=0.2, help="PPO clipping epsilon (same as run_grpo.py).")
+    parser.add_argument("--push-every-steps", type=int, default=25, help="Checkpoint upload/save frequency in steps.")
+    parser.add_argument("--sft-model-dir", type=str, default=None,
+                        help="SFT adapter folder for the frozen reference (same as run_grpo.py; every K uses it). Without it the "
+                             "folder is searched like run_grpo.py does, including the _<precision> suffix of --precision.")
+    parser.add_argument("--checkpoint-dir", type=str, default="data/models",
+                        help="Parent folder of the per-K checkpoint folders qwen3_5_9b_grpo_<track>_k<K>_<stage> "
+                             "(run_grpo.py calls this --output-dir).")
+    parser.add_argument("--resume", action=argparse.BooleanOptionalAction, default=False,
+                        help="Continue an interrupted sweep: a K whose final checkpoint exists is skipped without loading the model; "
+                             "an interrupted K continues from its newest step checkpoint (same pool, seed and K needed).")
+    parser.add_argument("--resume-hf", type=str, default=None,
+                        help="Hub repo to download each K's newest step checkpoint from first (fresh session). Needs --resume.")
+    parser.add_argument("--preflight", action="store_true",
+                        help="Run the run_grpo.py preflight for every K of this exact command and exit without loading the model.")
     parser.add_argument("--output-dir", type=str, default="data/eval_results", help="Directory for sweep summary logs")
     parser.add_argument(
         "--hf-repo",
@@ -110,12 +129,30 @@ def parse_args():
     return parser.parse_args()
 
 
+def _preflight_all(args) -> int:
+    """The run_grpo.py preflight for every K of this command (nothing is loaded or changed). Returns the number of FAILs."""
+    import argparse as _ap
+    from dental_agent.training.preflight import run_preflight
+    candidates = sft_reference_candidates(args.track, args.sft_stage, args.precision)
+    fails = 0
+    for k in args.k_values:
+        ns = _ap.Namespace(**vars(args))
+        ns.group_size, ns.dataset, ns.config, ns.output_dir = k, "dentex", None, args.checkpoint_dir
+        fails += run_preflight(ns, candidates)
+    print(f"K-sweep preflight: {fails} FAIL over K = {args.k_values}.")
+    return fails
+
+
 def main():
     args = parse_args()
     if args.temperature <= 0:
         raise SystemExit("--temperature must be > 0 (greedy rollouts give identical samples and zero advantages).")
     if args.pad_vision_to_slots and not args.canonical_resize:
         raise SystemExit("--pad-vision-to-slots requires --canonical-resize.")
+    if args.resume_hf and not args.resume:
+        raise SystemExit("--resume-hf only downloads checkpoints; add --resume to continue the sweep from them.")
+    if args.preflight:
+        sys.exit(1 if _preflight_all(args) else 0)
     if args.spmd:
         try:
             import torch_xla.runtime as xr
@@ -156,28 +193,27 @@ def main():
 
     results_table = []
 
-    # Resolve SFT reference adapter directory
-    sft_dir = f"data/models/qwen3_5_9b_sft_{args.track}_{args.sft_stage}"
-    if not os.path.exists(sft_dir) and args.hf_repo:
-        try:
-            from huggingface_hub import snapshot_download
-            path_in_repo = f"sft/qwen3_5_9b_sft_{args.track}_{args.sft_stage}"
-            print(f"[SWEEP] Fetching reference SFT adapter from {args.hf_repo}/{path_in_repo}...")
-            snapshot_download(
-                repo_id=args.hf_repo,
-                allow_patterns=[f"{path_in_repo}/*"],
-                local_dir="data/models",
-            )
-            sft_dir = f"data/models/{path_in_repo}"
-        except Exception as e:
-            print(f"[SWEEP WARNING] Could not download SFT reference from {args.hf_repo}: {e}")
+    # Same resolution as run_grpo.py: --sft-model-dir, then the local folders (with the _<precision> suffix), then the hub.
+    sft_dir = resolve_sft_reference(args.sft_model_dir, args.track, args.sft_stage, args.hf_repo, args.precision)
 
     for k in args.k_values:
         print(f"\n>>> Starting GRPO Experiment for Group Size K={k} <<<")
         start_time = time.time()
         target_name = f"qwen3_5_9b_grpo_{args.track}_k{k}_{args.sft_stage}"
-        ckpt_dir = f"data/models/{target_name}"
+        ckpt_dir = f"{args.checkpoint_dir}/{target_name}"
         path_in_repo_prefix = f"grpo/{target_name}"
+        final_meta = Path(ckpt_dir) / f"grpo-{args.track}-final" / "checkpoint_meta.json"
+        if args.resume and final_meta.is_file():
+            print(f">>> K={k} is already complete ({final_meta.parent}); skipped. <<<")
+            continue
+        if args.resume_hf:
+            try:
+                from dental_agent.training.grpo_resume import fetch_latest_checkpoint_from_hub
+                tag = fetch_latest_checkpoint_from_hub(
+                    args.resume_hf, path_in_repo_prefix, args.track, Path(ckpt_dir), Path(args.checkpoint_dir) / "_hf_resume")
+                print(f"[RESUME] K={k}: downloaded {tag}." if tag else f"[RESUME] K={k}: the Hub holds no step checkpoint.")
+            except Exception as e:
+                print(f"[RESUME WARNING] K={k}: could not restore from the Hub: {e}")
 
         final_ckpt = train_grpo(
             images_df=images_df,
@@ -188,9 +224,13 @@ def main():
             checkpoint_dir=ckpt_dir,
             group_size=k,
             epochs_per_batch=args.epochs,
+            kl_beta=args.kl_beta,
+            clip_eps=args.clip_eps,
             learning_rate=args.lr,
             track=args.track,
             hf_repo=args.hf_repo,
+            push_every_steps=args.push_every_steps,
+            resume=args.resume,
             path_in_repo_prefix=path_in_repo_prefix,
             num_cores=args.num_cores,
             use_fsdp=args.fsdp,
@@ -213,6 +253,10 @@ def main():
             "sft_stage": args.sft_stage,
             "elapsed_seconds": round(elapsed, 2),
             "checkpoint": str(final_ckpt),
+            "log_path": f"{ckpt_dir}/grpo_training_log.jsonl",
+            "kl_beta": args.kl_beta,
+            "clip_eps": args.clip_eps,
+            "epochs": args.epochs,
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
 
