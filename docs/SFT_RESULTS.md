@@ -2,6 +2,14 @@
 
 This document tracks empirical evaluation results for Stage 1 Supervised Fine-Tuning (SFT) of **VLM-DENTAL** (`Qwen/Qwen3.5-9B`). It benchmarks the baseline zero-shot models against fine-tuned adapters across all 3 curriculum stages for both **Track A (`with_tools`)** and **Track B (`no_tools`)** on multi-finding clinical test splits.
 
+> **DO NOT CITE the two "Zero-Shot" rows in section 2, the "F1 ~0.31" baseline in section 1, or any "Target F1" / "Target > x%" value.**
+> The zero-shot numbers (FDI F1 0.384 / Diag Match F1 0.291 / 54.2% tool adherence / 0.412 / 0.320) have no source run in this repository:
+> no result file, log or command produces them, and they disagree with the measured base-model row of `docs/ZERO_SHOT_RESULTS.md`
+> (Qwen3.5-9B: 30.6% exact match, Exact F1 0.112, from `scripts/run_zero_shot.py` on the 50 validation images). The "Target" values are
+> aspirations, not results. For the paper, quote only numbers regenerated from `data/evaluations/*` by `scripts/aggregate_eval.py`
+> (pooled at finding level, images keyed by dataset and image id). SFT rows stay "Pending Run" until a checkpoint exists AND the
+> TPU solver replacement has passed runbook step B4.
+
 ---
 
 ## 1. Executive Summary & Curriculum Progression

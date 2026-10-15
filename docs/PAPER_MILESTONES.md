@@ -1,5 +1,7 @@
 # PAPER_MILESTONES
 
+> **Counts in this file predate the patch-0028 trace regeneration and may be stale.** Current counts are generated from the real trace files by `python scripts/dataset_statistics.py --dev-split data/splits/dentex_dev.json` into `docs/DATASET_STATISTICS.md`. Do not cite numbers from here without re-running it.
+
 This document logs our experimental findings, key metrics, and interesting data for use in future paper writing. 
 Future SFT, GRPO, and Trace Generation findings should also be appended here.
 

@@ -115,6 +115,12 @@ def main() -> int:
         "--output-dir", str(out_dir), "--hf-repo", "", "--push-every-steps", "1000", "--lr", "1e-3", *passthrough,
     ]
     os.environ["HF_HUB_OFFLINE"] = "1"
+    if args.track == "with_tools" and not os.environ.get("GROUNDING_MODEL_PATH"):
+        # run_grpo now stops before the model loads when the YOLO checkpoint is missing. The tiny random model never
+        # needs real boxes: a placeholder file satisfies the input check; a locate_tooth call on it is a reported tool error.
+        placeholder = work / "yolo_placeholder.pt"
+        placeholder.write_bytes(b"smoke-test placeholder, not a model")
+        os.environ["GROUNDING_MODEL_PATH"] = str(placeholder)
     run_grpo.main()
 
     finals = glob.glob(str(out_dir / "**" / "adapter_model.safetensors"), recursive=True)

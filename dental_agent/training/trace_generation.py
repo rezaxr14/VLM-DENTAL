@@ -738,7 +738,6 @@ def resolve_trace_image_path(
             fname,
             f"{norm_id}.png",
             f"{stem}.png",
-            f"val_{norm_id}.png",
             f"train_{norm_id}.png",
             f"{norm_id}.jpg",
         ]))
@@ -756,9 +755,10 @@ def resolve_trace_image_path(
             Path("data/dentex"),
             Path("data/dentex/DENTEX"),
             Path("data/training_data"),
-            Path("data/validation_data"),
             Path("data/dentex/training_data"),
-            Path("data/dentex/validation_data"),
+            # No validation_data / val_<id>.png here: this resolver serves TRAIN traces (the slice download below is
+            # split_name="train"), and image ids collide with the 50 official validation (= test) images, so a missing
+            # train image used to be able to resolve to a TEST image.
         ])
     elif ds_norm == "tufts":
         candidate_names = list(dict.fromkeys([

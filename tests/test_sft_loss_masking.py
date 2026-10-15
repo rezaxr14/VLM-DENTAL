@@ -153,7 +153,7 @@ def test_zero_supervision_guard_raises():
         temp_path = f.name
 
     try:
-        dataset = DentalSFTDataset(temp_path, processor=mock_processor)
+        dataset = DentalSFTDataset(temp_path, processor=mock_processor, missing_image="placeholder")  # this test is about masking, not images
         with pytest.raises(ValueError, match="Zero supervised tokens found"):
             _ = dataset[0]
     finally:

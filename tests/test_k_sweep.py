@@ -310,7 +310,8 @@ def test_sweep_resume_skips_a_finished_k_and_passes_every_setting(sweep_mod, mon
     imgs = pd.DataFrame([{"id": 1, "local_path": "a.png"}])
     monkeypatch.setattr(sweep_mod, "load_dentex_dataset", lambda *a, **k: (imgs, pd.DataFrame(), pd.DataFrame()))
     monkeypatch.setattr(sweep_mod, "select_training_pool", lambda df, *a, **k: df)
-    monkeypatch.setattr(sweep_mod, "resolve_sft_reference", lambda *a: "sft_dir")
+    monkeypatch.setattr(sweep_mod, "resolve_grpo_inputs", lambda *a: "sft_dir")
+    monkeypatch.setattr(sweep_mod, "ensure_pool_images", lambda df, *a: df)
     monkeypatch.setattr(sweep_mod, "train_grpo", lambda **kw: (calls.append(kw), f"{kw['checkpoint_dir']}/final")[1])
     done = tmp_path / "ck" / "qwen3_5_9b_grpo_with_tools_k2_dentex_alone" / "grpo-with_tools-final"
     done.mkdir(parents=True)

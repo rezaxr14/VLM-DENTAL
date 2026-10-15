@@ -29,7 +29,7 @@ from dental_agent.data.dev_split import load_dev_keys, select_training_pool
 from dental_agent.data.tufts import load_tufts_dataset
 from dental_agent.training.grpo import train_grpo
 from dental_agent.utils.canonical import SLOT_BUDGET, parse_slot_budget
-from scripts.run_grpo import resolve_sft_reference, sft_reference_candidates
+from scripts.run_grpo import ensure_pool_images, resolve_grpo_inputs, resolve_sft_reference, sft_reference_candidates
 
 
 def parse_args():
@@ -184,7 +184,10 @@ def main():
 
     # Load dataset
     # TRAIN images only (the default split of load_dentex_dataset is the official validation = test set).
+    # Every input is found (or fetched) once, before the first K loads the 9B model.
+    sft_dir = resolve_grpo_inputs(args, cfg.data_dir)
     images_df, annots_df, categories_df = load_dentex_dataset(cfg.data_dir, split_name="train")
+    images_df = ensure_pool_images(images_df, "dentex", cfg.data_dir)
     images_df = select_training_pool(
         images_df, annots_df, dataset="dentex", dev_keys=load_dev_keys(args.dev_split),
         include_healthy=args.include_healthy, max_images=args.max_images, seed=args.seed,
@@ -193,8 +196,7 @@ def main():
 
     results_table = []
 
-    # Same resolution as run_grpo.py: --sft-model-dir, then the local folders (with the _<precision> suffix), then the hub.
-    sft_dir = resolve_sft_reference(args.sft_model_dir, args.track, args.sft_stage, args.hf_repo, args.precision)
+    # sft_dir was resolved above with the same order as run_grpo.py: --sft-model-dir, local folders (_<precision> first), Kaggle, hub.
 
     for k in args.k_values:
         print(f"\n>>> Starting GRPO Experiment for Group Size K={k} <<<")

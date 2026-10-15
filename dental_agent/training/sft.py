@@ -62,6 +62,15 @@ def resolve_image_path(sample: dict[str, Any], data_dir: str | Path = "data") ->
     if image_id is None:
         return None
 
+    # Shared resolver (dental_agent/utils/inputs.py): the recorded path, that path rebased on the data roots (Windows
+    # separators, another machine's prefix), <id>.png in the data roots / Kaggle inputs / HF cache, then a one-image Hub
+    # download. Independent of the working directory; never resolves a DENTEX train image to a validation (test) file.
+    from dental_agent.utils.inputs import infer_dataset, resolve_image
+
+    resolved = resolve_image(infer_dataset(sample), image_id, raw_path, data_dir)
+    if resolved is not None:
+        return str(resolved)
+
     str_id = str(image_id)
     ds_name = (sample.get("dataset") or "").lower().strip()
     origin_file = str(sample.get("_origin_file", "")).lower()
@@ -115,8 +124,13 @@ def resolve_image_path(sample: dict[str, Any], data_dir: str | Path = "data") ->
             base / "tufts" / "Radiographs" / f"{str_id}.jpg",
         ])
 
+    from dental_agent.utils.inputs import _looks_like_test_file
+
+    def _test_file(p: Path) -> bool:  # a DENTEX train trace must never resolve to a validation (= test) image
+        return ds_name != "tufts" and _looks_like_test_file(p)
+
     for cand in candidates:
-        if cand.is_file():
+        if cand.is_file() and not _test_file(cand):
             res = str(cand)
             _IMAGE_PATH_RESOLVE_CACHE[cache_key] = res
             return res
@@ -128,7 +142,7 @@ def resolve_image_path(sample: dict[str, Any], data_dir: str | Path = "data") ->
     patterns = [f"**/{str_id}.*", f"**/train_{str_id}.*"] if ds_name == "dentex" else [f"**/{str_id}.*"]
     for pat in patterns:
         for match in search_root.glob(pat):
-            if match.is_file() and match.suffix.lower() in (".png", ".jpg", ".jpeg"):
+            if match.is_file() and match.suffix.lower() in (".png", ".jpg", ".jpeg") and not _test_file(match):
                 res = str(match)
                 _IMAGE_PATH_RESOLVE_CACHE[cache_key] = res
                 return res
@@ -550,7 +564,13 @@ class DentalSFTDataset(Dataset):
         view_cache_max_items: int = 256,
         mask_malformed_turns: bool = False,
         exclude_keys: set[str] | None = None,
+        missing_image: str = "raise",
     ) -> None:
+        # "raise" (default): a trace whose image cannot be found stops the run with the trace named. "placeholder" renders a
+        # gray 512x512 stand-in (unit tests only): training on it silently teaches the model to read gray squares.
+        if missing_image not in ("raise", "placeholder"):
+            raise ValueError(f"missing_image must be 'raise' or 'placeholder', got {missing_image!r}")
+        self.missing_image = missing_image
         self.processor = processor
         self.track = track
         self.data_dir = data_dir
@@ -586,6 +606,7 @@ class DentalSFTDataset(Dataset):
             Path(data_dir) / "traces" / "trace_token_lengths.json",
             Path("data/traces/trace_token_lengths.json"),
             Path("/kaggle/working/data/traces/trace_token_lengths.json"),
+            Path(__file__).resolve().parents[2] / "data" / "traces" / "trace_token_lengths.json",  # independent of the cwd
         ])
         for mc in manifest_candidates:
             if mc.is_file():
@@ -737,7 +758,13 @@ class DentalSFTDataset(Dataset):
         rec = self.records[idx]
         image_path = resolve_image_path(rec, self.data_dir)
         if not image_path:
-            # Create a 512x512 dummy neutral image if file is completely missing
+            if self.missing_image == "raise":
+                raise FileNotFoundError(
+                    f"[MISSING IMAGE] trace {idx} ({rec.get('dataset') or 'dentex'}::{rec.get('image_id')}, recorded path "
+                    f"{rec.get('image_path')!r}, file {rec.get('_origin_file')}) has no image on disk, in the Kaggle inputs, in the "
+                    "Hugging Face cache or on the Hub. Run `python scripts/train_sft.py ... --preflight` (it counts them) and "
+                    "`python scripts/fetch_hf_assets.py --images`."
+                )
             base_image = Image.new("RGB", (512, 512), color=(128, 128, 128))
         else:
             base_image = Image.open(image_path).convert("RGB")

@@ -26,11 +26,11 @@ class ToothGrounder:
         if model_path:
             self.model_path = Path(model_path)
         else:
-            candidates = [
-                Path(os.environ["GROUNDING_MODEL_PATH"]) if "GROUNDING_MODEL_PATH" in os.environ else None,
-                Path("data/models/yolo_cv_best/weights/best.pt"),
-                Path("data/models/grounding_tool_cv_best/weights/best.pt"),
-            ]
+            # One candidate list for the tool, the GRPO/SFT preflight and the run scripts (dental_agent/utils/inputs.py):
+            # GROUNDING_MODEL_PATH, the default folders, the shipped dentex_grounding_tool_cv_best/, each tried from the
+            # working directory and from the repository root.
+            from dental_agent.utils.inputs import as_candidates, yolo_candidates
+            candidates = [c for cand in yolo_candidates() for c in as_candidates(cand)]
             existing = next((c for c in candidates if c and c.exists()), None)
             if existing:
                 self.model_path = existing

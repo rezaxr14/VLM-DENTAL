@@ -123,6 +123,15 @@ def world(tmp_path, monkeypatch):
     cats_df = pd.DataFrame({"id": [], "name": []})
     monkeypatch.setattr("dental_agent.data.dentex.load_dentex_dataset", lambda *a, **k: (images_df.copy(), annots_df, cats_df))
     monkeypatch.setattr("dental_agent.data.dentex.find_local_dentex_dir", lambda *a, **k: tmp_path)
+    # Hermetic: a YOLO checkpoint on disk and a Hub that cannot be reached (never the real network).
+    yolo = tmp_path / "best.pt"
+    yolo.write_bytes(b"x")
+    monkeypatch.setenv("GROUNDING_MODEL_PATH", str(yolo))
+
+    def _offline(*a, **k):
+        raise ConnectionError("offline in tests")
+
+    monkeypatch.setattr("dental_agent.utils.inputs.hub_list_files", _offline)
 
     dev = tmp_path / "dev.json"
     dev.write_text(json.dumps({"dataset": "dentex", "image_ids": [2, 8], "keys": ["dentex::2", "dentex::8"]}))
@@ -165,11 +174,52 @@ def test_preflight_catches_canonical_and_dev_split_mismatch_with_sft(world):
     assert n_fail == 1 and "[FAIL] dev split vs SFT" in text
 
 
-def test_preflight_sft_adapter_missing_is_fail_without_hub_and_warn_with_it(world):
+def test_preflight_sft_adapter_missing_is_fail_without_hub_and_warn_with_it(world, monkeypatch):
     n_fail, text = _run(world, sft_model_dir=str(world.tmp / "nowhere"))
     assert n_fail == 1 and "[FAIL] SFT adapter" in text
+    # An explicit folder is never replaced by another adapter, Hub or not.
     n_fail, text = _run(world, hf_repo="user/repo")
-    assert n_fail == 0 and "[WARN] SFT adapter" in text
+    assert n_fail == 1 and "an explicit folder is never replaced" in text
+    # No explicit folder: the Hub is the plan. Unreachable -> cannot say (WARN); present -> WARN; absent -> FAIL.
+    n_fail, text = _run(world, sft_model_dir=None, precision="qlora", hf_repo=None)
+    assert n_fail == 1 and "[FAIL] SFT adapter" in text  # no hf_repo, nothing local
+    n_fail, text = _run(world, hf_repo="user/repo")
+    assert n_fail == 0 and "[WARN] SFT adapter" in text and "could not be checked" in text
+    listing = ["sft/qwen3_5_9b_sft_with_tools_dentex_alone_qlora/adapter_config.json"]
+    monkeypatch.setattr("dental_agent.utils.inputs.hub_list_files", lambda *a, **k: listing)
+    n_fail, text = _run(world)
+    assert n_fail == 0 and "[WARN] SFT adapter" in text and "downloaded at start-up" in text
+    monkeypatch.setattr("dental_agent.utils.inputs.hub_list_files", lambda *a, **k: ["README.md"])
+    n_fail, text = _run(world)
+    assert "[FAIL] SFT adapter" in text and "has no sft/qwen3_5_9b_sft_with_tools_dentex_alone_qlora/" in text
+
+
+def test_preflight_yolo_and_base_model_and_slot_waste(world, monkeypatch):
+    # YOLO: found -> PASS; gone locally and Hub lists the repo without it -> FAIL; Hub says present -> WARN
+    n_fail, text = _run(world)
+    assert "[PASS] YOLO grounding checkpoint" in text
+    monkeypatch.delenv("GROUNDING_MODEL_PATH")
+    monkeypatch.chdir(world.tmp)
+    monkeypatch.setattr("dental_agent.utils.inputs.hub_list_files", lambda *a, **k: ["README.md"])
+    n_fail, text = _run(world)
+    assert "[FAIL] YOLO grounding checkpoint" in text and "scripts/fetch_hf_assets.py --models" in text
+    monkeypatch.setattr("dental_agent.utils.inputs.hub_list_files", lambda *a, **k: [inp_yolo()])
+    n_fail, text = _run(world)
+    assert "[WARN] YOLO grounding checkpoint" in text and "fetched from the Hub" in text
+    # the no_tools track needs no YOLO at all
+    n_fail, text = _run(world, track="no_tools")
+    assert "YOLO" not in text
+    # base model: a path that does not exist fails before any load
+    n_fail, text = _run(world, model_id="/kaggle/input/nope-9b")
+    assert "[FAIL] base model" in text and "--model-id Qwen/Qwen3.5-9B" in text
+    # slot waste: no_tools + static slots = 7488 padded vision tokens where 1152 are shown
+    n_fail, text = _run(world, track="no_tools", pad_vision_to_slots=True)
+    assert "[WARN] vision slots (no_tools)" in text and "pads 7488 vision tokens" in text and "1152" in text and "6336" in text   # 7488 - 1152 = 6336 padding
+
+
+def inp_yolo():
+    from dental_agent.utils.inputs import YOLO_HUB_FILE
+    return YOLO_HUB_FILE
 
 
 def test_preflight_old_adapter_without_metadata_warns(world):

@@ -172,7 +172,7 @@ def _sft_dataset(tmp_path, monkeypatch, track, rec):
 
     monkeypatch.setattr(sft, "safe_process_vision_info", lambda m: ([], None))
     monkeypatch.setattr(sft, "build_conversational_labels", lambda ids, tok, skip_assistant_turns=None: torch.ones_like(ids))
-    ds = sft.DentalSFTDataset(traces, processor=Proc(), track=track, data_dir=str(tmp_path))
+    ds = sft.DentalSFTDataset(traces, processor=Proc(), track=track, data_dir=str(tmp_path), missing_image="placeholder")  # prompt test, no image files
     ds[0]
     return captured["messages"]
 

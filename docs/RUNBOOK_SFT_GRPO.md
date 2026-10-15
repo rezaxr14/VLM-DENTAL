@@ -6,6 +6,35 @@ Replace `<repo>` with your Hugging Face model repo. Commands are one line each (
 
 ---
 
+## Step 0. The doctor (both paths, both stages)
+
+Every input is found by itself, in this fixed order: **explicit flag, then local folders (the working directory and the repository root), then attached Kaggle inputs, then the Hugging Face Hub.** Discovery resolves paths only; it never changes a setting (precision, `--canonical-resize`, `--max-seq-len` are only ever what you pass). Details: `docs/INPUT_RESOLUTION.md`.
+
+Add `--preflight` to the exact command you are about to run. It loads no model, changes nothing on disk, and prints `[PASS]`, `[INFO]`, `[WARN]` or `[FAIL]` per input, then exits non-zero on any FAIL:
+```
+python scripts/train_sft.py --track with_tools --stage dentex_alone --precision qlora --canonical-resize --dev-split data/splits/dentex_dev.json --preflight
+python scripts/run_grpo.py --track with_tools --sft-stage dentex_alone --precision qlora --canonical-resize --dev-split data/splits/dentex_dev.json --group-size 4 --preflight
+```
+The notebooks do this for you (`PREFLIGHT_FIRST = True`): the launch cell re-runs its own command with `--preflight` and stops before anything loads if there is a FAIL. Without `--preflight` the real run performs the same resolution first and stops with `[INPUT NOT FOUND]`, naming everything it searched and the one command that fixes it, before the 9B model is touched.
+
+| Input | Searched (in order) | Fix when missing |
+|-------|--------------------|------------------|
+| SFT adapter (GRPO) | `--sft-model-dir`, `data/models/qwen3_5_9b_sft_<track>_<stage>_<precision>`, the same without suffix, `checkpoints/sft_<track>_<stage>`, Kaggle inputs, Hub `sft/<name>` | `train_sft.py` for that track, stage and precision |
+| Traces (SFT) | `<data-dir>/traces`, `data/traces`, repo `data/traces`, Hub traces repo (only the missing files) | `python scripts/sync_traces_hf.py --download` |
+| Trace and pool images | recorded path, rebased on the data roots, `<id>.png` names, Kaggle inputs, HF cache, Hub (one image per request) | `python scripts/fetch_hf_assets.py --images` |
+| Token-length manifest | `<data-dir>/traces/trace_token_lengths.json`, repo `data/traces`, `/kaggle/working/data/traces` | `compute_exact_trace_lengths.py ... --recompute` (the doctor prints the full command) |
+| Dev split | `--dev-split`, repo-root copy, `<data-dir>/splits` | `python scripts/make_dev_split.py --data-dir data --n 70 --seed 42` |
+| YOLO checkpoint (`with_tools`) | `GROUNDING_MODEL_PATH`, `data/models/yolo_cv_best/weights/best.pt` and sibling folders, Kaggle, Hub `yolo_cv/yolo_cv_best/weights/best.pt` | `python scripts/fetch_hf_assets.py --models` |
+| Base model | an existing local folder with `config.json` and weights, or a Hub id | pass `--model-id Qwen/Qwen3.5-9B` or the full Kaggle folder |
+
+Behaviour changes in patch 0034 you should know about:
+* A wrong explicit `--sft-model-dir` now **fails**. It used to fall back to a different folder, and GRPO could start from a fresh LoRA without saying so.
+* A trace whose image cannot be found now **stops the run** (it used to train on a gray 512x512 square). A DENTEX *train* trace is never resolved to a validation (test) image, even though the ids 1-50 exist in both sets.
+* The token-length manifest carries a fingerprint (code, trace files, canonical flag, whether every trace was measured). A manifest without one, from an interrupted run, with estimated entries, or from older traces or code is stale: it is a **FAIL under `--pad-vision-to-slots`** (the filter would use wrong lengths) and a WARN otherwise.
+* The doctor warns when a `no_tools` run uses `--pad-vision-to-slots` with the default slots: every sample then carries 7,488 vision tokens for 1,152 used.
+
+---
+
 ## Section A. GPU path (RTX 4090: QLoRA; A100: bf16 LoRA)
 
 The GPU path pads each batch to its longest sample. There are no vision slots, no solver shim and no SPMD here, because they exist only to stop XLA recompiling on TPU. `--max-seq-len` is a ceiling: traces longer than it are dropped, and the longest remaining trace sets the peak memory.

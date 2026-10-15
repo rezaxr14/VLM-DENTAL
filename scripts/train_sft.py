@@ -276,6 +276,12 @@ def parse_args():
         default=None,
         help="Directory for XLA persistent compilation cache (auto-detected if attached as Kaggle input or in data/xla_cache)",
     )
+    parser.add_argument(
+        "--preflight",
+        action="store_true",
+        help="Check this exact command (base model, traces, trace images, token-length manifest, dev split, flag combination, "
+             "hub token, hardware, disk) and exit without loading the model. Read-only: it never changes a setting.",
+    )
     args = parser.parse_args()
     if args.gradient_accumulation_steps is None:
         args.gradient_accumulation_steps = 1 if args.num_cores > 1 else 16
@@ -291,28 +297,9 @@ def resolve_stage_traces(stage: str, track: str, data_dir: str | Path) -> List[s
     resolved: List[str] = []
     is_tools = track == "with_tools"
 
-    if stage == "dentex_alone":
-        # Stage 1a: DENTEX Alone + DENTEX Healthy Controls
-        candidates = [
-            traces_dir / ("train_cot_traces_dentex.jsonl" if is_tools else "train_cot_traces_dentex_no_tools.jsonl"),
-            traces_dir / ("train_cot_traces_healthy_dentex.jsonl" if is_tools else "train_cot_traces_healthy_dentex_no_tools.jsonl"),
-        ]
-    elif stage == "dentex_tufts_overlap":
-        # Stage 1b: DENTEX + Tufts Overlap + Negative Controls
-        candidates = [
-            traces_dir / ("train_cot_traces_dentex.jsonl" if is_tools else "train_cot_traces_dentex_no_tools.jsonl"),
-            traces_dir / ("train_cot_traces_tufts.jsonl" if is_tools else "train_cot_traces_tufts_no_tools.jsonl"),
-            traces_dir / ("train_cot_traces_healthy_dentex.jsonl" if is_tools else "train_cot_traces_healthy_dentex_no_tools.jsonl"),
-            traces_dir / ("train_cot_traces_healthy_tufts.jsonl" if is_tools else "train_cot_traces_healthy_tufts_no_tools.jsonl"),
-        ]
-    else:  # multicohort_all
-        # Stage 1c: Full Multi-Cohort: DENTEX + Tufts All 4 Findings + Full Negative Controls
-        candidates = [
-            traces_dir / ("train_cot_traces_dentex.jsonl" if is_tools else "train_cot_traces_dentex_no_tools.jsonl"),
-            traces_dir / ("train_cot_traces_tufts_all.jsonl" if is_tools else "train_cot_traces_tufts_all_no_tools.jsonl"),
-            traces_dir / ("train_cot_traces_healthy_dentex.jsonl" if is_tools else "train_cot_traces_healthy_dentex_no_tools.jsonl"),
-            traces_dir / ("train_cot_traces_healthy_tufts.jsonl" if is_tools else "train_cot_traces_healthy_tufts_no_tools.jsonl"),
-        ]
+    # The stage -> file table is shared with the input resolvers / preflight (dental_agent/utils/inputs.py).
+    from dental_agent.utils.inputs import stage_trace_names
+    candidates = [traces_dir / n for n in stage_trace_names(stage, track)]
 
     for p in candidates:
         if p.is_file():
@@ -1200,8 +1187,61 @@ def run_training(index: int, args: argparse.Namespace):
             print(f"[COMPLETE] Best adapter preserved at {best_adapter_path} (best_val_loss={best_val_loss:.4f}).")
 
 
+def resolve_sft_inputs(args: argparse.Namespace, is_tpu: bool) -> None:
+    """Find every input of this SFT command (local first, then Kaggle inputs, then the Hub) BEFORE anything heavy loads.
+
+    Resolves PATHS only: no setting is changed. A missing input stops the run with what was searched and the one command
+    that fixes it (dental_agent/utils/inputs.py). The trace files it finds are written back to ``args.dataset_path`` so
+    every later step reads the same files.
+    """
+    from dental_agent.data.dev_split import load_dev_keys
+    from dental_agent.utils import inputs as inp
+
+    try:
+        inp.resolve_base_model(args.model_id)
+        if args.dataset_path:
+            files = [Path(p.strip()) for p in args.dataset_path.split(",") if p.strip()]
+            missing = [str(f) for f in files if not f.is_file()]
+            if missing:
+                raise inp.InputNotFound("--dataset-path trace file(s)", missing,
+                                        "pass existing JSONL paths, or drop --dataset-path to use the files of --stage")
+        else:
+            res = inp.resolve_stage_traces(args.stage, args.track, args.data_dir)
+            files = res.files
+            if res.legacy_fallback:
+                print(f"[TRACES WARNING] No stage files found anywhere; training on the legacy single file {files[0]} "
+                      f"(all cohorts, not stage '{args.stage}').")
+        args.dataset_path = ",".join(str(f) for f in files)
+        print(f"[INPUTS] Traces ({len(files)}): " + ", ".join(f.name for f in files))
+
+        dev_path = inp.resolve_dev_split(args.dev_split, args.data_dir)
+        if dev_path is not None:
+            args.dev_split = str(dev_path)
+        dev_keys = load_dev_keys(args.dev_split)
+
+        check = inp.ensure_trace_images(files, args.data_dir, exclude_keys=dev_keys)
+        print(f"[INPUTS] Trace images: all {check.n_unique} resolve"
+              + (f" ({check.fetched} fetched from the Hub)" if check.fetched else "") + ".")
+
+        status = inp.check_token_manifest(args.data_dir, files, args.canonical_resize)
+        if status.state != "fresh":
+            cmd = inp.manifest_command(args.data_dir, args.canonical_resize, args.model_id, args.vision_slots)
+            msg = f"Token-length manifest {status.state}: " + "; ".join(status.reasons) + f". Recompute: {cmd}"
+            if args.pad_vision_to_slots and is_tpu:   # off TPU the flag itself is rejected later ("TPU-only"); do not mask that clearer error
+                raise inp.InputNotFound("Fresh token-length manifest (needed to filter over-length traces under --pad-vision-to-slots)",
+                                        [msg], cmd)
+            print(f"[MANIFEST WARNING] {msg}")
+        else:
+            print(f"[INPUTS] Token-length manifest {status.path}: matches the current code and traces.")
+    except inp.InputNotFound as e:
+        raise SystemExit(f"[INPUT NOT FOUND] {e}") from e
+
+
 def main():
     args = parse_args()
+    if args.preflight:
+        from dental_agent.training.preflight import run_sft_preflight
+        sys.exit(1 if run_sft_preflight(args) else 0)
     is_tpu = False
     try:
         import torch_xla  # noqa: F401 — lightweight check; do NOT import xla_model here
@@ -1209,26 +1249,8 @@ def main():
     except ImportError:
         pass
 
-    # Pre-sync clinical traces to local disk if missing, preventing FileNotFoundError in workers
-    resolved_traces = resolve_stage_traces(args.stage, args.track, args.data_dir)
-    if not resolved_traces:
-        traces_repo = os.environ.get("HF_TRACES_REPO", "Reza-Nadimi/vlm-dental-traces")
-        print(f"\n[AUTO-SYNC] No local trace files found for stage='{args.stage}'.")
-        print(f"[AUTO-SYNC] Synchronizing verified clinical traces from Hugging Face ({traces_repo})...")
-        try:
-            from huggingface_hub import snapshot_download
-            traces_dir = Path(args.data_dir) / "traces"
-            traces_dir.mkdir(parents=True, exist_ok=True)
-            snapshot_download(
-                repo_id=traces_repo,
-                repo_type="dataset",
-                local_dir=str(traces_dir),
-                token=os.environ.get("HF_TOKEN"),
-            )
-            resolved_traces = resolve_stage_traces(args.stage, args.track, args.data_dir)
-            print(f"[AUTO-SYNC] Traces successfully synchronized: {resolved_traces}\n")
-        except Exception as e:
-            print(f"[AUTO-SYNC WARNING] Could not auto-download traces from {traces_repo}: {e}")
+    # Every input is found (or fetched) before the 9B model is touched.
+    resolve_sft_inputs(args, is_tpu)
 
     use_spmd = bool(getattr(args, "xla_spmd", False) and is_tpu)  # SPMD only exists on TPU; --spmd is inert on GPU/CPU
     if is_tpu and args.num_cores > 1 and not use_spmd:

@@ -1,5 +1,7 @@
 # VLM-DENTAL: Trace Generation, Tool Analytics, and Interactive CoT Evaluation
 
+> **Counts in this file predate the patch-0028 trace regeneration and may be stale.** Current counts are generated from the real trace files by `python scripts/dataset_statistics.py --dev-split data/splits/dentex_dev.json` into `docs/DATASET_STATISTICS.md`. Do not cite numbers from here without re-running it.
+
 > [!NOTE]
 > This document provides an exhaustive, 10x deep-dive into the methodology, systems prompts, tools, quantitative results, and qualitative case studies used to build and verify the VLM-DENTAL Agent. It contains everything needed to write the final paper's Methods and Results sections.
 

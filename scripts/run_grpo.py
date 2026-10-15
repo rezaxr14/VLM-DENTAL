@@ -64,13 +64,10 @@ def sft_reference_candidates(track: str, sft_stage: str, precision: str | None =
 
     ``train_sft.py`` writes ``data/models/qwen3_5_9b_sft_<track>_<stage>_<precision>``. With ``precision`` (the run's own
     explicit ``--precision``, never guessed) that folder is searched first, so a QLoRA SFT adapter is found by a QLoRA GRPO
-    run and a bf16 one by a bf16 run; the other precision's folder is not a candidate."""
-    suffixed = [Path(f"data/models/qwen3_5_9b_sft_{track}_{sft_stage}_{precision}")] if precision else []
-    return suffixed + [
-        Path(f"data/models/qwen3_5_9b_sft_{track}_{sft_stage}"),
-        Path(f"checkpoints/sft_{track}_{sft_stage}"),
-        Path(f"data/models/qwen3_5_9b_sft_{track}"),
-    ]
+    run and a bf16 one by a bf16 run; the other precision's folder is not a candidate. One table for every caller:
+    dental_agent/utils/inputs.py."""
+    from dental_agent.utils.inputs import sft_adapter_candidates
+    return sft_adapter_candidates(track, sft_stage, precision)
 
 
 def resolve_sft_reference(
@@ -80,44 +77,52 @@ def resolve_sft_reference(
     hf_repo: str | None = None,
     precision: str | None = None,
 ) -> str:
-    """Resolve local path to SFT reference model or auto-download from Hugging Face Models repo."""
-    if sft_dir_arg:
-        chosen_path = Path(sft_dir_arg)
-        if chosen_path.exists() and any(chosen_path.iterdir()):
-            print(f"[SFT-REF] Using explicitly provided SFT reference at {chosen_path}")
-            return str(chosen_path)
+    """Path of the SFT reference adapter: --sft-model-dir, else the local folders (``_<precision>`` first), Kaggle inputs,
+    then the Hub. Raises ``InputNotFound`` (what was searched + the fix) instead of returning a path that does not exist:
+    the old fallback let the run load the 9B model and then train a FRESH LoRA, i.e. GRPO without the SFT policy."""
+    from dental_agent.utils.inputs import resolve_sft_adapter
 
-    # Standard candidate directories
-    candidate_paths = sft_reference_candidates(track, sft_stage, precision)
+    r = resolve_sft_adapter(sft_dir_arg, track, sft_stage, precision, hf_repo)
+    print(f"[SFT-REF] Using SFT reference adapter {r.path} ({r.source})")
+    return str(r.path)
 
-    for cand in candidate_paths:
-        if cand.exists() and any(cand.iterdir()):
-            print(f"[SFT-REF] Resolved local SFT reference model at {cand}")
-            return str(cand)
 
-    # If not found locally, attempt to download from HF Hub
-    if hf_repo:
-        path_in_repo = f"sft/qwen3_5_9b_sft_{track}_{sft_stage}"
-        dest_parent = Path("data/models")
-        print(f"[SFT-REF] Local SFT adapter not found. Fetching reference adapter from {hf_repo}/{path_in_repo}...")
-        try:
-            from huggingface_hub import snapshot_download
-            dest_parent.mkdir(parents=True, exist_ok=True)
-            snapshot_download(
-                repo_id=hf_repo,
-                allow_patterns=[f"{path_in_repo}/*"],
-                local_dir=str(dest_parent),
-            )
-            downloaded = dest_parent / path_in_repo
-            if downloaded.exists() and any(downloaded.iterdir()):
-                print(f"[SFT-REF] Successfully downloaded reference SFT adapter to {downloaded}")
-                return str(downloaded)
-        except Exception as e:
-            print(f"[SFT-REF WARNING] Could not download SFT reference from {hf_repo}: {e}")
+def resolve_grpo_inputs(args: argparse.Namespace, data_dir: str) -> str:
+    """Find every file this GRPO command needs BEFORE the model is loaded; returns the SFT adapter folder.
 
-    default_fallback = f"data/models/qwen3_5_9b_sft_{track}_{sft_stage}"
-    print(f"[SFT-REF WARNING] Reference model directory not found locally or remotely: {default_fallback}")
-    return default_fallback
+    Paths only, no setting changes. Stops with ``[INPUT NOT FOUND]`` naming what was searched and the fix."""
+    from dental_agent.utils import inputs as inp
+
+    try:
+        sft_dir = resolve_sft_reference(args.sft_model_dir, args.track, args.sft_stage, args.hf_repo, args.precision)
+        inp.assert_adapter_loadable(sft_dir)
+        inp.resolve_base_model(args.model_id)
+        if args.track == "with_tools":
+            yolo = inp.resolve_yolo_checkpoint(repo=args.hf_repo)
+            os.environ["GROUNDING_MODEL_PATH"] = str(Path(yolo.path).resolve())  # a path, so locate_tooth finds it from any cwd
+            print(f"[INPUTS] YOLO grounding checkpoint {yolo.path} ({yolo.source})")
+        dev = inp.resolve_dev_split(args.dev_split, data_dir)
+        if dev is not None:
+            args.dev_split = str(dev)
+    except inp.InputNotFound as e:
+        raise SystemExit(f"[INPUT NOT FOUND] {e}") from e
+    return sft_dir
+
+
+def ensure_pool_images(images_df, dataset: str, data_dir: str):
+    """Give every training row a file (search, then fetch missing images from the Hub in one call per dataset). Rows without
+    a file used to be dropped from the pool silently; now any that stay missing stop the run before the model loads."""
+    from dental_agent.utils import inputs as inp
+
+    images_df, chk = inp.ensure_dataset_images(images_df, dataset, data_dir, split="train")
+    if chk.fetched:
+        print(f"[INPUTS] {chk.fetched} images fetched from the Hub.")
+    if chk.n_missing:
+        raise SystemExit("[INPUT NOT FOUND] " + str(inp.InputNotFound(
+            f"Training images ({chk.describe()})", [f"data roots under {data_dir}", "attached Kaggle inputs", "local Hugging Face cache",
+                                                    f"Hub dataset {inp.images_repo(dataset)}"],
+            "python scripts/fetch_hf_assets.py --images   (HF_TOKEN set), or attach the Kaggle image dataset")))
+    return images_df
 
 
 def main() -> None:
@@ -359,14 +364,9 @@ def run_worker(index: int, args: argparse.Namespace):
         from dental_agent.training.xla_patches import install_xla_solve_triangular_shim
         install_xla_solve_triangular_shim()
 
-    # Auto-resolve SFT reference directory per track and sft-stage
-    resolved_sft_dir = resolve_sft_reference(
-        sft_dir_arg=args.sft_model_dir,
-        track=args.track,
-        sft_stage=args.sft_stage,
-        hf_repo=args.hf_repo,
-        precision=args.precision,
-    )
+    # Every input is found (or fetched) before the 9B model is touched: SFT adapter (incl. the _<precision> folder, Kaggle
+    # inputs, Hub), base model, YOLO checkpoint, dev split. A missing one stops here, never as a fresh-LoRA run.
+    resolved_sft_dir = resolve_grpo_inputs(args, cfg.data_dir)
 
     # Checkpoint directory naming: qwen3_5_9b_grpo_{track}_k{group_size}_{sft_stage}
     target_name = f"qwen3_5_9b_grpo_{args.track}_k{args.group_size}_{args.sft_stage}"
@@ -392,6 +392,7 @@ def run_worker(index: int, args: argparse.Namespace):
     else:
         # TRAIN images only. The default split of load_dentex_dataset is the official validation set = the test set.
         images_df, annots_df, categories_df = load_dentex_dataset(cfg.data_dir, split_name="train")
+    images_df = ensure_pool_images(images_df, dataset_name, cfg.data_dir)
     images_df = select_training_pool(
         images_df,
         annots_df,

@@ -144,6 +144,9 @@ def save_manifest(
     canonical_resize: bool = False,
     vision_tokens_by_file_and_id: Dict[str, int] | None = None,
     slot_budget: Dict[str, int] | None = None,
+    fingerprint: Dict[str, Any] | None = None,
+    complete: bool = False,
+    estimated: List[str] | None = None,
 ) -> Dict[str, Any]:
     if not all_lengths:
         return {}
@@ -221,6 +224,12 @@ def save_manifest(
             "compliance": compliance,
             "file_stats": file_stats,
             **tpu_report,
+            # What these numbers were measured on (dataset code + canonical sizes + prompts, and each trace file's hash).
+            # scripts/train_sft.py --preflight and the SFT run compare it with the current code/traces: a mismatch = stale.
+            "fingerprint": fingerprint,
+            "complete": bool(complete),
+            # Entries that could not be encoded and are text+image ESTIMATES, not measurements (never silently mixed in).
+            "estimated_traces": list(estimated or []),
         },
         "canonical_resize": bool(canonical_resize),
         "lengths_by_image_id": lengths_by_image_id,
@@ -266,6 +275,17 @@ def main():
     for tf in target_files:
         print(f"    - {tf.name} ({tf.stat().st_size / 1024 / 1024:.2f} MB)", flush=True)
     print("=" * 80, flush=True)
+
+    # Every trace image must resolve (working-directory independent, Kaggle inputs, HF cache, Hub) BEFORE measuring: a
+    # missing image used to become a gray 512x512 stand-in and wrong token counts.
+    from dental_agent.utils import inputs as inp
+    try:
+        img_check = inp.ensure_trace_images(target_files, args.data_dir)
+    except inp.InputNotFound as e:
+        raise SystemExit(f"[INPUT NOT FOUND] {e}") from e
+    print(f"[IMAGES] All {img_check.n_unique} trace images resolve" + (f" ({img_check.fetched} fetched from the Hub)." if img_check.fetched else "."), flush=True)
+    fp = inp.manifest_fingerprint(target_files, args.canonical_resize)
+    estimated: List[str] = []
 
     print(f"\n[PROCESSOR] Loading processor for model '{args.model_id}'...", flush=True)
     processor = None
@@ -328,6 +348,10 @@ def main():
                 vision_by_key = dict(existing_manifest.get("vision_tokens_by_file_and_id", {}))
                 if lengths_by_file_and_id and not vision_by_key:
                     raise ValueError("existing manifest has no vision-token counts; recomputing")
+                stale = inp.manifest_staleness(existing_manifest, target_files, args.canonical_resize, require_complete=False)
+                if stale:
+                    print(f"[RESUME] Ignoring the existing manifest (stale: {'; '.join(stale)}); measuring from scratch.", flush=True)
+                    raise ValueError("existing manifest is stale")
                 print(f"[RESUME] Loaded {len(lengths_by_file_and_id)} pre-computed traces from {out_path}", flush=True)
         except Exception:
             lengths_by_image_id, lengths_by_file_and_id, vision_by_key = {}, {}, {}
@@ -428,6 +452,7 @@ def main():
                         text_content += c
                 t_tokens = len(processor.tokenizer.encode(text_content, add_special_tokens=False))
                 exact_tokens = t_tokens + max(img_cnt, 1) * 1772
+                estimated.append(qualified_key)
 
             lengths_by_image_id[image_key] = exact_tokens
             lengths_by_file_and_id[qualified_key] = exact_tokens
@@ -436,16 +461,20 @@ def main():
 
             if (s_idx + 1) % 50 == 0 or (s_idx + 1) == n_samples:
                 print(f"  Processed {s_idx + 1}/{n_samples} traces (sample {rec_id} = {exact_tokens} tokens)...", flush=True)
-                save_manifest(out_path, args.model_id, list(lengths_by_file_and_id.values()), lengths_by_image_id, lengths_by_file_and_id, args.canonical_resize, vision_by_key, slot_budget)
+                save_manifest(out_path, args.model_id, list(lengths_by_file_and_id.values()), lengths_by_image_id, lengths_by_file_and_id, args.canonical_resize, vision_by_key, slot_budget, fp, False, estimated)
 
         # Checkpoint save after completing each trace file
-        save_manifest(out_path, args.model_id, list(lengths_by_file_and_id.values()), lengths_by_image_id, lengths_by_file_and_id, args.canonical_resize, vision_by_key, slot_budget)
+        save_manifest(out_path, args.model_id, list(lengths_by_file_and_id.values()), lengths_by_image_id, lengths_by_file_and_id, args.canonical_resize, vision_by_key, slot_budget, fp, False, estimated)
         print(f"  [CHECKPOINT] Manifest updated at {out_path} ({len(lengths_by_file_and_id)} traces total).", flush=True)
 
-    res = save_manifest(out_path, args.model_id, list(lengths_by_file_and_id.values()), lengths_by_image_id, lengths_by_file_and_id, args.canonical_resize, vision_by_key, slot_budget)
+    res = save_manifest(out_path, args.model_id, list(lengths_by_file_and_id.values()), lengths_by_image_id, lengths_by_file_and_id, args.canonical_resize, vision_by_key, slot_budget, fp, True, estimated)
     stats = res.get("stats", {})
     compliance = res.get("compliance", {})
 
+    if estimated:
+        print(f"\n[WARNING] {len(estimated)} trace(s) could NOT be encoded and carry an ESTIMATE (text + 1772 per image), not a "
+              f"measurement, e.g. {estimated[:3]}. They are listed in _meta.estimated_traces and the manifest is reported stale "
+              "until they are fixed; re-run with --strict to stop at the first one.", flush=True)
     print("\n" + "=" * 80)
     print("EXACT TOKEN LENGTH EXTRACTION COMPLETE")
     print("=" * 80)

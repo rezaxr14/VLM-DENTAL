@@ -1,5 +1,7 @@
 # Stage 1: Supervised Fine-Tuning (SFT) Configuration & Architecture Reference
 
+> **Counts in this file predate the patch-0028 trace regeneration and may be stale.** Current counts are generated from the real trace files by `python scripts/dataset_statistics.py --dev-split data/splits/dentex_dev.json` into `docs/DATASET_STATISTICS.md`. Do not cite numbers from here without re-running it.
+
 This document serves as the master technical specification for Stage 1 Supervised Fine-Tuning (SFT) of **VLM-DENTAL** (`Qwen/Qwen3.5-9B`). It outlines model architectures, hardware invariants (specifically **Google Cloud TPU v5e-8** and multi-GPU clusters), sequence length bucketing, track segregation, conversational loss masking, curriculum stages with negative control calibration, multimodal vision projector LoRA, and checkpoint synchronization.
 
 ---
