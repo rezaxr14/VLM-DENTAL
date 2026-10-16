@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="500" viewBox="0 0 960 500">
+  <rect x="0" y="0" width="960" height="500" fill="#ffffff"/>
+  <text x="480" y="26" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="bold" fill="#222222" text-anchor="middle">VLM-DENTAL: synthetic trace synthesis and two-stage training pipeline</text>
+
+  <!-- ================= Row 1: trace synthesis ================= -->
+  <!-- A: data -->
+  <rect x="18" y="70" width="152" height="86" rx="8" fill="#F0F4FA" stroke="#4C72B0" stroke-width="1.5"/>
+  <text x="94" y="92" font-family="Helvetica, Arial, sans-serif" font-size="12" font-weight="bold" fill="#222222" text-anchor="middle">Public datasets</text>
+  <text x="94" y="110" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#444444" text-anchor="middle">DENTEX + Tufts</text>
+  <text x="94" y="125" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#444444" text-anchor="middle">panoramic radiographs</text>
+  <text x="94" y="140" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#444444" text-anchor="middle">+ expert labels (FDI)</text>
+
+  <line x1="170" y1="113" x2="206" y2="113" stroke="#666666" stroke-width="1.5"/>
+  <polygon points="206,108 216,113 206,118" fill="#666666"/>
+
+  <!-- B: teacher + loop -->
+  <rect x="218" y="48" width="286" height="130" rx="8" fill="#FBF6F0" stroke="#DD8452" stroke-width="1.5"/>
+  <text x="361" y="70" font-family="Helvetica, Arial, sans-serif" font-size="12" font-weight="bold" fill="#222222" text-anchor="middle">Trace generation: LangGraph agent loop</text>
+  <text x="361" y="88" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#444444" text-anchor="middle">frontier teacher (Gemini 3.5 Flash Lite / MiniMax M3,</text>
+  <text x="361" y="102" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#444444" text-anchor="middle">provider pool) - ground-truth-directed</text>
+  <text x="361" y="120" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#444444" text-anchor="middle">reasoning turns <-> real tool execution:</text>
+  <text x="361" y="134" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#444444" text-anchor="middle">zoom_crop, window_level, denoise, enhance_contrast,</text>
+  <text x="361" y="148" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#444444" text-anchor="middle">contralateral_compare, locate_tooth, fdi_label, nudge_crop</text>
+  <!-- perturbation hook (highlighted) -->
+  <rect x="238" y="154" width="246" height="18" rx="4" fill="#FDEBE6" stroke="#C44E52" stroke-width="1.2"/>
+  <text x="361" y="167" font-family="Helvetica, Arial, sans-serif" font-size="10" font-weight="bold" fill="#C44E52" text-anchor="middle">tiered perturbation of the box shown to the teacher</text>
+
+  <line x1="504" y1="113" x2="540" y2="113" stroke="#666666" stroke-width="1.5"/>
+  <polygon points="540,108 550,113 540,118" fill="#666666"/>
+
+  <!-- C: verifier -->
+  <rect x="552" y="70" width="170" height="86" rx="8" fill="#F2F8F2" stroke="#55A868" stroke-width="1.5"/>
+  <text x="637" y="92" font-family="Helvetica, Arial, sans-serif" font-size="12" font-weight="bold" fill="#222222" text-anchor="middle">Verification</text>
+  <text x="637" y="110" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#444444" text-anchor="middle">cross-family LLM verifier</text>
+  <text x="637" y="125" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#444444" text-anchor="middle">against expert labels;</text>
+  <text x="637" y="140" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#444444" text-anchor="middle">nudge-aware repair pass</text>
+
+  <line x1="722" y1="113" x2="758" y2="113" stroke="#666666" stroke-width="1.5"/>
+  <polygon points="758,108 768,113 758,118" fill="#666666"/>
+
+  <!-- D: traces -->
+  <rect x="770" y="70" width="172" height="86" rx="8" fill="#F0F4FA" stroke="#4C72B0" stroke-width="1.5"/>
+  <text x="856" y="92" font-family="Helvetica, Arial, sans-serif" font-size="12" font-weight="bold" fill="#222222" text-anchor="middle">Verified corpus</text>
+  <text x="856" y="110" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#444444" text-anchor="middle">3,694 traces, 10 cohorts</text>
+  <text x="856" y="125" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#444444" text-anchor="middle">880 with-tools + 880 no-tools</text>
+  <text x="856" y="140" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#444444" text-anchor="middle">(1:1 parity, 0 directive leaks)</text>
+
+  <!-- elbow: traces -> SFT -->
+  <line x1="856" y1="156" x2="856" y2="196" stroke="#666666" stroke-width="1.5"/>
+  <line x1="856" y1="196" x2="242" y2="196" stroke="#666666" stroke-width="1.5"/>
+  <line x1="242" y1="196" x2="242" y2="286" stroke="#666666" stroke-width="1.5"/>
+  <polygon points="237,286 242,296 247,286" fill="#666666"/>
+
+  <!-- ================= Row 2: training ================= -->
+  <!-- E: SFT -->
+  <rect x="140" y="298" width="204" height="76" rx="8" fill="#F0F4FA" stroke="#4C72B0" stroke-width="1.5"/>
+  <text x="242" y="320" font-family="Helvetica, Arial, sans-serif" font-size="12" font-weight="bold" fill="#222222" text-anchor="middle">Stage 1 - SFT</text>
+  <text x="242" y="338" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#444444" text-anchor="middle">QLoRA on Qwen3.5-9B</text>
+  <text x="242" y="353" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#444444" text-anchor="middle">multi-turn traces with real crops</text>
+
+  <line x1="344" y1="336" x2="380" y2="336" stroke="#666666" stroke-width="1.5"/>
+  <polygon points="380,331 390,336 380,341" fill="#666666"/>
+
+  <!-- F: GRPO -->
+  <rect x="392" y="290" width="256" height="92" rx="8" fill="#FBF6F0" stroke="#DD8452" stroke-width="1.5"/>
+  <text x="520" y="312" font-family="Helvetica, Arial, sans-serif" font-size="12" font-weight="bold" fill="#222222" text-anchor="middle">Stage 2 - GRPO</text>
+  <text x="520" y="330" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#444444" text-anchor="middle">composite, ground-truth-anchored reward:</text>
+  <text x="520" y="345" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#444444" text-anchor="middle">multi-finding F1 accuracy - format - tool validity</text>
+  <text x="520" y="360" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#444444" text-anchor="middle">- complexity-scaled efficiency</text>
+  <text x="520" y="375" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#C44E52" text-anchor="middle">locate_tooth and nudge_crop exempt from call cost</text>
+
+  <line x1="648" y1="336" x2="684" y2="336" stroke="#666666" stroke-width="1.5"/>
+  <polygon points="684,331 694,336 684,341" fill="#666666"/>
+
+  <!-- G: policy -->
+  <rect x="696" y="298" width="120" height="76" rx="8" fill="#F2F8F2" stroke="#55A868" stroke-width="1.5"/>
+  <text x="756" y="320" font-family="Helvetica, Arial, sans-serif" font-size="12" font-weight="bold" fill="#222222" text-anchor="middle">Policy</text>
+  <text x="756" y="338" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#444444" text-anchor="middle">self-correcting</text>
+  <text x="756" y="353" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#444444" text-anchor="middle">tool-use agent</text>
+
+  <line x1="816" y1="336" x2="852" y2="336" stroke="#666666" stroke-width="1.5"/>
+  <polygon points="852,331 862,336 852,341" fill="#666666"/>
+
+  <!-- H: eval -->
+  <rect x="864" y="298" width="78" height="76" rx="8" fill="#F0F4FA" stroke="#4C72B0" stroke-width="1.5"/>
+  <text x="903" y="320" font-family="Helvetica, Arial, sans-serif" font-size="12" font-weight="bold" fill="#222222" text-anchor="middle">Eval</text>
+  <text x="903" y="338" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#444444" text-anchor="middle">DENTEX-native</text>
+  <text x="903" y="351" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#444444" text-anchor="middle">metrics,</text>
+  <text x="903" y="364" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#444444" text-anchor="middle">ablations</text>
+
+  <!-- legend note -->
+  <text x="480" y="424" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#666666" text-anchor="middle">Both training and evaluation run the same agent loop and the same image-input geometry (native, or</text>
+  <text x="480" y="439" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#666666" text-anchor="middle">canonical views when training on TPU); tool calls execute for real against the source image at every stage.</text>
+  <text x="480" y="448" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#666666" text-anchor="middle">During trace generation only, locate_tooth returns the expert-verified box for annotated teeth, and the perturbation hook independently perturbs what the teacher is shown.</text>
+</svg>

@@ -59,6 +59,8 @@ data/models/grounding_tool_heavy/
 data/models/_hf_staging/
 data/models/_hf_download_temp/
 data/models/vllm_cache/
+# Local copy of the base model (about 19 GB), see dental_agent.utils.inputs.resolve_qwen_model
+data/models/Qwen3.5-9B/
 
 # Synthetic Chain-of-Thought Traces (Completed traces hosted on Hugging Face: Reza-Nadimi/vlm-dental-traces)
 data/traces/*.jsonl

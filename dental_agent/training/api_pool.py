@@ -203,8 +203,14 @@ class APISessionPool:
         from dental_agent.model.backbone import load_model
         from dental_agent.config import ModelConfig
 
+        from dental_agent.utils.inputs import local_model_alias
+
         load_4bit = os.environ.get("TRANSFORMERS_LOAD_IN_4BIT", "false").lower() == "true"
-        cfg = ModelConfig(name=model_name, load_in_4bit=load_4bit)
+        # QWEN35_9B_LOCAL_DIR: "Qwen/Qwen3.5-9B" loads from that folder; the model name (outputs, records) stays the Hub id.
+        load_name = local_model_alias(model_name)
+        if load_name != model_name:
+            print(f"[MODEL] {model_name}: weights from local folder {load_name} (QWEN35_9B_LOCAL_DIR), no download.", flush=True)
+        cfg = ModelConfig(name=load_name, load_in_4bit=load_4bit)
 
         print(f"Loading native Transformers model '{model_name}' (device_map='auto', 4bit={load_4bit})...", flush=True)
         model, processor = load_model(cfg, device_map="auto")

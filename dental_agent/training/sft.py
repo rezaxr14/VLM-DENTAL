@@ -37,6 +37,7 @@ from dental_agent.utils.canonical import (
     grid_thw as canonical_grid_thw,
     patches_per_image,
     tokens_per_image,
+    letterbox_enabled,
     to_canonical,
 )
 from dental_agent.model.checkpoints import save_checkpoint
@@ -594,6 +595,7 @@ class DentalSFTDataset(Dataset):
         self._crop_cache: collections.OrderedDict[str, Image.Image] = collections.OrderedDict()
         self._view_cache_max_items = int(view_cache_max_items)
         self.unresolved_tool_images = 0
+        self.tool_image_fallbacks = 0
 
         # Resolve pre-computed token lengths manifest for instant O(1) filtering on Kaggle/Colab
         token_map: dict[str, int] = {}
@@ -614,19 +616,23 @@ class DentalSFTDataset(Dataset):
                     with open(mc, "r", encoding="utf-8") as mf:
                         m_data = json.load(mf)
                         manifest_canonical = bool(m_data.get("canonical_resize", False))
+                        manifest_letterbox = bool(m_data.get("canonical_letterbox", True))   # missing = measured with black bars
                         token_map = m_data.get("lengths_by_file_and_id", {})
                         vision_map = m_data.get("vision_tokens_by_file_and_id", {})
                         id_map = m_data.get("lengths_by_image_id", {})
                         if not token_map:
                             token_map = m_data.get("lengths_by_image_id", {})
-                    if token_map and manifest_canonical != self.canonical_resize:
+                    letterbox_differs = self.canonical_resize and manifest_letterbox != letterbox_enabled()
+                    if token_map and (manifest_canonical != self.canonical_resize or letterbox_differs):
                         import warnings
                         warnings.warn(
                             f"Ignoring token-length manifest {mc}: it was computed with "
-                            f"canonical_resize={manifest_canonical} but this dataset uses "
-                            f"canonical_resize={self.canonical_resize}. Its lengths would filter the wrong traces. "
+                            f"canonical_resize={manifest_canonical} canonical_letterbox={manifest_letterbox} but this dataset uses "
+                            f"canonical_resize={self.canonical_resize} canonical_letterbox={letterbox_enabled()}. "
+                            "Its lengths would filter the wrong traces. "
                             "Regenerate with scripts/compute_exact_trace_lengths.py "
-                            f"{'--canonical-resize' if self.canonical_resize else ''}".strip(),
+                            f"{'--canonical-resize' if self.canonical_resize else ''}"
+                            f"{'' if letterbox_enabled() else ' --no-canonical-letterbox'}".strip(),
                             UserWarning,
                             stacklevel=2,
                         )
@@ -924,6 +930,18 @@ class DentalSFTDataset(Dataset):
                                         pass
 
                             if tool_img is None:
+                                # The recorded tool could not be re-executed: a default zoom_crop is shown instead. Count it so
+                                # a run that trains on substituted images says so (it used to be invisible).
+                                self.tool_image_fallbacks += 1
+                                if self.tool_image_fallbacks <= 5 or self.tool_image_fallbacks % 100 == 0:
+                                    import warnings
+                                    warnings.warn(
+                                        f"[TOOL IMAGE] '{matched_tool_name}' (image_id={image_id_str}) could not be re-executed with "
+                                        f"args {tool_args!r}; a default zoom_crop is rendered instead. total fallbacks so far: "
+                                        f"{self.tool_image_fallbacks}",
+                                        UserWarning,
+                                        stacklevel=2,
+                                    )
                                 produced_by = "zoom_crop"
                                 try:
                                     fallback_box = tool_args.get("bbox") if isinstance(tool_args, dict) and "bbox" in tool_args else [100.0, 100.0, 200.0, 200.0]
@@ -991,6 +1009,73 @@ def unwrap_peft_model(model: Any) -> Any:
     while hasattr(cur, "module"):
         cur = cur.module
     return cur
+
+
+def load_sft_adapter_state(model: Any, folder: str | Path) -> int:
+    """Load the LoRA weights saved by ``save_pretrained`` in ``folder`` into the (PEFT) ``model``; returns the tensor count.
+
+    ``--resume-hf`` used to restore only the optimizer, the scheduler and the step counter, so a resumed run trained a fresh
+    (B = 0) LoRA under an advanced learning-rate schedule. Raises when the folder holds no adapter or the keys do not match.
+    """
+    from peft.utils import set_peft_model_state_dict
+
+    folder = Path(folder)
+    st = folder / "adapter_model.safetensors"
+    if st.is_file():
+        from safetensors.torch import load_file
+        state = load_file(str(st))
+    elif (folder / "adapter_model.bin").is_file():
+        state = torch.load(folder / "adapter_model.bin", map_location="cpu")
+    else:
+        raise FileNotFoundError(f"no adapter_model.safetensors / adapter_model.bin in {folder}")
+    result = set_peft_model_state_dict(unwrap_peft_model(model), state)
+    unexpected = list(getattr(result, "unexpected_keys", []) or [])
+    if unexpected:
+        raise RuntimeError(f"{len(unexpected)} tensors of {folder} do not belong to this model (e.g. {unexpected[:2]}); "
+                           "the checkpoint was trained with different LoRA targets (--lora-linear-attn / --lora-target-vision / rank).")
+    return len(state)
+
+
+def fast_forward_scheduler(scheduler: Any, steps: int) -> None:
+    """Advance a freshly built LR scheduler to ``steps`` optimizer steps (the schedule is a pure function of the step)."""
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # "scheduler.step() before optimizer.step()" is expected here
+        for _ in range(max(int(steps), 0)):
+            scheduler.step()
+
+
+def restore_sft_checkpoint(folder: str | Path, model: Any, optimizer: Any, scheduler: Any) -> dict[str, Any] | None:
+    """Continue an SFT run from the checkpoint files in ``folder``; ``None`` when it holds no ``training_state.json``.
+
+    Restores (1) the LoRA weights, (2) the optimizer moments, (3) the LR schedule position, and returns
+    ``{"step", "epoch", "best_val_loss", "mid_epoch", "tensors"}``. A checkpoint written in the middle of an epoch (step push or
+    SIGTERM) restarts that epoch from its first batch, so the step counter and the schedule go back to where the epoch began
+    (``epoch_start_step``); otherwise the repeated batches would push the schedule past its end. Checkpoints written before
+    patch 0035 have no ``epoch_start_step``; they keep the saved step (the old behaviour).
+    """
+    folder = Path(folder)
+    state_file = folder / "training_state.json"
+    if not state_file.is_file():
+        return None
+    saved = json.loads(state_file.read_text(encoding="utf-8"))
+    tensors = load_sft_adapter_state(model, folder)  # raises: never continue with a fresh LoRA under a resumed schedule
+    step = int(saved.get("step", 0))
+    mid_epoch = bool(saved.get("mid_epoch", False))
+    if mid_epoch and "epoch_start_step" in saved:
+        step = int(saved["epoch_start_step"])
+    opt_path = folder / "optimizer.pt"
+    if opt_path.is_file():
+        optimizer.load_state_dict(torch.load(opt_path, map_location="cpu"))
+    fast_forward_scheduler(scheduler, step)
+    return {
+        "step": step,
+        "epoch": int(saved.get("epoch", 1)),
+        "best_val_loss": float(saved.get("best_val_loss", float("inf"))),
+        "mid_epoch": mid_epoch,
+        "tensors": tensors,
+    }
 
 
 def wrap_distributed_model(
@@ -1158,10 +1243,14 @@ def wrap_spmd_model(
         from torch_xla.experimental.spmd_fully_sharded_data_parallel import (
             SpmdFullyShardedDataParallel as FSDPv2,
         )
-    except ImportError:
-        if is_master:
-            print("[SPMD NOTICE] SpmdFullyShardedDataParallel not available; returning model.")
-        return model
+    except ImportError as e:
+        # Returning the bare model here used to let the run continue with every parameter on one core (18 GB > 16 GB HBM)
+        # or still on the CPU, and fail much later with an unrelated error. --spmd --fsdp was asked for, so stop now.
+        raise RuntimeError(
+            "--spmd --fsdp needs torch_xla.experimental.spmd_fully_sharded_data_parallel.SpmdFullyShardedDataParallel, which "
+            f"this torch_xla does not provide ({e}). Install a torch_xla release that includes FSDPv2, or run the legacy path "
+            "with --no-spmd (one full weight copy per process)."
+        ) from e
 
     # Under SPMD, the model stays in its native compute precision (bfloat16, ~18 GB),
     # avoiding the 36 GB float32 allocation required by legacy FSDPv1.

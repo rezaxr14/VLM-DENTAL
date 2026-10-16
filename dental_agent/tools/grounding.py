@@ -44,8 +44,9 @@ class ToothGrounder:
             print(f"Grounding model not found at {self.model_path}. Auto-downloading from Hugging Face...")
             try:
                 from huggingface_hub import hf_hub_download
-                repo_id = os.environ.get("HF_ARTIFACT_REPO", "Reza-Nadimi/vlm-dental-models")
-                remote_filename = "yolo_cv/yolo_cv_best/weights/best.pt"
+                from dental_agent.utils.inputs import YOLO_HUB_FILE, models_repo
+                repo_id = models_repo()          # HF_ARTIFACT_REPO or the default models repo (one definition, shared with the run scripts)
+                remote_filename = YOLO_HUB_FILE
                 token = os.environ.get("HF_TOKEN")
                 downloaded_path = hf_hub_download(
                     repo_id=repo_id,

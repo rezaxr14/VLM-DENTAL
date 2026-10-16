@@ -1,0 +1,130 @@
+% ---------------------------------------------------------------------------
+\appendix
+
+\section{Perturbation configuration}
+\label{app:perturbation}
+
+The exact configuration used for trace generation is given in \cref{tab:perturbconfig}.
+
+\begin{table}[h]
+  \centering
+  \small
+  \caption{Exact tiered-perturbation configuration used for trace generation. Offsets are drawn
+  uniformly per axis with a random sign and applied with \texttt{nudge\_crop}'s own
+  shift-and-clamp math, so every shown box is one the correction tool could produce or fix. The
+  unperturbed box is logged internally per call (\texttt{true\_bbox}, \texttt{perturb\_tier}) and
+  never shown to the model.}
+  \label{tab:perturbconfig}
+  \begin{tabular}{lrll}
+    \toprule
+    Tier & Probability & Offset magnitude (per axis, box-relative) & Intent \\
+    \midrule
+    none & 0.45 & 0 & Clean accept-and-proceed demonstration \\
+    small & 0.25 & $\mathrm{U}(0.12, 0.28)$, random sign & Genuine judgment call; not resolved by the prompt \\
+    big & 0.30 & $\mathrm{U}(0.45, 0.75)$, random sign & Visually self-evident without any verbal cue \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Rates are fixed constants, deliberately decoupled from the grounding detector's measured
+accuracy so that improving the detector never invalidates existing demonstrations
+(\cref{sec:perturbation}).
+
+\section{Mechanism analysis: full split by reference type}
+\label{app:mechanism}
+
+\cref{tab:mechanismsplit} reports the correction-behavior analysis split by reference type;
+\cref{sec:mechanism} discusses the ground-truth-anchored rows in the main text.
+
+\begin{table}[h]
+  \centering
+  \small
+  \caption{Corrective-nudge behavior split by reference type, regenerated from the released
+  corpus. \emph{GT-anchored}: the locate call was ground-truth-grounded (annotated tooth;
+  pathology cohorts) and the reference box is the expert box. \emph{Detector-anchored}:
+  exploratory calls (dominated by healthy-scan full-arch surveys), where the reference is the
+  detector's own box. During rapid surveys the teacher corrects far less often per box --- a
+  real behavioral difference we report rather than average away.}
+  \label{tab:mechanismsplit}
+  \begin{tabular}{llrrrr}
+    \toprule
+    Reference & Tier & $n$ & P(nudge) & P(corrective) & IoU before $\to$ after \\
+    \midrule
+    GT & none & 2{,}338 & 19.4\% & 1.1\% & 1.00 $\to$ -- \\
+    GT & small & 1{,}337 & 23.1\% & 13.6\% & 0.46 $\to$ 0.45 \\
+    GT & big & 1{,}493 & 47.2\% & 38.4\% & 0.10 $\to$ 0.24 \\
+    \midrule
+    Detector & small & 1{,}472 & 2.9\% & 1.8\% & 0.37 $\to$ 0.38 \\
+    Detector & big & 1{,}764 & 6.9\% & 5.0\% & 0.09 $\to$ 0.15 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Recovery rates of the shown box (from retained observations or downstream \texttt{bbox}
+arguments) were 0.97--1.00 in every cell; validation of observation-derived boxes against
+reference boxes on the clean tier gave zero mean coordinate error.
+
+\section{Grounding tool validation}
+\label{app:grounding}
+
+\cref{tab:grounding} summarizes the grounding tool's validation.
+
+\begin{table}[h]
+  \centering
+  \small
+  \caption{YOLOv8m grounding tool (32 FDI classes), 5-fold cross-validation on the combined
+  DENTEX+Tufts pool (2{,}339 images, 46{,}808 boxes) and evaluation on the held-out target
+  benchmark (50 images, 182 annotated targets, greedy one-to-one target matching). ``Target
+  mAP50'' restricts evaluation to detections on annotated target teeth.}
+  \label{tab:grounding}
+  \begin{tabular}{lrrrr}
+    \toprule
+    Model & Target mAP50 & Target mAP50-95 & Precision & Recall@0.50 \\
+    \midrule
+    DENTEX-only (5-fold mean) & 0.909 & 0.638 & 0.939 & 0.818 \\
+    DENTEX+Tufts (5-fold mean) & 0.926 & 0.644 & 0.963 & 0.775 \\
+    Best fold (DENTEX+Tufts, fold 1) & \textbf{0.959} & \textbf{0.650} & \textbf{0.986} & 0.797 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The precision/recall profile is the intended operating point for a grounding \emph{tool} inside
+an agent loop: high precision so crops are plausible, non-perfect recall so that correction
+(\cref{sec:nudge}) and re-location remain live skills rather than dead code paths.
+
+\section{Verifier rejection taxonomy}
+\label{app:verifier}
+
+During first-pass verification the independent cross-family verifier rejected 92 of 3{,}694
+traces (97.5\% first-pass pass rate), all subsequently repaired and re-verified to a 100\%
+final yield:
+
+\begin{enumerate}[leftmargin=*,itemsep=1pt,topsep=2pt]
+  \item \textbf{False-positive pathology on healthy scans} --- 66 rejections (71.7\%). The
+  generator hallucinated findings on disease-free scans; repaired to systematic negative surveys
+  committing to \texttt{[]}.
+  \item \textbf{Ground-truth contradictions and FDI errors} --- 15 rejections (16.3\%). Mismatched
+  pathology classes or swapped quadrants; repaired via targeted re-prompting.
+  \item \textbf{Uncorrected spatial drift} --- 11 rejections (12.0\%). The teacher diagnosed from
+  a visibly displaced grounding box without a corrective \texttt{nudge\_crop}; repaired with
+  spatial realignment. This category exists \emph{because} of the perturbation mechanism
+  (\cref{sec:perturbation}) and is direct audit evidence that it creates genuine, checkable
+  judgment pressure.
+\end{enumerate}
+
+In a separate decontamination pass, 105 traces in which the generator echoed its hidden
+ground-truth directive in its reasoning were excised and regenerated under a dual gate (zero-leak
+audit + verifier re-approval); the canonical corpus contains zero directive leaks and exact
+1:1 parity between the with-tools and no-tools cohorts.
+
+\section{Reproducibility}
+\label{app:repro}
+
+Every number in this paper is regenerable from released artifacts:
+corpus statistics, tool-usage counts, and the mechanism analysis via
+\texttt{scripts/paper/generate\_paper\_assets.py} over the released trace files (tables in
+\texttt{paper/generated/}, figures in \texttt{paper/figures/}); all figures have SVG sources.
+The evaluation protocol (\cref{sec:eval}) is implemented in the repository's evaluation
+package; verbatim system prompts are extractable programmatically from the source
+(\texttt{dental\_agent/paper/prompts.py}). Traces are hosted on the Hugging Face Hub;
+model checkpoints and the grounding weights are synced to the same Hub organization.

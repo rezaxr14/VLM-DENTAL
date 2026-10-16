@@ -12,8 +12,8 @@ Every input is found by itself, in this fixed order: **explicit flag, then local
 
 Add `--preflight` to the exact command you are about to run. It loads no model, changes nothing on disk, and prints `[PASS]`, `[INFO]`, `[WARN]` or `[FAIL]` per input, then exits non-zero on any FAIL:
 ```
-python scripts/train_sft.py --track with_tools --stage dentex_alone --precision qlora --canonical-resize --dev-split data/splits/dentex_dev.json --preflight
-python scripts/run_grpo.py --track with_tools --sft-stage dentex_alone --precision qlora --canonical-resize --dev-split data/splits/dentex_dev.json --group-size 4 --preflight
+python scripts/train_sft.py --track with_tools --stage dentex_alone --precision qlora --canonical-resize --no-canonical-letterbox --dev-split data/splits/dentex_dev.json --preflight
+python scripts/run_grpo.py --track with_tools --sft-stage dentex_alone --precision qlora --canonical-resize --no-canonical-letterbox --dev-split data/splits/dentex_dev.json --group-size 4 --preflight
 ```
 The notebooks do this for you (`PREFLIGHT_FIRST = True`): the launch cell re-runs its own command with `--preflight` and stops before anything loads if there is a FAIL. Without `--preflight` the real run performs the same resolution first and stops with `[INPUT NOT FOUND]`, naming everything it searched and the one command that fixes it, before the 9B model is touched.
 
@@ -25,13 +25,57 @@ The notebooks do this for you (`PREFLIGHT_FIRST = True`): the launch cell re-run
 | Token-length manifest | `<data-dir>/traces/trace_token_lengths.json`, repo `data/traces`, `/kaggle/working/data/traces` | `compute_exact_trace_lengths.py ... --recompute` (the doctor prints the full command) |
 | Dev split | `--dev-split`, repo-root copy, `<data-dir>/splits` | `python scripts/make_dev_split.py --data-dir data --n 70 --seed 42` |
 | YOLO checkpoint (`with_tools`) | `GROUNDING_MODEL_PATH`, `data/models/yolo_cv_best/weights/best.pt` and sibling folders, Kaggle, Hub `yolo_cv/yolo_cv_best/weights/best.pt` | `python scripts/fetch_hf_assets.py --models` |
-| Base model | an existing local folder with `config.json` and weights, or a Hub id | pass `--model-id Qwen/Qwen3.5-9B` or the full Kaggle folder |
+| Base model (notebooks) | `resolve_qwen_model()`: `QWEN35_9B_LOCAL_DIR`, attached Kaggle model / Drive copy, `<repo>/data/models/Qwen3.5-9B`, an existing HF cache snapshot, else a resumable download into `data/models/Qwen3.5-9B` | put the 19 GB folder in `data/models/Qwen3.5-9B` or set `QWEN35_9B_LOCAL_DIR` (see "Base model location" below) |
+| Base model (scripts) | the `--model-id` you pass: an existing local folder with `config.json` and weights, or a Hub id | pass the folder the notebook printed as `Qwen3.5-9B source: <source> -> <path>` |
 
 Behaviour changes in patch 0034 you should know about:
 * A wrong explicit `--sft-model-dir` now **fails**. It used to fall back to a different folder, and GRPO could start from a fresh LoRA without saying so.
 * A trace whose image cannot be found now **stops the run** (it used to train on a gray 512x512 square). A DENTEX *train* trace is never resolved to a validation (test) image, even though the ids 1-50 exist in both sets.
 * The token-length manifest carries a fingerprint (code, trace files, canonical flag, whether every trace was measured). A manifest without one, from an interrupted run, with estimated entries, or from older traces or code is stale: it is a **FAIL under `--pad-vision-to-slots`** (the filter would use wrong lengths) and a WARN otherwise.
 * The doctor warns when a `no_tools` run uses `--pad-vision-to-slots` with the default slots: every sample then carries 7,488 vision tokens for 1,152 used.
+
+### Base model location (patch 0035)
+
+One folder, one rule, in every notebook that loads Qwen3.5-9B (SFT, GRPO, ZeroShot, TraceGen's vLLM start): `dental_agent.utils.inputs.resolve_qwen_model()` returns `(path, source)` and prints `Qwen3.5-9B source: <source> -> <path>`. The first **valid** candidate wins; nothing is copied or moved:
+
+| # | Candidate | `source` |
+|---|-----------|----------|
+| 1 | environment variable `QWEN35_9B_LOCAL_DIR` (set but unusable = error, never skipped) | `env` |
+| 2 | attached Kaggle model / dataset, read-only and in place (`KAGGLE_BASE_MODEL_DIRS` plus any Kaggle input folder named like Qwen3.5-9B); on Colab `<persist dir>/models/Qwen3.5-9B` | `kaggle-input`, `colab-drive` |
+| 3 | `<repo root>/data/models/Qwen3.5-9B` (exact casing; found from the repo, not from the working directory; git-ignored) | `repo-data` |
+| 4 | an existing Hugging Face cache snapshot of `Qwen/Qwen3.5-9B` (`HF_HUB_CACHE`, `$HF_HOME/hub`, `~/.cache/huggingface/hub`, `data/models/vllm_cache/hub`) | `hf-cache` |
+| 5 | none found: `snapshot_download("Qwen/Qwen3.5-9B", local_dir=<canonical folder>)`, which resumes a partial copy (Kaggle with a read-only repo: `/kaggle/working/models/Qwen3.5-9B`, with a warning about the 19 GB working-disk limit). With `HF_HUB_OFFLINE=1` or no network: an error that says where to put the model | `downloaded` |
+
+A folder is valid only if `config.json`, a tokenizer file, a processor file and every shard listed in `model.safetensors.index.json` (or `model.safetensors`) exist and are non-empty; a partial folder is skipped (or resumed in step 5). The notebooks then export the chosen folder as `QWEN35_9B_LOCAL_DIR`, so evaluation and the zero-shot provider use the same one. `FORCE_HF_MODEL_DOWNLOAD = True` skips 1-4. The Hub id is never handed to `from_pretrained`, and `HF_HUB_OFFLINE` is never set by a notebook (datasets still come from the Hub).
+
+Name-based logic (checked in ZeroShot / TraceGen): nothing keys off "qwen3.5" in code. Only result file names (`zero_shot_<dataset>_<split>_transformers_Qwen--Qwen3.5-9B.jsonl`, `--reuse-cached` lookup) and the `model` field of records use the name, so the name stays `Qwen/Qwen3.5-9B` and the folder is passed separately: the `transformers` provider loads the folder (`local_model_alias`), the cached-file lookup maps the folder back to the same tag (`model_file_tag`), and TraceGen starts vLLM with `--model <folder> --served-model-name Qwen/Qwen3.5-9B` so generator requests still match.
+
+### Image view on a GPU: nothing added, nothing stretched (patch 0036)
+
+Three views exist; the notebook states which one in `CANONICAL_RESIZE` / `CANONICAL_LETTERBOX`, and SFT, GRPO, the token-length manifest and evaluation must all use the same one.
+
+| Notebook setting | Flags | What the model sees | Use |
+|---|---|---|---|
+| `CANONICAL_RESIZE = True`, `CANONICAL_LETTERBOX = True` | `--canonical-resize --canonical-letterbox` | uniform scale, then centred on a fixed black canvas (FULL 1536x768, CROP 256x384, COMPARE 512x384) | **TPU only** (static vision slots need one fixed shape) |
+| `CANONICAL_RESIZE = True`, `CANONICAL_LETTERBOX = False` | `--canonical-resize --no-canonical-letterbox` | the same uniform scale, **nothing added**; each side rounded to a multiple of 32 | RTX 4090 / A100 / Pro6000, QLoRA or LoRA |
+| `CANONICAL_RESIZE = False` | `--no-canonical-resize` | the full image at its native size | GPU, no canonical size at all |
+
+`CANONICAL_LETTERBOX = IS_TPU` in the notebooks (TPU pads, GPU never does); the script refuses the other combination instead of changing it: `--canonical-resize --canonical-letterbox` on a CUDA GPU stops with the fix, `--pad-vision-to-slots` without letterbox stops, and the GRPO doctor FAILs `canonical-letterbox vs SFT` when the two stages differ (an SFT run from before this patch counts as padded).
+
+Worked example, a 2872 x 1504 panorama, FULL view: scale = min(1536/2872, 768/1504) = 0.5106, giving 1466.5 x 768, rounded to **1472 x 768** (46 x 24 patches = 1104 tokens; the padded canvas is 1536 x 768 = 1152 tokens with 32-pixel-wide black bars left and right). Aspect 1.9096 becomes 1.9167. Token counts now follow the image, so GPU batches are dynamically padded in the text only.
+
+What this cannot remove, stated plainly: the Qwen processor snaps every image to a multiple of 32 pixels and enforces `min_pixels` = 65,536 (256 x 256) and `max_pixels` = 16,777,216. In the no-bars canonical view the rounding is done once by us (at most 16 pixels per side, about 1 % on a FULL view). In native mode the processor does it (same bound). A very small tool crop (below 65,536 pixels, for instance a CROP view of 256 x 224) is scaled up by the processor to reach the minimum, in both modes. The notebooks and scripts do not change `min_pixels`; if you want that limit lowered for crops, it is a separate, explicit setting.
+
+After changing either setting recompute the token-length manifest (the check says so: `measured with canonical_letterbox=...`); a result file written with the other setting is not resumed.
+
+### Behaviour changes in patch 0035
+
+* **Resume restores everything.** `--resume` now reloads the adapter weights, the optimizer and the LR schedule from the checkpoint (before, only the step counter came back and training continued from a fresh LoRA). A checkpoint saved mid-epoch (SIGTERM or `--push-every-steps`) rewinds to the first step of that epoch, so no step is counted twice: epoch 2 began at step 76, the checkpoint says step 120, resume continues at step 76 with the schedule at step 76. A missing or foreign adapter file is `[RESUME FAILED]`, never a silent restart. First check on resume: the first logged loss is close to the last logged loss before the interruption.
+* **SPMD batches are whole.** Both loaders use `drop_last`: a batch dimension not divisible by the core count would be replicated and compiled as a second graph. Worked example, 8 cores, 604 training samples: 75 steps x 8 = 600 used, 4 dropped (a different 4 each epoch); 31 validation samples: 3 x 8 = 24 used. The run prints `[LOADER] ... dropped`.
+* **No silent unsharded model.** `--spmd --fsdp` without FSDPv2 in `torch_xla` now stops with an error (before: the full 18 GB model on every core, then out of memory).
+* **Tool-image fallbacks are counted and warned** (`[TOOL IMAGE]`); a default crop replaced a missing tool image before without a word.
+* **QLoRA quantizes the language model only.** The vision tower (`model.visual`: patch embed, 27 blocks, `merger`) and `lm_head` stay 16-bit; every 4-bit site (SFT, GRPO and its K sweep, evaluation, API pool) builds its config with `dental_agent.model.backbone.qlora_bnb_config`, whose skip list is the single constant `QLORA_SKIP_MODULES` in `dental_agent/config.py`. The projector LoRA targets `model.visual.merger.linear_fc1/2`, now plain Linear layers. `prepare_qlora_model` stops peft from upcasting the vision tower to fp32. NF4, double quantization and the compute dtype are unchanged. **A QLoRA adapter trained before this patch has a projector LoRA fitted on an NF4 merger**; the GRPO doctor warns (`QLoRA vision tower vs SFT`) and the clean fix is to retrain that SFT. bf16 runs and TPU runs are unaffected.
+* `sft_run_meta.json` records `qlora_skip_modules`; the GRPO doctor compares precision and skip list with the SFT run.
 
 ---
 
@@ -49,7 +93,7 @@ huggingface-cli login
 
 **A2. Measure trace lengths with canonical views** (once; reuse afterwards)
 ```
-python scripts/compute_exact_trace_lengths.py --canonical-resize --recompute
+python scripts/compute_exact_trace_lengths.py --canonical-resize --no-canonical-letterbox --recompute
 ```
 
 **A3. See how many traces fit each ceiling, and write the 4 longest traces as a probe set**
@@ -59,13 +103,19 @@ python scripts/select_longest_traces.py --traces data/traces/train_cot_traces_de
 
 **A4. Smoke test** (tiny random model; catches crashes and library-version problems, not memory)
 ```
-python scripts/smoke_test_sft.py --traces data/traces/train_cot_traces_dentex.jsonl -- --canonical-resize --precision qlora
+python scripts/smoke_test_sft.py --traces data/traces/train_cot_traces_dentex.jsonl -- --canonical-resize --no-canonical-letterbox --precision qlora
 ```
 Expect `[SMOKE] PASSED`. Stop and report the traceback if it fails. The same check exists for GRPO and evaluation (4-bit, as on a 24 GB card):
 ```
-python scripts/smoke_test_grpo.py --traces data/traces/train_cot_traces_dentex.jsonl --track with_tools --eval-precision qlora -- --canonical-resize
+python scripts/smoke_test_grpo.py --traces data/traces/train_cot_traces_dentex.jsonl --track with_tools --eval-precision qlora -- --canonical-resize --no-canonical-letterbox
 ```
 Expect `[SMOKE-GRPO] PASSED`.
+
+**A4b. QLoRA load check** (RTX 4090, loads the 9B model in 4-bit, no training, about 1 minute; `--names-only` runs anywhere and loads no weights)
+```
+python scripts/check_qlora_load.py --model-id <folder the notebook printed>
+```
+Expect `[PASS]` for: no 4-bit layer under `model.visual`, every language-model layer 4-bit, `lm_head` 16-bit, all LoRA targets found, projector LoRA on `model.visual.merger.linear_fc1/2`, then `[RESULT] QLoRA quantizes the language model only` and the CUDA memory. Exit code 1 = a check failed, 2 = cannot run here (no CUDA or bitsandbytes).
 
 **A5. Memory probe at 16384** (a few steps on the longest traces; 4090: `--precision qlora`, A100: `--precision bf16`)
 ```
@@ -89,13 +139,13 @@ It draws about 70 of the DENTEX *train* images, keeping the healthy share, and w
 
 **A7. Full SFT** (use the same `--precision` and `--max-seq-len` as A5; other hyperparameters as set in the notebook)
 ```
-python scripts/train_sft.py --track with_tools --stage dentex_alone --canonical-resize --precision qlora --lora-linear-attn --mask-malformed-turns --dev-split data/splits/dentex_dev.json --max-seq-len 16384 --epochs 3 --batch-size 1 --gradient-accumulation-steps 8 --eval-strategy epoch --save-strategy epoch --hf-repo <repo> --push-every-steps 50
+python scripts/train_sft.py --track with_tools --stage dentex_alone --canonical-resize --no-canonical-letterbox --precision qlora --lora-linear-attn --mask-malformed-turns --dev-split data/splits/dentex_dev.json --max-seq-len 16384 --epochs 3 --batch-size 1 --gradient-accumulation-steps 8 --eval-strategy epoch --save-strategy epoch --hf-repo <repo> --push-every-steps 50
 ```
 The adapter is saved to `data/models/qwen3_5_9b_sft_with_tools_dentex_alone_<precision>` (for example `..._qlora`).
 
 **A8. GRPO** (same `--canonical-resize` and `--precision` as SFT). Without `--sft-model-dir` GRPO searches `data/models/qwen3_5_9b_sft_<track>_<stage>_<precision>` for its own `--precision` first, then the unsuffixed folders; the command below names the folder, which is the explicit form:
 ```
-python scripts/run_grpo.py --track with_tools --sft-stage dentex_alone --sft-model-dir data/models/qwen3_5_9b_sft_with_tools_dentex_alone_qlora --dataset dentex --dev-split data/splits/dentex_dev.json --group-size 4 --epochs 2 --lr 5e-6 --kl-beta 0.04 --clip-eps 0.2 --temperature 0.7 --canonical-resize --precision qlora --max-new-tokens 2048 --hf-repo <repo> --push-every-steps 25
+python scripts/run_grpo.py --track with_tools --sft-stage dentex_alone --sft-model-dir data/models/qwen3_5_9b_sft_with_tools_dentex_alone_qlora --dataset dentex --dev-split data/splits/dentex_dev.json --group-size 4 --epochs 2 --lr 5e-6 --kl-beta 0.04 --clip-eps 0.2 --temperature 0.7 --canonical-resize --no-canonical-letterbox --precision qlora --max-new-tokens 2048 --hf-repo <repo> --push-every-steps 25
 ```
 GRPO starts its trainable adapter as a copy of the SFT adapter. To continue a run that was interrupted, repeat the same command with `--resume` (same `--dev-split`, `--seed`, `--max-images`, `--include-healthy` and `--group-size`); on a fresh Kaggle/Colab session add `--resume-hf <repo>` to download the newest step checkpoint first. `--resume-hf` alone is refused, because it only downloads.
 
@@ -110,8 +160,8 @@ GRPO on a GPU has no sequence-length ceiling: rollout length is set by the agent
 
 **A9. Evaluate** (canonical size is the primary result; run it again without `--canonical-resize` for original size)
 ```
-python scripts/evaluate_models.py --condition sft_with_tools --adapter-path data/models/qwen3_5_9b_sft_with_tools_dentex_alone_qlora --dataset dentex --split test --precision qlora --canonical-resize --max-tool-calls 50 --max-new-tokens 2048
-python scripts/evaluate_models.py --condition grpo_with_tools --adapter-path data/models/qwen3_5_9b_grpo_with_tools_k4_dentex_alone/grpo-with_tools-final --dataset dentex --split test --precision qlora --canonical-resize --max-tool-calls 50 --max-new-tokens 2048
+python scripts/evaluate_models.py --condition sft_with_tools --adapter-path data/models/qwen3_5_9b_sft_with_tools_dentex_alone_qlora --dataset dentex --split test --precision qlora --canonical-resize --no-canonical-letterbox --max-tool-calls 50 --max-new-tokens 2048
+python scripts/evaluate_models.py --condition grpo_with_tools --adapter-path data/models/qwen3_5_9b_grpo_with_tools_k4_dentex_alone/grpo-with_tools-final --dataset dentex --split test --precision qlora --canonical-resize --no-canonical-letterbox --max-tool-calls 50 --max-new-tokens 2048
 ```
 Evaluation runs the same agent loop as GRPO rollouts, so keep `--max-new-tokens` equal to the GRPO run's. Canonical results go to `..._canonical.jsonl`.
 **Evaluation matrix (all conditions, both sizes, one command).** Loads each checkpoint once; results and the pooled tables go to `data/evaluations/`:
@@ -218,6 +268,7 @@ The policy update runs at the same static shapes as SFT. Rollout generation does
 - Any crash: run the matching smoke test (A4) on the same machine first; it separates library-version problems from data problems.
 
 **GPU path**
+- `check_qlora_load.py` fails with `(a) ... vision-tower layers are 4-bit`: `QLORA_SKIP_MODULES` no longer matches this transformers version's module names. In transformers 5.x an entry matches from the START of the dotted name, so `model.visual` works and a bare `visual` does not; run `--names-only` and add the printed prefix.
 - Out of memory in the probe (A5): lower the ceiling (A6), confirm `--precision qlora` on a 24 GB card, then lower `--lora-r`. `--no-lora-linear-attn` frees only about 250 MiB; it also removes the Gated-DeltaNet adapters, so use it only to compare.
 - Very slow steps and a log line that `chunk_gated_delta_rule` falls back to a PyTorch implementation: `flash-linear-attention` is not installed (or not importable). Install it from `requirements-gpu.txt`; on Windows use WSL or Linux.
 - `causal-conv1d` fails to build: it is optional, skip it.

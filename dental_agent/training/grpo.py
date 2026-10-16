@@ -907,6 +907,10 @@ def train_grpo(
         raise ValueError("pad_vision_to_slots is TPU-only (static shapes avoid XLA recompilation); GPU/CPU pad dynamically.")
     if pad_vision_to_slots and not canonical_resize:
         raise ValueError("pad_vision_to_slots requires canonical_resize (static slots assume canonical image sizes).")
+    from dental_agent.utils.canonical import check_gpu_image_policy, letterbox_enabled
+    if pad_vision_to_slots and not letterbox_enabled():
+        raise ValueError("pad_vision_to_slots requires canonical_letterbox (static slots assume the fixed canonical canvas).")
+    check_gpu_image_policy(canonical_resize, letterbox_enabled(), cuda=torch.cuda.is_available(), tpu=is_tpu, what="GRPO")
     if use_spmd and is_tpu:
         if not use_fsdp:
             raise ValueError("SPMD shards weights through FSDPv2; use_fsdp=False would replicate 18 GB on every core.")
@@ -930,7 +934,8 @@ def train_grpo(
         print("[GRPO WARNING] SPMD without --pad-vision-to-slots: every distinct trajectory length/image mix compiles "
               "a new XLA graph. Use --canonical-resize --pad-vision-to-slots --max-seq-len N.")
     print(f"[CONFIG] spmd={use_spmd and is_tpu} fsdp={use_fsdp} canonical_resize={canonical_resize} "
-          f"pad_vision_to_slots={pad_vision_to_slots} max_seq_len={max_seq_len} rows_per_forward={rows_per_forward} "
+          + (f"canonical_letterbox={letterbox_enabled()} " if canonical_resize else "")
+          + f"pad_vision_to_slots={pad_vision_to_slots} max_seq_len={max_seq_len} rows_per_forward={rows_per_forward} "
           f"num_cores={num_cores}")
 
     # One optimizer for the whole run: Adam moments must persist across GRPO steps.

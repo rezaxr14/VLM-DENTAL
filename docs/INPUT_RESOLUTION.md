@@ -22,6 +22,7 @@ Code: `dental_agent/utils/inputs.py` (one resolver per input), used by `scripts/
 | Dev split | `resolve_dev_split` | `--dev-split`, repo-root copy, `<data-dir>/splits/` |
 | YOLO checkpoint | `resolve_yolo_checkpoint` | `GROUNDING_MODEL_PATH`, default folders, Kaggle, Hub `yolo_cv/yolo_cv_best/weights/best.pt` (copied to the default path) |
 | Base model | `resolve_base_model` | existing local folder (needs `config.json` and weights), or a Hub id (cache, then Hub check in `--preflight`); a nonexistent path fails |
+| Base model location (notebooks) | `resolve_qwen_model` | `QWEN35_9B_LOCAL_DIR`, Kaggle input / Colab Drive copy, `<repo>/data/models/Qwen3.5-9B`, HF cache snapshot, else a resumable `snapshot_download` into the canonical folder; a folder counts only if `qwen_folder_problems` finds nothing (config, tokenizer, processor, every shard non-empty). Details: `docs/RUNBOOK_SFT_GRPO.md`, "Base model location" |
 
 `--preflight` calls the same functions with `hub="probe"` / `"off"`: it lists, never downloads, never writes.
 

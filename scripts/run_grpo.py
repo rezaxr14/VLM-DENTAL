@@ -38,7 +38,7 @@ from dental_agent.data.dentex import load_dentex_dataset
 from dental_agent.data.dev_split import load_dev_keys, select_training_pool
 from dental_agent.data.tufts import load_tufts_dataset
 from dental_agent.training.grpo import train_grpo
-from dental_agent.utils.canonical import SLOT_BUDGET, parse_slot_budget, slot_totals
+from dental_agent.utils.canonical import SLOT_BUDGET, add_letterbox_arg, check_gpu_image_policy, parse_slot_budget, set_letterbox, slot_totals
 
 
 def upload_checkpoint_to_hf(checkpoint_dir: Path, hf_repo: str, step: int):
@@ -254,6 +254,7 @@ def main() -> None:
              "match the SFT run that produced --sft-stage (train_sft.py --canonical-resize), otherwise the policy is "
              "optimised on a different image distribution than it was fine-tuned on.",
     )
+    add_letterbox_arg(parser)
     parser.add_argument(
         "--max-new-tokens",
         type=int,
@@ -357,6 +358,11 @@ def run_worker(index: int, args: argparse.Namespace):
         raise SystemExit("--pad-vision-to-slots is TPU-only (static shapes avoid XLA recompilation). GPU/CPU runs pad dynamically; remove the flag.")
     if args.pad_vision_to_slots and not args.canonical_resize:
         raise SystemExit("--pad-vision-to-slots requires --canonical-resize.")
+    if args.pad_vision_to_slots and not args.canonical_letterbox:
+        raise SystemExit("--pad-vision-to-slots requires --canonical-letterbox (static slots assume the fixed canonical canvas).")
+    set_letterbox(args.canonical_letterbox)
+    import torch
+    check_gpu_image_policy(args.canonical_resize, args.canonical_letterbox, cuda=torch.cuda.is_available(), tpu=is_tpu, what="GRPO")
     slot_budget = parse_slot_budget(*args.vision_slots)
     if args.pad_vision_to_slots and args.max_seq_len <= slot_totals(slot_budget)["tokens"]:
         raise SystemExit(f"--max-seq-len {args.max_seq_len} cannot hold the static vision tokens of --vision-slots.")

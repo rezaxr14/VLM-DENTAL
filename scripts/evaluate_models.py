@@ -73,7 +73,7 @@ from dental_agent.evaluation.reporting import generate_summary_table, generate_m
 from dental_agent.evaluation.tool_ablation import ToolProbe, spec_from_args
 from dental_agent.utils.serialization import to_jsonable
 from dental_agent.utils.canonical import (
-    family_for_tool, to_canonical,
+    add_letterbox_arg, family_for_tool, set_letterbox, to_canonical,
 )
 from PIL import Image
 
@@ -141,10 +141,9 @@ def load_eval_model(model_id: str, adapter_path: str | None, device, dtype, cond
     if torch.cuda.is_available():
         load_kwargs["device_map"] = "auto"
     if quantize_4bit:
-        from transformers import BitsAndBytesConfig
-        load_kwargs["quantization_config"] = BitsAndBytesConfig(
-            load_in_4bit=True, bnb_4bit_quant_type="nf4", bnb_4bit_use_double_quant=True, bnb_4bit_compute_dtype=dtype,
-        )
+        from dental_agent.model.backbone import qlora_bnb_config
+        # Same NF4 config and skip list (vision tower + lm_head stay 16-bit) the adapter was trained under.
+        load_kwargs["quantization_config"] = qlora_bnb_config(dtype)
 
     print(f"[MODEL] Loading base model: {model_id} (dtype={dtype}, 4-bit={quantize_4bit})...")
     try:
@@ -601,6 +600,7 @@ def eval_settings(args: argparse.Namespace, condition: str, adapter_path: str | 
         "adapter_path": adapter_path or "",
         "precision": args.precision,
         "canonical_resize": bool(args.canonical_resize),
+        **({"canonical_letterbox": False} if args.canonical_resize and not getattr(args, "canonical_letterbox", True) else {}),   # absent = padded (legacy files stay resumable)
         "max_tool_calls": int(args.max_tool_calls),
         "max_turns": args.max_turns,
         "max_new_tokens": int(args.max_new_tokens),
@@ -672,7 +672,8 @@ def evaluate_condition(
 
     # For base_no_tools: check if we can reuse cached zero-shot results
     if condition == "base_no_tools" and args.reuse_cached:
-        model_id = args.model_id.replace("/", "--").replace(":", "-")
+        from dental_agent.utils.inputs import model_file_tag
+        model_id = model_file_tag(args.model_id)     # a local QWEN35_9B_LOCAL_DIR folder maps to the Qwen--Qwen3.5-9B file
         cached_path = output_dir / f"zero_shot_{dataset_name}_{split_name}_transformers_{model_id}.jsonl"
         if cached_path.exists():
             records = load_cached_results(cached_path, limit=args.limit)
@@ -766,6 +767,7 @@ def evaluate_condition(
             "split": args.split,
             "model_id": args.model_id,
             "image_view": "canonical" if args.canonical_resize else "original",
+            "canonical_letterbox": bool(getattr(args, "canonical_letterbox", True)) if args.canonical_resize else None,
             "adapter_path": adapter_path or "",
             "ground_truth": gt_findings,
             "predictions": pred_findings,
@@ -918,15 +920,27 @@ def parse_args() -> argparse.Namespace:
         action=argparse.BooleanOptionalAction,
         default=False,
         help="Show every evaluated condition aspect-preserving canonical views (FULL 1536x768 / CROP 256x384 / "
-             "COMPARE 512x384, letterboxed). Pass exactly what the evaluated checkpoint was trained with.",
+             "COMPARE 512x384, black-bar padded unless --no-canonical-letterbox). Pass exactly what the evaluated checkpoint "
+             "was trained with.",
     )
+    add_letterbox_arg(parser)
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     load_env()
-    print(f"[EVAL] canonical_resize={args.canonical_resize}")
+    set_letterbox(args.canonical_letterbox)
+    print(f"[EVAL] canonical_resize={args.canonical_resize}" + (f" canonical_letterbox={args.canonical_letterbox}" if args.canonical_resize else ""))
+    if args.canonical_resize and args.canonical_letterbox:
+        try:
+            import torch
+            if torch.cuda.is_available():
+                print("[EVAL WARNING] canonical views are black-bar padded on a CUDA GPU. Intended only for a checkpoint that was "
+                      "trained with bars (the TPU recipe); a GPU-trained checkpoint is evaluated with --no-canonical-letterbox "
+                      "or --no-canonical-resize, exactly as it was trained.")
+        except Exception:
+            pass
 
     # Load dataset
     print(f"\n[DATA] Loading {args.dataset.upper()} dataset (split='{args.split}')...")

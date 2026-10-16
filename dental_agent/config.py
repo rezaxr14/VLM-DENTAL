@@ -49,6 +49,16 @@ LORA_FULL_ATTENTION_TARGETS = ["q_proj", "k_proj", "v_proj", "o_proj"]
 LORA_MLP_TARGETS = ["gate_proj", "up_proj", "down_proj"]
 LORA_LINEAR_ATTENTION_TARGETS = ["in_proj_qkv", "in_proj_z", "out_proj"]
 
+# QLoRA (4-bit NF4) quantizes the LANGUAGE MODEL only. Every place that builds a 4-bit model (SFT, GRPO, evaluation, inference)
+# takes this one list through ``dental_agent.model.backbone.qlora_bnb_config`` so a LoRA trained under it is loaded onto the same
+# base. Module names verified on Qwen3_5ForConditionalGeneration (transformers 5.19): the vision tower is ``model.visual``
+# (patch_embed, pos_embed, blocks.N.{attn.qkv, attn.proj, mlp.linear_fc1, mlp.linear_fc2}, merger.{linear_fc1, linear_fc2}).
+# transformers 5.x matches an entry from the START of the dotted name (or as an exact suffix), so a bare "visual" matches
+# nothing there: "model.visual" is the entry that works; "visual" covers releases that name the tower ``visual.*`` and, in older
+# releases that match by substring, is harmless. "lm_head" is listed because transformers drops its own automatic lm_head skip
+# as soon as llm_int8_skip_modules is given (lm_head stays in 16-bit, exactly as before this list existed).
+QLORA_SKIP_MODULES = ("model.visual", "visual", "lm_head")
+
 
 @dataclass
 class LoraConfig:

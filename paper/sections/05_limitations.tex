@@ -1,0 +1,53 @@
+% ---------------------------------------------------------------------------
+\section{Limitations}
+\label{sec:limitations}
+
+\paragraph{No prospective clinician study.}
+Our validity anchor is DENTEX's own dentist-verified ground truth (each image annotated by a
+final-year dental student and verified by an expert dentist with over 15 years of experience)
+plus automated reasoning-grounding checks by a cross-family LLM judge. This validates against
+expert labels, not against a prospective, blinded review by practicing clinicians on new cases.
+We state this plainly and consider a live reader study the natural next step for a team with
+clinical access.
+
+\paragraph{Training results are pending in this draft.}
+The training-side evaluations (SFT, GRPO, ablations on the trained agent) are designed, frozen,
+and implemented, but their runs are not complete at the time of writing; those cells are marked
+as such rather than extrapolated. The completed evidence --- zero-shot baselines, grounding-tool
+validation, and the corpus-level mechanism analysis --- stands independently, but the paper's
+end-to-end claims await those runs.
+
+\paragraph{Synthetic perturbations are not real detector errors.}
+The tiered perturbation draws offsets from fixed configured ranges rather than from the
+grounding model's actual error distribution. This is what makes demonstrations stable as the
+detector improves (\cref{sec:perturbation}), but it means the training distribution of box
+errors is synthetic: uniform random offsets with random signs, not the structured errors (e.g.,
+adjacent-tooth confusions, root-tip truncations) a real detector exhibits. The evaluation-time
+grounding-perturbation probe (\cref{sec:ablations}) measures robustness to a related synthetic
+distribution; robustness to the detector's true error modes is best assessed post hoc by
+swapping in improved detector weights, which our decoupling makes safe for the trace corpus but
+does not substitute for measuring.
+
+\paragraph{Demonstrated vs.\ learned correction.}
+\cref{sec:mechanism} measures the \emph{teacher's} behavior in the demonstrations --- the skill
+the student is trained to acquire --- not the trained policy's behavior at inference. The
+policy-side version of the same analysis is precisely the grounding-perturbation probe, pending
+the trained checkpoint. Demonstrated behavior is a necessary but not sufficient condition for
+learned behavior.
+
+\paragraph{Scale and scope.}
+The corpus is 3{,}694 traces over two institutions and four DENTEX diagnosis classes (plus
+Tufts' four-class taxonomy); it is anchored to precedents showing a few hundred verified
+examples suffice for medical RL fine-tuning \citep{hu2025medvlmr1}, but it is small by
+data-centric standards, and DENTEX's test set is 50 images --- confidence intervals on it are
+wide, and we report them rather than over-reading point estimates. The tool suite covers
+radiologist-like inspection primitives; measurement and calibration tools (lesion sizing,
+periodontal probing analogues) and anomaly detection beyond the four classes are out of scope
+for this paper.
+
+\paragraph{Automated verification is not expert review.}
+The verifier is a frontier model from a different family than the generator, audited against
+expert labels --- and its rejection taxonomy shows it catches real failures --- but automated
+verification has blind spots that human clinical review would not. We mitigate with
+cross-family verification, ground-truth anchoring of every correctness claim, and release of
+the full corpus and audit trail so that the community can re-audit it.

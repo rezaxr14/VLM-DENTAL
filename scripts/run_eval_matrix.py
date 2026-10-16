@@ -29,6 +29,7 @@ if repo_root not in sys.path:
 from scripts import evaluate_models as ev  # noqa: E402
 from dental_agent.evaluation import matrix  # noqa: E402
 from dental_agent.evaluation.tool_ablation import spec_from_args  # noqa: E402
+from dental_agent.utils.canonical import add_letterbox_arg, set_letterbox  # noqa: E402
 
 CHECKPOINTS = ("base", "sft", "grpo")
 
@@ -69,6 +70,7 @@ def parse_args(argv=None) -> argparse.Namespace:
                         "kept, settings must match) or overwrite.")
     p.add_argument("--n-boot", type=int, default=2000, help="Bootstrap resamples for the intervals.")
     p.add_argument("--seed", type=int, default=0, help="Bootstrap seed.")
+    add_letterbox_arg(p)   # applies to the 'canonical' size cells only; 'original' cells show the full image
     return p.parse_args(argv)
 
 
@@ -169,6 +171,7 @@ def write_tables(args: argparse.Namespace) -> Path:
 def main() -> None:
     args = parse_args()
     ev.load_env()
+    set_letterbox(args.canonical_letterbox)
     plan_cells(args)  # fail on a missing adapter before the dataset is touched
     imgs_df, annots_df, cats_df = ev.load_eval_split(args)
     print(f"[DATA] {len(imgs_df)} {args.split} images, {len(annots_df)} annotations.")

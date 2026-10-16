@@ -1,0 +1,86 @@
+% ---------------------------------------------------------------------------
+\section{Introduction}
+\label{sec:intro}
+
+Dental panoramic radiographs (orthopantomograms, OPGs) are the workhorse imaging modality of
+general dentistry, and annotating them --- \emph{which tooth, and what is wrong with it}, in
+standard FDI notation --- is the task that ultimately feeds treatment planning. It is also a task
+on which general-purpose vision-language models (VLMs) visibly fail. Frontier multimodal models
+evaluate at best 36--46\% exact-match accuracy against expert labels on the DENTEX benchmark and
+carry expected calibration errors of up to 0.68, reporting 0.85--0.95 confidence while
+hallucinating tooth positions (\cref{sec:baselines}); a dense 11B generalist collapses below the
+statistical majority-class floor. The failure is not primarily a knowledge gap. An OPG is a
+single very wide image in which an early interproximal carious lesion occupies fewer than
+$15\times15$ native pixels --- reduced to a sub-patch blur by the vision encoder's resolution
+budget --- and in which left/right inversion conventions routinely flip quadrant labels. What the
+task rewards is exactly what a radiologist does and a single-pass VLM cannot: \emph{look again}
+--- zoom into a suspect region, adjust contrast, compare against the contralateral jaw half, and
+verify an anatomical hypothesis before committing to it.
+
+A growing body of work equips VLMs with callable tools to close this gap
+\citep{wu2026vtool,li2024mmedagent,zhang2025octotools}, and two concurrent systems do so for
+dentistry specifically \citep{oralgptplus2026,oralagent2026}. But in all of them the tools the
+model calls are \emph{trusted} operations: a zoom returns a crop, a mirror returns a composite,
+and the model has no way to tell the tool that its output is wrong. This is a structural
+mismatch with the medical setting, where the most informative component the system can call ---
+a learned grounding model that says ``tooth 36 is here'' --- is precisely the component whose
+errors the agent must anticipate rather than inherit. A grounding box that is off by half a
+tooth-width does not merely lose accuracy; it silently poisons every downstream observation,
+because the crop looks authoritative.
+
+This paper develops and evaluates \sys{}, an agentic VLM for OPG diagnosis built around a
+different contract between the policy and its tools: \emph{grounding is a hypothesis, not an
+answer}. \cref{fig:architecture} gives the complete system architecture, and \cref{fig:traces}
+contrasts the two trace arms on one image. Our contributions are:
+
+\begin{enumerate}[leftmargin=*,itemsep=2pt,topsep=3pt]
+\item \textbf{A self-correcting grounding tool (\texttt{nudge\_crop}, \cref{sec:nudge}).}
+The policy can shift and rescale a box it was \emph{already given} --- by the grounding model or
+by a previous correction --- using box-relative fractional arguments (\texttt{dx\_frac},
+\texttt{dy\_frac}, \texttt{scale}) that a VLM can reason about linguistically
+(``shift right about half a tooth-width''), without re-running detection. To our knowledge
+neither concurrent dental agentic system \citep{oralgptplus2026,oralagent2026} offers the policy
+any mechanism to correct a specialist tool's own uncertainty.
+\item \textbf{A tiered perturbation mechanism that makes self-correction learnable
+(\cref{sec:perturbation}).} Demonstrating correction behavior requires the demonstrator to
+\emph{experience} tool error. During trace generation we return the expert-verified box for
+annotated teeth (guaranteeing task solvability) but deliberately perturb the box
+\emph{shown to the demonstrator} --- 45\% clean, 25\% small offsets (12--28\% of box size), 30\%
+large offsets (45--75\%) --- with two design commitments: the rates are fixed constants decoupled
+from the detector's real error rate, so demonstrations never go stale as the detector improves;
+and errors are never announced verbally, so the offset magnitude alone must carry the signal and
+the learned behavior survives to reinforcement learning and inference time, where no such cue
+exists. A corpus-level analysis (\cref{sec:mechanism}) shows the mechanism elicits exactly the
+intended behavior gradient in 3{,}694 generated demonstrations: corrective use of
+\texttt{nudge\_crop} on 38.4\% of large offsets, 13.6\% of small ones (a genuine judgment call),
+and 1.1\% of clean boxes, on ground-truth-anchored pathology locates.
+\item \textbf{A tool interface with continuous parameters (\cref{sec:tools}).} Tools expose
+\emph{how much} effect to apply, not just which tool to call: \texttt{denoise(strength
+$\in[0,1]$)}, \texttt{window\_level(center, width)} as an override on top of presets,
+\texttt{enhance\_contrast(factor)}, \texttt{zoom\_crop(padding\_frac)}. Tool calls therefore
+carry real information beyond tool identity, and the policy can match processing intensity to
+image characteristics.
+\item \textbf{A ground-truth-anchored, correction-friendly reward (\cref{sec:reward}).} GRPO
+training \citep{deepseek2025r1} uses a composite reward whose dominant term is a hard,
+non-LLM-judge match against expert labels with multi-finding greedy one-to-one matching
+(F1-style harmonic mean of recall and precision), and whose efficiency term scales a reference
+budget with case complexity and \emph{exempts} \texttt{locate\_tooth} and \texttt{nudge\_crop}
+from per-call cost --- so the reward never prices out the verification behavior it is trying to
+teach, a failure mode we identified and removed by design.
+\item \textbf{A fully synthetic, clinician-free data pipeline and its audit trail
+(\cref{sec:traces}).} 3{,}694 verified chain-of-thought tool-use traces over DENTEX and Tufts
+(1{,}847 with tools, 1{,}847 single-turn without, exact 1:1 parity), generated by frontier models
+under real tool execution in a LangGraph loop, verified cross-family, decontaminated of
+directive leakage (105 traces regenerated; 0 leaks in the canonical corpus), and released as a
+reusable resource. The verifier's rejection taxonomy (66 false-positive findings on healthy
+scans, 15 ground-truth contradictions, 11 uncorrected spatial drifts) doubles as an audit of
+what the perturbation mechanism does and does not elicit.
+\end{enumerate}
+
+We evaluate on DENTEX with its native structured metrics --- pooled, set-matched,
+finding-level precision/recall/F1 with paired bootstrap intervals --- against zero-shot frontier
+VLMs, the same backbone with and without tools, and a supervised specialist detector. The
+training-side analyses in this draft are complete; the two-stage training runs (SFT, then GRPO)
+are in progress, and their result cells are marked \todo{SFT/GRPO results pending first
+hardware run} rather than extrapolated. The zero-shot baseline table, the grounding-tool
+validation, and the corpus-level mechanism analysis are final.

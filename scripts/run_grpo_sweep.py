@@ -28,7 +28,7 @@ from dental_agent.data.dentex import load_dentex_dataset
 from dental_agent.data.dev_split import load_dev_keys, select_training_pool
 from dental_agent.data.tufts import load_tufts_dataset
 from dental_agent.training.grpo import train_grpo
-from dental_agent.utils.canonical import SLOT_BUDGET, parse_slot_budget
+from dental_agent.utils.canonical import SLOT_BUDGET, add_letterbox_arg, check_gpu_image_policy, parse_slot_budget, set_letterbox
 from scripts.run_grpo import ensure_pool_images, resolve_grpo_inputs, resolve_sft_reference, sft_reference_candidates
 
 
@@ -117,6 +117,7 @@ def parse_args():
         default=False,
         help="Roll out with canonical views; must match the SFT stage's --canonical-resize setting.",
     )
+    add_letterbox_arg(parser)
     parser.add_argument("--max-new-tokens", type=int, default=2048,
                         help="Token cap of ONE assistant turn during rollouts (same as run_grpo.py).")
     parser.add_argument("--dev-split", type=str, default=None,
@@ -149,6 +150,14 @@ def main():
         raise SystemExit("--temperature must be > 0 (greedy rollouts give identical samples and zero advantages).")
     if args.pad_vision_to_slots and not args.canonical_resize:
         raise SystemExit("--pad-vision-to-slots requires --canonical-resize.")
+    if args.pad_vision_to_slots and not args.canonical_letterbox:
+        raise SystemExit("--pad-vision-to-slots requires --canonical-letterbox (static slots assume the fixed canonical canvas).")
+    set_letterbox(args.canonical_letterbox)
+    if not args.preflight:   # the doctor reports the same rule as a FAIL line instead of stopping
+        import importlib.util
+        import torch
+        check_gpu_image_policy(args.canonical_resize, args.canonical_letterbox, cuda=torch.cuda.is_available(),
+                               tpu=importlib.util.find_spec("torch_xla") is not None, what="the GRPO K-sweep")
     if args.resume_hf and not args.resume:
         raise SystemExit("--resume-hf only downloads checkpoints; add --resume to continue the sweep from them.")
     if args.preflight:

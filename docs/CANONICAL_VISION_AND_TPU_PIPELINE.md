@@ -24,8 +24,8 @@ Static slot budget (`--vision-slots FULL CROP COMPARE`, default `5 10 4`) = 19 i
 
 - **Explicit, deterministic configuration.** Every behaviour is a CLI flag; the notebooks hold literals and pass them verbatim. No environment-variable behaviour, no TPU-dependent defaults, no silent precision switching (`bf16` stays `bf16`, `qlora` is chosen by the user; a hint is printed when a small GPU runs bf16 LoRA).
 - **Defaults:** `--max-seq-len 16384` everywhere; `--spmd` on (inert off-TPU); `--canonical-resize` and `--pad-vision-to-slots` off unless passed.
-- **GPU (RTX 4090 / A100):** `--canonical-resize`, dynamic padding. No slots, no shim, no SPMD (slot padding exists only to avoid XLA recompilation). Native resolution is not viable for with-tools traces (several full-size images per trace). 24 GB cards use `--precision qlora`; A100 uses `bf16` (`train_sft.py`, `run_grpo.py` and `evaluate_models.py` all take `--precision`).
-- **TPU:** `--canonical-resize --pad-vision-to-slots --vision-slots 5 10 4 --triangular-shim --spmd --fsdp`. Padding does not change the loss: the tail is causally after every real token, with `labels=-100` and `attention_mask=0` (verified on the real Hugging Face Qwen3.5 code, loss and gradients identical to numerical precision).
+- **GPU (RTX 4090 / A100 / any CUDA device):** `--canonical-resize --no-canonical-letterbox` (canonical size, aspect kept, NOTHING added; the scripts refuse black-bar padding on CUDA) or `--no-canonical-resize` (the full image), dynamic padding. No slots, no shim, no SPMD (slot padding exists only to avoid XLA recompilation). Native resolution is not viable for with-tools traces (several full-size images per trace). 24 GB cards use `--precision qlora`; A100 uses `bf16` (`train_sft.py`, `run_grpo.py` and `evaluate_models.py` all take `--precision`).
+- **TPU:** `--canonical-resize --canonical-letterbox --pad-vision-to-slots --vision-slots 5 10 4 --triangular-shim --spmd --fsdp`. Padding does not change the loss: the tail is causally after every real token, with `labels=-100` and `attention_mask=0` (verified on the real Hugging Face Qwen3.5 code, loss and gradients identical to numerical precision).
 - **LoRA covers the Gated-DeltaNet layers** (`--lora-linear-attn`, default on; `in_proj_qkv`, `in_proj_z`, `out_proj`), so token mixing is adapted in all layers, not only the full-attention quarter. Warmup and SFT must use the same value. Turn it off with `--no-lora-linear-attn` to reproduce the earlier targets.
 - **Fail loudly:** padded mode raises on a non-canonical grid, an over-budget trace or an over-length sequence (truncation would desynchronise image tokens from vision features).
 - **Length manifest** (`compute_exact_trace_lengths.py`) records its resolution mode and per-trace vision-token counts; a manifest from the other mode is ignored with a warning.
@@ -49,24 +49,24 @@ Static slot budget (`--vision-slots FULL CROP COMPARE`, default `5 10 4`) = 19 i
 
 ```bash
 # Token-length manifest (once per resolution mode)
-python scripts/compute_exact_trace_lengths.py --canonical-resize --recompute
+python scripts/compute_exact_trace_lengths.py --canonical-resize --no-canonical-letterbox --recompute   # GPU view; TPU: --canonical-resize (bars are the default)
 
 # GPU extras (CUDA only, never on TPU)
 pip install -r requirements-gpu.txt
 
 # Pre-flight on the target machine (tiny random model, minutes; checks crashes and library versions, not memory)
-python scripts/smoke_test_sft.py --traces data/traces/train_cot_traces.jsonl -- --canonical-resize --precision qlora
+python scripts/smoke_test_sft.py --traces data/traces/train_cot_traces.jsonl -- --canonical-resize --no-canonical-letterbox --precision qlora
 
 # RTX 4090
-python scripts/train_sft.py --canonical-resize --precision qlora ...
+python scripts/train_sft.py --canonical-resize --no-canonical-letterbox --precision qlora ...
 # A100
-python scripts/train_sft.py --canonical-resize --precision bf16 ...
+python scripts/train_sft.py --canonical-resize --no-canonical-letterbox --precision bf16 ...
 # TPU v5e-8 (warmup first; run it with and without --triangular-shim to compare HBM)
 python scripts/warmup_xla_cache.py --spmd --fsdp --pad-vision-to-slots --vision-slots 5 10 4 --triangular-shim
 python scripts/train_sft.py --spmd --fsdp --canonical-resize --pad-vision-to-slots --vision-slots 5 10 4 --triangular-shim ...
 
 # GRPO / evaluation: same view flags as the SFT checkpoint
-python scripts/run_grpo.py --canonical-resize [TPU: --spmd --fsdp --pad-vision-to-slots ...]
+python scripts/run_grpo.py --canonical-resize --no-canonical-letterbox [TPU: use --canonical-letterbox, then --spmd --fsdp --pad-vision-to-slots ...]
 python scripts/evaluate_models.py
 ```
 

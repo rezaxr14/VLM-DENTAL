@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="560" viewBox="0 0 960 560">
+  <rect x="0" y="0" width="960" height="560" fill="#ffffff"/>
+  <text x="480" y="26" font-family="Helvetica, Arial, sans-serif" font-size="15" font-weight="bold" fill="#222222" text-anchor="middle">Self-correcting grounding: tiered perturbation and the nudge_crop correction loop</text>
+
+  <!-- locate_tooth -->
+  <rect x="60" y="52" width="250" height="64" rx="8" fill="#F0F4FA" stroke="#4C72B0" stroke-width="1.5"/>
+  <text x="185" y="76" font-family="Helvetica, Arial, sans-serif" font-size="12" font-weight="bold" fill="#222222" text-anchor="middle">locate_tooth(FDI tooth)</text>
+  <text x="185" y="94" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#444444" text-anchor="middle">returns a reference box (expert-verified box for</text>
+  <text x="185" y="108" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#444444" text-anchor="middle">annotated teeth; detector box otherwise)</text>
+
+  <line x1="310" y1="84" x2="346" y2="84" stroke="#666666" stroke-width="1.5"/>
+  <polygon points="346,79 356,84 346,89" fill="#666666"/>
+
+  <!-- tier roll -->
+  <rect x="358" y="52" width="244" height="64" rx="8" fill="#FBF6F0" stroke="#DD8452" stroke-width="1.5"/>
+  <text x="480" y="76" font-family="Helvetica, Arial, sans-serif" font-size="12" font-weight="bold" fill="#222222" text-anchor="middle">Perturbation roll (fixed rates)</text>
+  <text x="480" y="94" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#444444" text-anchor="middle">applied to the box SHOWN to the policy,</text>
+  <text x="480" y="108" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#444444" text-anchor="middle">never to the logged reference box</text>
+
+  <!-- three tier cards -->
+  <line x1="480" y1="116" x2="480" y2="136" stroke="#666666" stroke-width="1.5"/>
+  <line x1="170" y1="136" x2="790" y2="136" stroke="#666666" stroke-width="1.5"/>
+  <line x1="170" y1="136" x2="170" y2="152" stroke="#666666" stroke-width="1.5"/>
+  <polygon points="165,152 170,162 175,152" fill="#666666"/>
+  <line x1="480" y1="136" x2="480" y2="152" stroke="#666666" stroke-width="1.5"/>
+  <polygon points="475,152 480,162 485,152" fill="#666666"/>
+  <line x1="790" y1="136" x2="790" y2="152" stroke="#666666" stroke-width="1.5"/>
+  <polygon points="785,152 790,162 795,152" fill="#666666"/>
+
+  <rect x="62" y="164" width="216" height="96" rx="8" fill="#F4F4F4" stroke="#999999" stroke-width="1.5"/>
+  <text x="170" y="186" font-family="Helvetica, Arial, sans-serif" font-size="12" font-weight="bold" fill="#222222" text-anchor="middle">none - 45%</text>
+  <text x="170" y="204" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#444444" text-anchor="middle">box unchanged</text>
+  <text x="170" y="222" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#444444" text-anchor="middle">clean accept-and-proceed</text>
+  <text x="170" y="240" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#444444" text-anchor="middle">demonstration</text>
+
+  <rect x="372" y="164" width="216" height="96" rx="8" fill="#FDF3EA" stroke="#DD8452" stroke-width="1.5"/>
+  <text x="480" y="186" font-family="Helvetica, Arial, sans-serif" font-size="12" font-weight="bold" fill="#222222" text-anchor="middle">small - 25%</text>
+  <text x="480" y="204" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#444444" text-anchor="middle">offset 12-28% of box size, random sign</text>
+  <text x="480" y="220" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#444444" text-anchor="middle">genuine judgment call: often still fine</text>
+  <text x="480" y="236" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#444444" text-anchor="middle">given zoom padding - never resolved</text>
+  <text x="480" y="250" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#444444" text-anchor="middle">by the prompt</text>
+
+  <rect x="682" y="164" width="216" height="96" rx="8" fill="#FDEBE6" stroke="#C44E52" stroke-width="1.5"/>
+  <text x="790" y="186" font-family="Helvetica, Arial, sans-serif" font-size="12" font-weight="bold" fill="#222222" text-anchor="middle">big - 30%</text>
+  <text x="790" y="204" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#444444" text-anchor="middle">offset 45-75% of box size, random sign</text>
+  <text x="790" y="222" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#444444" text-anchor="middle">visually self-evident without any</text>
+  <text x="790" y="240" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#444444" text-anchor="middle">verbal cue</text>
+
+  <!-- merge into teacher inspection -->
+  <line x1="170" y1="260" x2="170" y2="280" stroke="#666666" stroke-width="1.5"/>
+  <line x1="790" y1="260" x2="790" y2="280" stroke="#666666" stroke-width="1.5"/>
+  <line x1="170" y1="280" x2="790" y2="280" stroke="#666666" stroke-width="1.5"/>
+  <line x1="480" y1="280" x2="480" y2="296" stroke="#666666" stroke-width="1.5"/>
+  <polygon points="475,296 480,306 485,296" fill="#666666"/>
+
+  <rect x="250" y="308" width="460" height="56" rx="8" fill="#F0F4FA" stroke="#4C72B0" stroke-width="1.5"/>
+  <text x="480" y="330" font-family="Helvetica, Arial, sans-serif" font-size="12" font-weight="bold" fill="#222222" text-anchor="middle">Teacher inspects the crop (zoom_crop)</text>
+  <text x="480" y="348" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#444444" text-anchor="middle">and decides from the pixels alone whether the box is acceptable</text>
+
+  <line x1="710" y1="336" x2="746" y2="336" stroke="#666666" stroke-width="1.5"/>
+  <polygon points="746,331 756,336 746,341" fill="#666666"/>
+
+  <!-- nudge -->
+  <rect x="758" y="308" width="184" height="56" rx="8" fill="#F2F8F2" stroke="#55A868" stroke-width="1.5"/>
+  <text x="850" y="330" font-family="Helvetica, Arial, sans-serif" font-size="12" font-weight="bold" fill="#222222" text-anchor="middle">nudge_crop</text>
+  <text x="850" y="348" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#444444" text-anchor="middle">dx_frac, dy_frac, scale</text>
+
+  <line x1="850" y1="364" x2="850" y2="384" stroke="#666666" stroke-width="1.5"/>
+  <line x1="850" y1="384" x2="500" y2="384" stroke="#666666" stroke-width="1.5"/>
+  <line x1="500" y1="384" x2="500" y2="400" stroke="#666666" stroke-width="1.5"/>
+  <polygon points="495,400 500,410 505,400" fill="#666666"/>
+
+  <rect x="290" y="412" width="420" height="50" rx="8" fill="#F2F8F2" stroke="#55A868" stroke-width="1.5"/>
+  <text x="500" y="433" font-family="Helvetica, Arial, sans-serif" font-size="11.5" font-weight="bold" fill="#222222" text-anchor="middle">zoom_crop on the corrected box - verify - commit finding</text>
+  <text x="500" y="451" font-family="Helvetica, Arial, sans-serif" font-size="10.5" fill="#444444" text-anchor="middle">the same judgment the deployed policy faces at inference, with no ground truth available</text>
+
+  <!-- side annotations -->
+  <rect x="24" y="308" width="200" height="100" rx="8" fill="#FFFBF0" stroke="#BCBD22" stroke-width="1.2"/>
+  <text x="124" y="328" font-family="Helvetica, Arial, sans-serif" font-size="10.5" font-weight="bold" fill="#222222" text-anchor="middle">Decoupled from the detector</text>
+  <text x="124" y="344" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#444444" text-anchor="middle">rates are configured constants,</text>
+  <text x="124" y="358" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#444444" text-anchor="middle">not the detector's real error rate,</text>
+  <text x="124" y="372" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#444444" text-anchor="middle">so demonstrations stay valid as</text>
+  <text x="124" y="386" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#444444" text-anchor="middle">the grounding tool improves.</text>
+
+  <rect x="24" y="412" width="200" height="86" rx="8" fill="#FFFBF0" stroke="#BCBD22" stroke-width="1.2"/>
+  <text x="124" y="432" font-family="Helvetica, Arial, sans-serif" font-size="10.5" font-weight="bold" fill="#222222" text-anchor="middle">No verbal cue</text>
+  <text x="124" y="448" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#444444" text-anchor="middle">an error is never announced in text;</text>
+  <text x="124" y="462" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#444444" text-anchor="middle">magnitude alone must carry the</text>
+  <text x="124" y="476" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#444444" text-anchor="middle">signal, so the learned behavior</text>
+  <text x="124" y="490" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#444444" text-anchor="middle">survives to GRPO and inference.</text>
+
+  <!-- schematic inset: reference vs shown box -->
+  <g>
+    <rect x="740" y="412" width="200" height="118" rx="8" fill="#FAFAFA" stroke="#CCCCCC" stroke-width="1.2"/>
+    <rect x="772" y="446" width="70" height="42" fill="none" stroke="#2ca02c" stroke-width="2"/>
+    <rect x="800" y="466" width="70" height="42" fill="none" stroke="#d62728" stroke-width="2" stroke-dasharray="6,3"/>
+    <line x1="807" y1="467" x2="824" y2="486" stroke="#444444" stroke-width="1.2"/>
+    <polygon points="821,483 827,489 818,490" fill="#444444"/>
+    <text x="840" y="440" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#444444" text-anchor="middle">reference vs. shown box</text>
+    <text x="840" y="524" font-family="Helvetica, Arial, sans-serif" font-size="10" fill="#444444" text-anchor="middle">shift given in box-relative fractions</text>
+  </g>
+</svg>

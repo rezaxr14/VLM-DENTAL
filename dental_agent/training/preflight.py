@@ -115,6 +115,13 @@ def _check_sft_consistency(args: Any, sft_dir: Path, dev_keys: set[str], rep: _R
                 f"--canonical-resize={args.canonical_resize}: the policy would be optimised on a different image distribution.")
     else:
         rep.add(PASS, "canonical-resize vs SFT", f"both {bool(args.canonical_resize)}")
+    if args.canonical_resize and bool(meta.get("canonical_resize")):
+        sft_lb, grpo_lb = bool(meta.get("canonical_letterbox", True)), _letterbox(args)   # missing = trained with black bars
+        if sft_lb != grpo_lb:
+            rep.add(FAIL, "canonical-letterbox vs SFT", f"SFT used canonical_letterbox={sft_lb}, GRPO has canonical_letterbox={grpo_lb}: "
+                    "the policy would see black bars it was not trained with (or lose ones it was). Use the SFT value.")
+        else:
+            rep.add(PASS, "canonical-letterbox vs SFT", f"both {grpo_lb}")
     sft_fp, grpo_fp = meta.get("dev_split_fingerprint"), keys_fingerprint(dev_keys)
     if sft_fp is not None and sft_fp != grpo_fp:
         rep.add(FAIL, "dev split vs SFT", f"SFT held out '{meta.get('dev_split')}' ({sft_fp}), GRPO holds out "
@@ -125,6 +132,49 @@ def _check_sft_consistency(args: Any, sft_dir: Path, dev_keys: set[str], rep: _R
         rep.add(WARN, "max-seq-len vs SFT", f"SFT {meta['max_seq_len']}, GRPO {args.max_seq_len}; use the SFT value.")
     if args.pad_vision_to_slots and meta.get("vision_slots") not in (None, list(args.vision_slots)):
         rep.add(WARN, "vision-slots vs SFT", f"SFT {meta['vision_slots']}, GRPO {list(args.vision_slots)}.")
+    sft_prec, grpo_prec = meta.get("precision"), getattr(args, "precision", None)
+    if sft_prec and grpo_prec and sft_prec != grpo_prec and "qlora" in (sft_prec, grpo_prec):
+        rep.add(WARN, "precision vs SFT", f"SFT was trained with --precision {sft_prec}, GRPO runs --precision {grpo_prec}: the adapter "
+                "sits on differently quantized base weights. Use the SFT precision unless you mean it.")
+    if sft_prec == "qlora" or grpo_prec == "qlora":
+        from dental_agent.config import QLORA_SKIP_MODULES
+        sft_skip = meta.get("qlora_skip_modules")
+        if sft_prec == "qlora" and sft_skip is None:
+            rep.add(WARN, "QLoRA vision tower vs SFT", "this SFT adapter was trained before the vision tower was excluded from 4-bit "
+                    "(its projector LoRA, if any, was fitted on NF4 merger weights). GRPO loads the vision tower in 16-bit, so that "
+                    "part no longer matches its base. Retrain the SFT under the current loading.")
+        elif sft_prec == "qlora" and list(sft_skip) != list(QLORA_SKIP_MODULES):
+            rep.add(WARN, "QLoRA skip list vs SFT", f"SFT quantized with skip list {sft_skip}, GRPO/evaluation use {list(QLORA_SKIP_MODULES)}.")
+        elif sft_prec == "qlora":
+            rep.add(PASS, "QLoRA skip list vs SFT", f"same list {list(QLORA_SKIP_MODULES)} (language model quantized, vision tower 16-bit)")
+
+
+def _letterbox(args: Any) -> bool:
+    return bool(getattr(args, "canonical_letterbox", True))
+
+
+def _check_image_view(args: Any, rep: _Report) -> bool:
+    """The GPU rule: no black-bar padding on a CUDA device. Static TPU slots need it. Reports; never changes a setting."""
+    import importlib.util
+    ok = True
+    if args.pad_vision_to_slots and args.canonical_resize and not _letterbox(args):
+        rep.add(FAIL, "pad-vision-to-slots", "requires --canonical-letterbox (static slots assume the fixed canonical canvas).")
+        ok = False
+    try:
+        import torch
+        cuda = bool(torch.cuda.is_available())
+    except Exception:
+        cuda = False
+    if args.canonical_resize and _letterbox(args) and cuda and importlib.util.find_spec("torch_xla") is None:
+        rep.add(FAIL, "GPU image view", "--canonical-resize with black-bar padding on a CUDA GPU. GPU runs add nothing to the image: pass "
+                "--no-canonical-letterbox (canonical size, aspect kept) or --no-canonical-resize (the full image).")
+        ok = False
+    elif args.canonical_resize:
+        rep.add(PASS, "image view", "canonical, black-bar padded (TPU static slots)" if _letterbox(args)
+                else "canonical size, aspect kept, nothing added (GPU)")
+    else:
+        rep.add(PASS, "image view", "native: the full image, only rounded to the processor's 32-pixel grid")
+    return ok
 
 
 def _check_flags(args: Any, rep: _Report) -> None:
@@ -138,6 +188,7 @@ def _check_flags(args: Any, rep: _Report) -> None:
     if args.pad_vision_to_slots and not args.canonical_resize:
         rep.add(FAIL, "pad-vision-to-slots", "requires --canonical-resize.")
         ok = False
+    ok = _check_image_view(args, rep) and ok
     if args.pad_vision_to_slots:
         tokens = slot_totals(parse_slot_budget(*args.vision_slots))["tokens"]
         if args.max_seq_len <= tokens:
@@ -456,11 +507,11 @@ def _check_trace_images(files: list[Path], args: Any, dev_keys: set[str], rep: _
 def _check_manifest(files: list[Path], args: Any, rep: _Report) -> None:
     if not files:
         return
-    st = inp.check_token_manifest(args.data_dir, files, args.canonical_resize)
+    st = inp.check_token_manifest(args.data_dir, files, args.canonical_resize, canonical_letterbox=_letterbox(args))
     if st.state == "fresh":
         rep.add(PASS, "token-length manifest", f"{st.path} matches the current code and traces")
         return
-    cmd = inp.manifest_command(args.data_dir, args.canonical_resize, args.model_id, args.vision_slots)
+    cmd = inp.manifest_command(args.data_dir, args.canonical_resize, args.model_id, args.vision_slots, _letterbox(args))
     level = FAIL if args.pad_vision_to_slots else WARN
     rep.add(level, "token-length manifest", f"{st.state}: {'; '.join(st.reasons)}. Recompute: {cmd}"
             + ("" if args.pad_vision_to_slots else " (without it over-length traces are not filtered)"))
@@ -471,6 +522,7 @@ def _check_sft_flags(args: Any, rep: _Report) -> None:
     if args.pad_vision_to_slots and not args.canonical_resize:
         rep.add(FAIL, "pad-vision-to-slots", "requires --canonical-resize.")
         ok = False
+    ok = _check_image_view(args, rep) and ok
     if args.pad_vision_to_slots:
         tokens = slot_totals(parse_slot_budget(*args.vision_slots))["tokens"]
         if args.max_seq_len <= tokens:

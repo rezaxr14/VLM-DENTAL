@@ -77,3 +77,47 @@ def test_run_grpo_with_tools_runs_end_to_end_on_cpu(tmp_path):
     tail = (proc.stdout + proc.stderr)[-2500:]
     assert proc.returncode == 0, tail
     assert "[SMOKE-GRPO] PASSED" in proc.stdout, tail
+
+
+def test_train_sft_without_letterbox_runs_end_to_end_and_records_it(tmp_path):
+    """GPU recipe: --canonical-resize --no-canonical-letterbox trains on unpadded views (variable token counts, dynamic padding)."""
+    traces = tmp_path / "traces.jsonl"
+    traces.write_text("\n".join(json.dumps(_trace(i)) for i in range(4)) + "\n")
+    work = tmp_path / "work"
+    proc = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "smoke_test_sft.py"), "--traces", str(traces), "--num-traces", "4",
+         "--work-dir", str(work), "--", "--canonical-resize", "--no-canonical-letterbox", "--max-seq-len", "8192"],
+        capture_output=True, text=True, timeout=600,
+    )
+    tail = (proc.stdout + proc.stderr)[-2500:]
+    assert proc.returncode == 0, tail
+    assert "[SMOKE] PASSED" in proc.stdout, tail
+    meta = json.loads((work / "out" / "sft_run_meta.json").read_text())
+    assert meta["canonical_resize"] is True and meta["canonical_letterbox"] is False
+    assert "canonical_letterbox=False" in proc.stdout + proc.stderr
+
+
+def test_pad_vision_to_slots_without_letterbox_is_rejected(tmp_path):
+    traces = tmp_path / "traces.jsonl"
+    traces.write_text("\n".join(json.dumps(_trace(i)) for i in range(2)) + "\n")
+    proc = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "smoke_test_sft.py"), "--traces", str(traces), "--num-traces", "2",
+         "--work-dir", str(tmp_path / "work"), "--", "--canonical-resize", "--no-canonical-letterbox", "--pad-vision-to-slots"],
+        capture_output=True, text=True, timeout=600,
+    )
+    assert proc.returncode != 0
+    assert "TPU-only" in proc.stdout + proc.stderr or "canonical-letterbox" in proc.stdout + proc.stderr
+
+
+def test_run_grpo_without_letterbox_runs_end_to_end_on_cpu(tmp_path):
+    traces = tmp_path / "traces.jsonl"
+    traces.write_text("\n".join(json.dumps(_trace(i)) for i in range(3)) + "\n")
+    proc = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "smoke_test_grpo.py"), "--traces", str(traces), "--track", "with_tools",
+         "--work-dir", str(tmp_path / "grpo"), "--", "--canonical-resize", "--no-canonical-letterbox"],
+        capture_output=True, text=True, timeout=900,
+    )
+    tail = (proc.stdout + proc.stderr)[-2500:]
+    assert proc.returncode == 0, tail
+    assert "[SMOKE-GRPO] PASSED" in proc.stdout, tail
+    assert "canonical_letterbox=False" in proc.stdout + proc.stderr

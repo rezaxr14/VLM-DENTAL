@@ -35,7 +35,7 @@ load_dotenv(repo_root / ".env")
 
 from transformers import AutoProcessor
 from dental_agent.training.sft import DentalSFTDataset
-from dental_agent.utils.canonical import SLOT_BUDGET, parse_slot_budget, slot_totals
+from dental_agent.utils.canonical import SLOT_BUDGET, add_letterbox_arg, letterbox_enabled, parse_slot_budget, set_letterbox, slot_totals
 
 
 CANONICAL_CURRICULUM_FILES = [
@@ -71,6 +71,7 @@ def parse_args() -> argparse.Namespace:
         help="Measure lengths with canonical-sized views (FULL/CROP/COMPARE), matching train_sft.py --canonical-resize. "
              "The manifest records the mode; DentalSFTDataset ignores a manifest whose mode differs from its own.",
     )
+    add_letterbox_arg(parser)
     parser.add_argument(
         "--vision-slots",
         type=int,
@@ -192,7 +193,7 @@ def save_manifest(
     # TPU cost (static slot padding) next to the GPU cost above (real tokens). Only meaningful with canonical views.
     tpu_report: Dict[str, Any] = {}
     budget = dict(slot_budget or SLOT_BUDGET)
-    if canonical_resize and vision_tokens_by_file_and_id:
+    if canonical_resize and letterbox_enabled() and vision_tokens_by_file_and_id:   # static slots exist only with the padded canvas
         static_tokens = int(slot_totals(budget)["tokens"])
         tpu = tpu_static_lengths(lengths_by_file_and_id, vision_tokens_by_file_and_id, static_tokens)
         if tpu:
@@ -232,6 +233,7 @@ def save_manifest(
             "estimated_traces": list(estimated or []),
         },
         "canonical_resize": bool(canonical_resize),
+        "canonical_letterbox": bool(letterbox_enabled()),
         "lengths_by_image_id": lengths_by_image_id,
         "lengths_by_file_and_id": lengths_by_file_and_id,
         # Number of <|image_pad|> tokens inside each total; lets the dataset compute slot-padded lengths.
@@ -245,6 +247,7 @@ def save_manifest(
 
 def main():
     args = parse_args()
+    set_letterbox(args.canonical_letterbox)   # DentalSFTDataset reads it when it builds the views
     data_dir = Path(args.data_dir)
     traces_dir = data_dir / "traces" if (data_dir / "traces").exists() else Path("data/traces")
 
@@ -267,7 +270,7 @@ def main():
     print(f"* Model ID    : {args.model_id}", flush=True)
     print(f"* Data Dir    : {data_dir}", flush=True)
     print(f"* Output File : {args.output_file}", flush=True)
-    print(f"* Image mode  : {'CANONICAL views (FULL/CROP/COMPARE)' if args.canonical_resize else 'ORIGINAL image size'}", flush=True)
+    print(f"* Image mode  : {('CANONICAL views (FULL/CROP/COMPARE), black-bar padded' if args.canonical_letterbox else 'CANONICAL views (FULL/CROP/COMPARE), aspect-preserving, NO padding') if args.canonical_resize else 'ORIGINAL image size'}", flush=True)
     if not args.canonical_resize:
         print("  [WARNING] --canonical-resize is OFF: native scans (DENTEX especially) produce several times more vision "
               "tokens. Training/GRPO with --canonical-resize ignore this manifest.", flush=True)
@@ -284,7 +287,7 @@ def main():
     except inp.InputNotFound as e:
         raise SystemExit(f"[INPUT NOT FOUND] {e}") from e
     print(f"[IMAGES] All {img_check.n_unique} trace images resolve" + (f" ({img_check.fetched} fetched from the Hub)." if img_check.fetched else "."), flush=True)
-    fp = inp.manifest_fingerprint(target_files, args.canonical_resize)
+    fp = inp.manifest_fingerprint(target_files, args.canonical_resize, args.canonical_letterbox)
     estimated: List[str] = []
 
     print(f"\n[PROCESSOR] Loading processor for model '{args.model_id}'...", flush=True)
@@ -343,12 +346,15 @@ def main():
                 existing_manifest = json.load(f)
                 if bool(existing_manifest.get("canonical_resize", False)) != bool(args.canonical_resize):
                     raise ValueError("existing manifest was measured with a different canonical_resize mode")
+                if args.canonical_resize and bool(existing_manifest.get("canonical_letterbox", True)) != bool(args.canonical_letterbox):
+                    raise ValueError("existing manifest was measured with a different canonical_letterbox mode")
                 lengths_by_image_id = existing_manifest.get("lengths_by_image_id", {})
                 lengths_by_file_and_id = existing_manifest.get("lengths_by_file_and_id", {})
                 vision_by_key = dict(existing_manifest.get("vision_tokens_by_file_and_id", {}))
                 if lengths_by_file_and_id and not vision_by_key:
                     raise ValueError("existing manifest has no vision-token counts; recomputing")
-                stale = inp.manifest_staleness(existing_manifest, target_files, args.canonical_resize, require_complete=False)
+                stale = inp.manifest_staleness(existing_manifest, target_files, args.canonical_resize, require_complete=False,
+                                              canonical_letterbox=args.canonical_letterbox)
                 if stale:
                     print(f"[RESUME] Ignoring the existing manifest (stale: {'; '.join(stale)}); measuring from scratch.", flush=True)
                     raise ValueError("existing manifest is stale")

@@ -1,0 +1,223 @@
+% Bibliography for the VLM-DENTAL paper.
+% NOTE: entries marked with "% TODO-verify" were drafted from in-repo references and
+% must be checked against the actual sources (exact titles, venues, arXiv IDs,
+% author lists) before submission.
+
+% ----------------------------- Benchmark & datasets -----------------------------
+
+@inproceedings{hamamci2024dentex,
+  author    = {Hamamci, Erhan Basaran and Erden, Enis and Sekuboyina, Anjany and others},
+  title     = {{DENTEX}: An Abnormal Tooth Detection with Enumeration and Diagnosis Benchmark for Panoramic Dental Radiographs},
+  booktitle = {Medical Image Computing and Computer Assisted Intervention (MICCAI)},
+  year      = {2024},
+  note      = {DENTEX 2023 challenge; hierarchical quadrant--enumeration--diagnosis task},
+}
+% TODO-verify: exact author list, arXiv ID, and venue for the DENTEX challenge paper.
+
+@article{uribe2024systematic,
+  author  = {Uribe, Sergio E. and others},
+  title   = {Systematic Review of Publicly Available Dental Imaging Datasets},
+  journal = {Journal of Dental Research},
+  volume  = {103},
+  number  = {13},
+  pages   = {1365--1374},
+  year    = {2024},
+  note    = {PMC11633071; screened 131,028 records, identified 16 public datasets},
+}
+% TODO-verify: full author list and exact title.
+
+@misc{tuftsdatabase,
+  author = {{Tufts University School of Dental Medicine}},
+  title  = {The Tufts Dental Database},
+  year   = {2023},
+  note   = {1,000 expert-annotated panoramic radiographs; registration-gated access},
+}
+% TODO-verify: canonical citation for the Tufts Dental Database.
+
+% ----------------------------- Backbone & training ------------------------------
+
+@article{bai2025qwen25vl,
+  author  = {Bai, Shuai and others},
+  title   = {{Qwen2.5-VL} Technical Report},
+  journal = {arXiv preprint arXiv:2502.13923},
+  year    = {2025},
+}
+% TODO-verify: the project trains Qwen3.5-9B; cite the corresponding Qwen3.5-VL
+% technical report once confirmed (the 2.5-VL report is the closest verified ancestor).
+
+@inproceedings{hu2022lora,
+  author    = {Hu, Edward J. and Shen, Yelong and Wallis, Phillip and Allen-Zhu, Zeyuan and Li, Yuanzhi and Wang, Shean and Wang, Lu and Chen, Weizhu},
+  title     = {{LoRA}: Low-Rank Adaptation of Large Language Models},
+  booktitle = {International Conference on Learning Representations (ICLR)},
+  year      = {2022},
+}
+
+@inproceedings{dettmers2023qlora,
+  author    = {Dettmers, Tim and Pagnoni, Artidoro and Holtzman, Ari and Zettlemoyer, Luke},
+  title     = {{QLoRA}: Efficient Finetuning of Quantized {LLMs}},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  year      = {2023},
+}
+
+@article{deepseek2025r1,
+  author  = {{DeepSeek-AI}},
+  title   = {{DeepSeek-R1}: Incentivizing Reasoning Capability in {LLMs} via Reinforcement Learning},
+  journal = {arXiv preprint arXiv:2501.12948},
+  year    = {2025},
+  note    = {Introduces and popularizes GRPO for reasoning LLMs},
+}
+
+@misc{schulman2025kl,
+  author = {Schulman, John},
+  title  = {Approximating {KL} Divergence},
+  year   = {2020},
+  note   = {Technical note on the k3 unbiased KL estimator},
+}
+% TODO-verify: preferred canonical reference for the k3 KL estimator.
+
+@misc{jocher2023yolov8,
+  author = {Jocher, Glenn and Chaurasia, Ayush and Qiu, Jingnan},
+  title  = {Ultralytics {YOLOv8}},
+  year   = {2023},
+  howpublished = {\url{https://github.com/ultralytics/ultralytics}},
+}
+
+@misc{langgraph,
+  author = {{LangChain, Inc.}},
+  title  = {LangGraph: Building Stateful, Multi-Actor Applications with {LLMs}},
+  year   = {2024},
+  howpublished = {\url{https://github.com/langchain-ai/langgraph}},
+}
+
+@misc{trl,
+  author = {von Werra, Leandro and others},
+  title  = {{TRL}: Transformer Reinforcement Learning},
+  year   = {2020},
+  howpublished = {\url{https://github.com/huggingface/trl}},
+}
+
+% ----------------------------- Medical RL-VLMs ----------------------------------
+
+@article{hu2025medvlmr1,
+  author  = {Hu, Ziqian and others},
+  title   = {{MedVLM-R1}: Incentivizing Multimodal Medical Reasoning Capability of Vision-Language Models via Reinforcement Learning},
+  journal = {arXiv preprint arXiv:2502.19645},
+  year    = {2025},
+}
+% TODO-verify: exact author list.
+
+@article{wang2025medr1,
+  author  = {Wang, Yuezhou and others},
+  title   = {{Med-R1}: Reinforcement Learning for Trustworthy Vision-Language Models in Medicine},
+  journal = {arXiv preprint},
+  year    = {2025},
+}
+% TODO-verify: exact arXiv ID and author list.
+
+@article{chen2024huatuo,
+  author  = {Chen, Junying and others},
+  title   = {{HuatuoGPT-o1}, Towards Medical Complex Reasoning with {LLMs}},
+  journal = {arXiv preprint arXiv:2412.18925},
+  year    = {2024},
+}
+% TODO-verify: exact arXiv ID.
+
+@article{openmedreason2026,
+  author  = {others},
+  title   = {{OpenMedReason}: Verifier-Filtered Reasoning Supervision for Medical Vision-Language Models},
+  journal = {arXiv preprint},
+  year    = {2026},
+}
+% TODO-verify: fill in exact authors, title, and ID from the in-repo reference
+% (docs/dentex-agentic-vlm-proposal.md section 3.6).
+
+% ----------------------------- Agentic tool-use VLMs ----------------------------
+
+@inproceedings{li2024mmedagent,
+  author    = {Li, Junying and others},
+  title     = {{MMedAgent}: Learning to Customize Medical Agents with Reinforcement Learning},
+  booktitle = {Proceedings of EMNLP},
+  year      = {2024},
+}
+% TODO-verify: exact title/author list.
+
+@article{zhang2025octotools,
+  author  = {Zhang, Jiaqi and others},
+  title   = {{OctoTools}: An Agentic Framework with Extensible Tools for Complex Reasoning},
+  journal = {arXiv preprint},
+  year    = {2025},
+}
+% TODO-verify: exact arXiv ID.
+
+@inproceedings{oralgptplus2026,
+  author    = {others},
+  title     = {{OralGPT-Plus}: Reinforcement-Learned Tool-Augmented Reasoning for Dental Vision-Language Models},
+  booktitle = {Proceedings of CVPR},
+  year      = {2026},
+  note      = {Concurrent work; evaluates on MMOral-X / MMOral-OPG with an LLM-judge-scored reward},
+}
+% TODO-verify: exact title, authors, and claims from the published paper.
+
+@article{oralagent2026,
+  author  = {others},
+  title   = {{OralAgent}: A Multi-Tool Dental Agent with Retrieval-Augmented Knowledge},
+  journal = {arXiv preprint},
+  year    = {2026},
+  note    = {Concurrent work; prompted ReAct orchestrator around a general-purpose model},
+}
+% TODO-verify: exact citation from the in-repo reference.
+
+@inproceedings{wu2026vtool,
+  author    = {Wu, Yanda and others},
+  title     = {{VTool-R1}: {VLMs} Learn to Reason with Visual Tools via Reinforcement Learning},
+  booktitle = {International Conference on Learning Representations (ICLR)},
+  year      = {2026},
+  note      = {GRPO-trained visual tool use; chart/table QA, 64.7\% -> 71.7\% over zero-shot},
+}
+% TODO-verify: exact venue/year and author list.
+
+% ----------------------------- Zero-shot dental VLM evaluations -----------------
+
+@misc{meta2024llama32,
+  author = {{Meta AI}},
+  title  = {{Llama 3.2}: Vision Models},
+  year   = {2024},
+  howpublished = {\url{https://llama.meta.com}},
+}
+
+@misc{moonshotkimi,
+  author = {{Moonshot AI}},
+  title  = {Kimi Multimodal Models},
+  year   = {2026},
+  note   = {Accessed via the NVIDIA NIM API},
+}
+% TODO-verify: canonical model citation.
+
+% ----------------------------- Evaluation methodology ---------------------------
+
+@inproceedings{guo2017calibration,
+  author    = {Guo, Chuan and Pleiss, Geoff and Sun, Yu and Weinberger, Kilian Q.},
+  title     = {On Calibration of Modern Neural Networks},
+  booktitle = {International Conference on Machine Learning (ICML)},
+  year      = {2017},
+}
+
+@article{kuhn1955hungarian,
+  author  = {Kuhn, Harold W.},
+  title   = {The {Hungarian} Method for the Assignment Problem},
+  journal = {Naval Research Logistics Quarterly},
+  volume  = {2},
+  pages   = {83--97},
+  year    = {1955},
+}
+
+% ----------------------------- Dental AI background -----------------------------
+
+@inproceedings{merlin2024combining,
+  author    = {Merlin, Théo and others},
+  title     = {Combining Tooth Instance Segmentation Datasets for Improved Panoramic Radiograph Analysis},
+  booktitle = {BMC Oral Health},
+  year      = {2024},
+  note      = {10.1186/s12903-024-04129-5},
+}
+% TODO-verify: exact title and full author list.

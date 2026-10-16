@@ -40,7 +40,7 @@ def load_model(
     Returns (model, processor).
     """
     import torch
-    from transformers import AutoProcessor, BitsAndBytesConfig
+    from transformers import AutoProcessor
 
     model_cfg = config.model if isinstance(config, ProjectConfig) else (config or ModelConfig())
     ModelClass = get_model_classes()
@@ -52,12 +52,7 @@ def load_model(
             if model_cfg.bnb_compute_dtype == "bfloat16"
             else torch.float16
         )
-        bnb_config = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_quant_type=model_cfg.bnb_quant_type,
-            bnb_4bit_compute_dtype=compute_dtype,
-            bnb_4bit_use_double_quant=model_cfg.bnb_double_quant,
-        )
+        bnb_config = qlora_bnb_config(compute_dtype, quant_type=model_cfg.bnb_quant_type, double_quant=model_cfg.bnb_double_quant)
 
     try:
         processor = AutoProcessor.from_pretrained(model_cfg.name, trust_remote_code=True)
@@ -105,6 +100,113 @@ def load_model(
             ) from e
         raise
     return model, processor
+
+
+def qlora_bnb_config(compute_dtype: Any, quant_type: str = "nf4", double_quant: bool = True) -> Any:
+    """The one 4-bit config for SFT, GRPO, evaluation and inference: NF4 (default), double quantization, ``compute_dtype`` compute,
+    and ``QLORA_SKIP_MODULES`` left in 16-bit so only the language model is quantized (the vision tower, projector included, and
+    lm_head are not). Quantization settings are the caller's; only the skip list is fixed here."""
+    from transformers import BitsAndBytesConfig
+    from dental_agent.config import QLORA_SKIP_MODULES
+
+    return BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_quant_type=quant_type,
+        bnb_4bit_use_double_quant=double_quant,
+        bnb_4bit_compute_dtype=compute_dtype,
+        llm_int8_skip_modules=list(QLORA_SKIP_MODULES),
+    )
+
+
+def is_vision_param_name(name: str) -> bool:
+    """True for a parameter or module name inside the vision tower (``model.visual.*`` or ``visual.*``)."""
+    return ".visual." in f".{name}."
+
+
+def prepare_qlora_model(model: Any, **kwargs: Any) -> Any:
+    """``peft.prepare_model_for_kbit_training`` that does not change the vision tower's dtype.
+
+    peft upcasts every non-4-bit 16-bit parameter to fp32. Before the skip list that only touched embeddings, norms and lm_head
+    (the ViT was 4-bit); now it would also upcast the whole ViT (about +0.9 GB and an fp32 vision forward). The vision tower is
+    put back to the dtype it was loaded in. Nothing else changes, and no precision is chosen here."""
+    from peft import prepare_model_for_kbit_training
+
+    before = {n: p.dtype for n, p in model.named_parameters() if is_vision_param_name(n)}
+    model = prepare_model_for_kbit_training(model, **kwargs)
+    restored = 0
+    for n, p in model.named_parameters():
+        want = before.get(n)
+        if want is not None and p.dtype != want:
+            p.data = p.data.to(want)
+            restored += 1
+    if restored:
+        print(f"[QLORA] Vision tower kept in {next(iter(set(before.values())))} ({restored} tensors not upcast to fp32).")
+    return model
+
+
+def check_qlora_model(
+    model: Any,
+    target_modules: list[str] | None = None,
+    linear4bit_cls: Any = None,
+) -> dict[str, Any]:
+    """Assert a QLoRA-loaded model is quantized where it must be and only there; returns a summary, raises AssertionError.
+
+    (a) no 4-bit Linear anywhere under the vision tower (the merger is plain Linear, so projector LoRA attaches to it);
+    (b) every Linear of the language model, lm_head excepted, is a 4-bit Linear;
+    (c) every LoRA target (``target_modules``, suffix names such as ``q_proj`` or full names) matches at least one module.
+    ``linear4bit_cls`` defaults to ``bitsandbytes.nn.Linear4bit`` (needs bitsandbytes); tests pass a stand-in class."""
+    import torch
+
+    if linear4bit_cls is None:
+        try:
+            from bitsandbytes.nn import Linear4bit as linear4bit_cls
+        except Exception as e:  # pragma: no cover - environment
+            raise RuntimeError(f"check_qlora_model needs bitsandbytes (CUDA) to recognise 4-bit layers: {e}") from e
+
+    # Works before and after peft wraps the model: LoRA's own A/B Linears are not base layers, and a wrapped layer's real
+    # weight sits in ``<name>.base_layer``.
+    linears = [(n[: -len(".base_layer")] if n.endswith(".base_layer") else n, m)
+               for n, m in model.named_modules() if isinstance(m, torch.nn.Linear) and ".lora_" not in n]
+    vision = [(n, m) for n, m in linears if is_vision_param_name(n)]
+    head = [(n, m) for n, m in linears if n == "lm_head" or n.endswith(".lm_head")]
+    head_names = {n for n, _ in head}
+    language = [(n, m) for n, m in linears if not is_vision_param_name(n) and n not in head_names]
+    q = lambda m: isinstance(m, linear4bit_cls)  # noqa: E731
+
+    bad_vision = [n for n, m in vision if q(m)]
+    bad_language = [n for n, m in language if not q(m)]
+    missing_targets: list[str] = []
+    for t in (target_modules or []):
+        if not any(n == t or n.endswith("." + t) for n, _ in linears):
+            missing_targets.append(t)
+    merger = [n for n, _ in vision if "merger" in n]
+
+    summary = {
+        "vision_linears": len(vision), "vision_linear4bit": len(bad_vision),
+        "vision_dtypes": sorted({str(m.weight.dtype).replace("torch.", "") for _, m in vision}),
+        "merger_linears": merger,
+        "language_linears": len(language), "language_linear4bit": len(language) - len(bad_language),
+        "lm_head_quantized": any(q(m) for _, m in head),
+        "lora_targets": len(target_modules or []), "lora_targets_missing": missing_targets,
+    }
+    problems = []
+    if bad_vision:
+        problems.append(f"(a) {len(bad_vision)} vision-tower layers are 4-bit, e.g. {bad_vision[:3]} - the skip list did not apply")
+    if not vision:
+        problems.append("(a) no Linear layers found under the vision tower - module names changed? check QLORA_SKIP_MODULES")
+    if bad_language:
+        problems.append(f"(b) {len(bad_language)} language-model layers are NOT 4-bit, e.g. {bad_language[:3]} - this is not a QLoRA load")
+    if not language:
+        problems.append("(b) no language-model Linear layers found")
+    if summary["lm_head_quantized"]:
+        problems.append("(b) lm_head is 4-bit; it is meant to stay 16-bit (QLORA_SKIP_MODULES lists it)")
+    if missing_targets:
+        problems.append(f"(c) LoRA targets matching no module: {missing_targets}")
+    summary["ok"] = not problems
+    summary["problems"] = problems
+    if problems:
+        raise AssertionError("QLoRA load check failed:\n  " + "\n  ".join(problems) + f"\n  summary: {summary}")
+    return summary
 
 
 def projector_module_names(model: Any) -> list[str]:
@@ -166,7 +268,7 @@ def apply_lora(
     target_modules: list[str] | None = None,
 ) -> Any:
     """Prepare quantized model and attach LoRA adapter."""
-    from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+    from peft import LoraConfig, get_peft_model
 
     if config:
         lora_cfg = config.training.lora
@@ -185,7 +287,7 @@ def apply_lora(
     )
 
     try:
-        model = prepare_model_for_kbit_training(model)
+        model = prepare_qlora_model(model)
     except Exception:
         pass
 

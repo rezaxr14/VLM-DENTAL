@@ -73,9 +73,13 @@ from dental_agent.training.sft import (
     wrap_spmd_model,
     unwrap_peft_model,
     freeze_and_guard_vision_tower,
+    restore_sft_checkpoint,
 )
-from dental_agent.model.backbone import get_model_classes, lora_coverage, lora_target_modules, projector_module_names
-from dental_agent.utils.canonical import SLOT_BUDGET, parse_slot_budget, slot_totals
+from dental_agent.model.backbone import (
+    get_model_classes, lora_coverage, lora_target_modules, prepare_qlora_model, projector_module_names, qlora_bnb_config,
+)
+from dental_agent.config import QLORA_SKIP_MODULES
+from dental_agent.utils.canonical import SLOT_BUDGET, add_letterbox_arg, check_gpu_image_policy, parse_slot_budget, set_letterbox, slot_totals
 from dental_agent.data.dev_split import load_dev_keys
 from dental_agent.training.run_meta import keys_fingerprint, write_sft_run_meta
 
@@ -222,8 +226,10 @@ def parse_args():
         action=argparse.BooleanOptionalAction,
         default=False,
         help="Show the model aspect-preserving canonical views (FULL 1536x768 / CROP 256x384 / COMPARE 512x384, "
-             "letterboxed); tools still run on the native image. Default: off (native resolution).",
+             "letterboxed by default, see --canonical-letterbox); tools still run on the native image. Default: off "
+             "(native resolution: the full image, only rounded to the processor's 32-pixel grid).",
     )
+    add_letterbox_arg(parser)
     parser.add_argument(
         "--pad-vision-to-slots",
         action=argparse.BooleanOptionalAction,
@@ -608,6 +614,8 @@ def run_training(index: int, args: argparse.Namespace):
         is_master = xm.is_master_ordinal()
 
     canonical_resize = args.canonical_resize
+    set_letterbox(args.canonical_letterbox)   # one value for the dataset, its DataLoader workers and the manifest check
+    check_gpu_image_policy(canonical_resize, args.canonical_letterbox, cuda=torch.cuda.is_available(), tpu=is_tpu, what="SFT")
     pad_vision_to_slots = args.pad_vision_to_slots
     slot_budget = parse_slot_budget(*args.vision_slots)
     static_vision_tokens = slot_totals(slot_budget)["tokens"]
@@ -615,6 +623,8 @@ def run_training(index: int, args: argparse.Namespace):
         raise SystemExit("--pad-vision-to-slots is TPU-only (static shapes avoid XLA recompilation). GPU/CPU runs pad dynamically; remove the flag.")
     if pad_vision_to_slots and not canonical_resize:
         raise SystemExit("--pad-vision-to-slots requires --canonical-resize (static slots assume canonical image sizes).")
+    if pad_vision_to_slots and not args.canonical_letterbox:
+        raise SystemExit("--pad-vision-to-slots requires --canonical-letterbox (static slots assume the fixed canonical canvas).")
     if pad_vision_to_slots and args.max_seq_len <= static_vision_tokens:
         raise SystemExit(
             f"--max-seq-len {args.max_seq_len} cannot hold the {static_vision_tokens} static vision tokens of "
@@ -630,7 +640,8 @@ def run_training(index: int, args: argparse.Namespace):
         text_capacity = args.max_seq_len - static_vision_tokens if pad_vision_to_slots else args.max_seq_len
         print("[CONFIG] "
               f"spmd={args.xla_spmd} fsdp={args.fsdp} canonical_resize={canonical_resize} "
-              f"pad_vision_to_slots={pad_vision_to_slots} "
+              + (f"canonical_letterbox={args.canonical_letterbox} " if canonical_resize else "")
+              + f"pad_vision_to_slots={pad_vision_to_slots} "
               + (f"vision_slots={args.vision_slots} static_vision_tokens={static_vision_tokens} text_capacity={text_capacity} "
                  if pad_vision_to_slots else "")
               + f"max_seq_len={args.max_seq_len} precision={args.precision} triangular_shim={args.triangular_shim}")
@@ -720,15 +731,11 @@ def run_training(index: int, args: argparse.Namespace):
     }
 
     if active_precision == "qlora":
-        from transformers import BitsAndBytesConfig
         # On Turing (T4), Pascal (P100), and older GPUs without native BF16, use float16 compute dtype
         bnb_compute_dtype = torch.bfloat16 if (torch.cuda.is_available() and torch.cuda.is_bf16_supported()) else torch.float16
-        load_kwargs["quantization_config"] = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_use_double_quant=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=bnb_compute_dtype,
-        )
+        # NF4 + double quantization + this compute dtype; the vision tower (projector included) and lm_head stay 16-bit
+        # (QLORA_SKIP_MODULES), the same list GRPO / evaluation / inference load with.
+        load_kwargs["quantization_config"] = qlora_bnb_config(bnb_compute_dtype)
         load_kwargs["device_map"] = "auto"
     elif not is_tpu and torch.cuda.is_available():
         load_kwargs["device_map"] = "auto"
@@ -775,9 +782,8 @@ def run_training(index: int, args: argparse.Namespace):
         pass
 
     if active_precision == "qlora":
-        from peft import prepare_model_for_kbit_training
         try:
-            model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=False)
+            model = prepare_qlora_model(model, use_gradient_checkpointing=False)
             if is_master:
                 print("[QLORA] Prepared 4-bit model for k-bit training (FP32 layernorms active).")
         except Exception as e:
@@ -831,6 +837,13 @@ def run_training(index: int, args: argparse.Namespace):
         )
 
     log_xla_memory("Post-Model Initialization & Sharding", is_master=is_master)
+    if is_master and not is_tpu and torch.cuda.is_available():
+        # Measured, not estimated: with --precision qlora, prepare_model_for_kbit_training upcasts every non-4-bit parameter
+        # (embeddings, lm_head, norms; the vision tower is restored to its loaded dtype) to fp32, which can be several GiB more than the 4-bit weights alone.
+        _dev = torch.device("cuda:0")
+        print(f"[MEMORY] CUDA after model load + LoRA: allocated {torch.cuda.memory_allocated(_dev) / 2**30:.1f} GiB, "
+              f"reserved {torch.cuda.memory_reserved(_dev) / 2**30:.1f} GiB of {torch.cuda.get_device_properties(_dev).total_memory / 2**30:.1f} GiB "
+              "(before any activations; the training bar's peak_gib shows the rest).")
 
     # Host RAM reclamation: force glibc to release unmapped model-loading heap memory back to the Linux kernel
     import gc, ctypes
@@ -872,7 +885,9 @@ def run_training(index: int, args: argparse.Namespace):
             track=args.track,
             stage=args.stage,
             precision=args.precision,
+            qlora_skip_modules=list(QLORA_SKIP_MODULES) if args.precision == "qlora" else None,
             canonical_resize=bool(canonical_resize),
+            canonical_letterbox=bool(args.canonical_letterbox),
             pad_vision_to_slots=bool(pad_vision_to_slots),
             vision_slots=list(args.vision_slots),
             max_seq_len=args.max_seq_len,
@@ -913,8 +928,24 @@ def run_training(index: int, args: argparse.Namespace):
     ws = get_xla_world_size(is_tpu)
     if use_spmd:
         global_batch_size = args.batch_size * args.num_cores
-        train_dataloader = DataLoader(train_dataset, batch_size=global_batch_size, shuffle=True, collate_fn=collator)
-        val_dataloader = DataLoader(val_dataset, batch_size=global_batch_size, shuffle=False, collate_fn=collator) if val_dataset else None
+        # drop_last: a batch whose size is not a multiple of the mesh is replicated instead of sharded (apply_spmd_input_sharding)
+        # and compiles a second graph at the full static length, with every core holding the whole batch (HBM out of memory at
+        # the end of the first epoch / the first evaluation). Which samples are dropped changes every epoch (shuffle).
+        train_dataloader = DataLoader(train_dataset, batch_size=global_batch_size, shuffle=True, collate_fn=collator, drop_last=True)
+        if len(train_dataloader) == 0:
+            raise SystemExit(f"[SPMD] {len(train_dataset)} training samples are fewer than one global batch of {global_batch_size} "
+                             f"(--batch-size {args.batch_size} x --num-cores {args.num_cores}).")
+        val_dataloader = (DataLoader(val_dataset, batch_size=global_batch_size, shuffle=False, collate_fn=collator, drop_last=True)
+                          if val_dataset else None)
+        if val_dataloader is not None and len(val_dataloader) == 0:
+            print(f"[SPMD WARNING] {len(val_dataset)} validation samples are fewer than one global batch of {global_batch_size}: "
+                  "validation (and best_adapter tracking) is off for this run.")
+            val_dataloader = None
+        if is_master:
+            kept = len(train_dataloader) * global_batch_size
+            print(f"[LOADER] SPMD global batch {global_batch_size}: {len(train_dataloader)} steps x {global_batch_size} = {kept} of "
+                  f"{len(train_dataset)} training samples per epoch ({len(train_dataset) - kept} dropped, reshuffled every epoch); "
+                  f"validation {len(val_dataloader) * global_batch_size if val_dataloader else 0} of {len(val_dataset) if val_dataset else 0}.")
     elif is_tpu and ws > 1:
         train_sampler = torch.utils.data.distributed.DistributedSampler(
             train_dataset,
@@ -934,7 +965,8 @@ def run_training(index: int, args: argparse.Namespace):
         weight_decay=0.01,
     )
 
-    total_update_steps = (len(train_dataloader) // args.gradient_accumulation_steps) * args.epochs
+    # the loop also updates at the last batch of an epoch, so a partial accumulation window counts as a step (ceil)
+    total_update_steps = -(-len(train_dataloader) // args.gradient_accumulation_steps) * args.epochs
     num_warmup_steps = max(int(total_update_steps * args.warmup_ratio), 1)
 
     from transformers import get_cosine_schedule_with_warmup
@@ -979,22 +1011,30 @@ def run_training(index: int, args: argparse.Namespace):
                             shutil.copytree(item, dst, dirs_exist_ok=True)
 
             if state_file.is_file():
-                with open(state_file, "r") as f:
-                    saved_state = json.load(f)
-                    total_steps = saved_state.get("step", 0)
-                    start_epoch = saved_state.get("epoch", 1)
-                    best_val_loss = saved_state.get("best_val_loss", float("inf"))
-                opt_path = out_path / "optimizer.pt"
-                if opt_path.is_file():
-                    optimizer.load_state_dict(torch.load(opt_path, map_location="cpu"))
-                sched_path = out_path / "scheduler.pt"
-                if sched_path.is_file():
-                    scheduler.load_state_dict(torch.load(sched_path, map_location="cpu"))
-                print(f"[RESUME] Resumed from HF at Epoch {start_epoch}, Step {total_steps} (best_val_loss={best_val_loss:.4f}).")
+                # Weights, optimizer moments and the schedule position come back together (restore_sft_checkpoint). A failure here is
+                # fatal: continuing would train a fresh LoRA under a resumed schedule and lose the progress without saying so.
+                try:
+                    restored = restore_sft_checkpoint(out_path, model, optimizer, scheduler)
+                except Exception as e:
+                    raise SystemExit(f"[RESUME FAILED] {out_path} holds a checkpoint that cannot be restored: {e}") from e
+                total_steps = restored["step"]
+                start_epoch = restored["epoch"]
+                best_val_loss = restored["best_val_loss"]
+                print(f"[RESUME] Resumed from HF at Epoch {start_epoch}, Step {total_steps} (best_val_loss={best_val_loss:.4f}); "
+                      f"{restored['tensors']} adapter tensors restored"
+                      + ("; the checkpoint was written mid-epoch, so this epoch restarts from its first batch." if restored["mid_epoch"] else "."))
+            else:
+                print(f"[RESUME] {args.resume_hf} holds no checkpoint for {path_in_repo}: starting at step 1.")
+        except SystemExit:
+            raise
         except Exception as e:
-            print(f"[RESUME WARNING] Could not resume from HF: {e}")
+            print(f"[RESUME WARNING] Could not download a checkpoint from HF ({e}); starting at step 1.")
 
-    def save_sft_checkpoint(epoch_num: int, is_preemption: bool = False):
+    # Epoch bookkeeping for exact resume: ``epoch`` in a checkpoint is the epoch to run NEXT; a checkpoint written inside an epoch
+    # (step push, SIGTERM) also records the step the epoch began at, so resume can restart that epoch consistently.
+    progress = {"epoch": start_epoch, "epoch_start_step": total_steps}
+
+    def save_sft_checkpoint(epoch_num: int, is_preemption: bool = False, mid_epoch: bool = False):
         state_data = {
             "step": total_steps,
             "epoch": epoch_num,
@@ -1002,6 +1042,8 @@ def run_training(index: int, args: argparse.Namespace):
             "stage": args.stage,
             "best_val_loss": best_val_loss,
             "preempted": is_preemption,
+            "mid_epoch": mid_epoch,
+            "epoch_start_step": progress["epoch_start_step"] if mid_epoch else total_steps,
         }
         if is_tpu:
             import torch_xla.core.xla_model as xm
@@ -1026,7 +1068,7 @@ def run_training(index: int, args: argparse.Namespace):
     def sigterm_handler(signum, frame):
         if is_master:
             print("\n[PREEMPTION] Caught SIGTERM signal! Flushing emergency checkpoint...")
-        save_sft_checkpoint(start_epoch, is_preemption=True)
+        save_sft_checkpoint(progress["epoch"], is_preemption=True, mid_epoch=True)   # the CURRENT epoch (start_epoch is where the run began)
         sys.exit(0)
 
     try:
@@ -1043,6 +1085,8 @@ def run_training(index: int, args: argparse.Namespace):
         print(f"\n[TRAIN] Beginning training: {len(train_dataset)} train samples, {val_size} val samples across {args.epochs} epochs...")
 
     for epoch in range(start_epoch, args.epochs + 1):
+        progress["epoch"] = epoch
+        progress["epoch_start_step"] = total_steps
         if train_sampler is not None:
             train_sampler.set_epoch(epoch)
 
@@ -1154,7 +1198,7 @@ def run_training(index: int, args: argparse.Namespace):
                     # Step-interval checkpoint push to HF Hub
                     save_at_steps = args.save_strategy in ("steps", "both")
                     if save_at_steps and args.hf_repo and args.push_every_steps > 0 and total_steps % args.push_every_steps == 0:
-                        save_sft_checkpoint(epoch)
+                        save_sft_checkpoint(epoch, mid_epoch=True)
 
         # ── Epoch-End: Guaranteed Validation & Checkpoint ──
         # Evaluate validation loss at every epoch boundary regardless of step-interval,
@@ -1223,9 +1267,9 @@ def resolve_sft_inputs(args: argparse.Namespace, is_tpu: bool) -> None:
         print(f"[INPUTS] Trace images: all {check.n_unique} resolve"
               + (f" ({check.fetched} fetched from the Hub)" if check.fetched else "") + ".")
 
-        status = inp.check_token_manifest(args.data_dir, files, args.canonical_resize)
+        status = inp.check_token_manifest(args.data_dir, files, args.canonical_resize, canonical_letterbox=args.canonical_letterbox)
         if status.state != "fresh":
-            cmd = inp.manifest_command(args.data_dir, args.canonical_resize, args.model_id, args.vision_slots)
+            cmd = inp.manifest_command(args.data_dir, args.canonical_resize, args.model_id, args.vision_slots, args.canonical_letterbox)
             msg = f"Token-length manifest {status.state}: " + "; ".join(status.reasons) + f". Recompute: {cmd}"
             if args.pad_vision_to_slots and is_tpu:   # off TPU the flag itself is rejected later ("TPU-only"); do not mask that clearer error
                 raise inp.InputNotFound("Fresh token-length manifest (needed to filter over-length traces under --pad-vision-to-slots)",

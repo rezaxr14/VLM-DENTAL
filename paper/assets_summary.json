@@ -1,0 +1,281 @@
+{
+  "corpus": {
+    "dentex_pathology": {
+      "file": "train_cot_traces_dentex.jsonl",
+      "traces": 678,
+      "images": 678,
+      "findings": 3529,
+      "healthy_traces": 0,
+      "avg_turns": 12.949852507374631,
+      "avg_tool_calls": 25.243362831858406,
+      "tool_counts": {
+        "window_level": 718,
+        "locate_tooth": 3894,
+        "zoom_crop": 7616,
+        "denoise": 681,
+        "nudge_crop": 1719,
+        "contralateral_compare": 1191,
+        "enhance_contrast": 644,
+        "fdi_label": 631,
+        "final_answer": 21
+      },
+      "clean_match_abs_err": 0.0
+    },
+    "dentex_healthy": {
+      "file": "train_cot_traces_healthy_dentex.jsonl",
+      "traces": 27,
+      "images": 27,
+      "findings": 0,
+      "healthy_traces": 27,
+      "avg_turns": 13.444444444444445,
+      "avg_tool_calls": 29.85185185185185,
+      "tool_counts": {
+        "locate_tooth": 383,
+        "enhance_contrast": 19,
+        "window_level": 30,
+        "zoom_crop": 294,
+        "contralateral_compare": 31,
+        "denoise": 23,
+        "nudge_crop": 18,
+        "fdi_label": 8
+      },
+      "clean_match_abs_err": null
+    },
+    "tufts_overlap": {
+      "file": "train_cot_traces_tufts.jsonl",
+      "traces": 202,
+      "images": 202,
+      "findings": 631,
+      "healthy_traces": 0,
+      "avg_turns": 11.970297029702971,
+      "avg_tool_calls": 18.004950495049506,
+      "tool_counts": {
+        "fdi_label": 200,
+        "locate_tooth": 885,
+        "window_level": 251,
+        "zoom_crop": 1417,
+        "enhance_contrast": 149,
+        "nudge_crop": 161,
+        "contralateral_compare": 368,
+        "denoise": 197,
+        "final_answer": 9
+      },
+      "clean_match_abs_err": null
+    },
+    "tufts_healthy": {
+      "file": "train_cot_traces_healthy_tufts.jsonl",
+      "traces": 660,
+      "images": 660,
+      "findings": 0,
+      "healthy_traces": 660,
+      "avg_turns": 12.793939393939393,
+      "avg_tool_calls": 27.0,
+      "tool_counts": {
+        "window_level": 794,
+        "locate_tooth": 9172,
+        "zoom_crop": 6046,
+        "enhance_contrast": 460,
+        "denoise": 438,
+        "contralateral_compare": 678,
+        "nudge_crop": 179,
+        "fdi_label": 48,
+        "localize_tooth": 2,
+        "final_answer": 1,
+        "localize": 1,
+        "localize tooth 13": 1
+      },
+      "clean_match_abs_err": null
+    },
+    "tufts_all_diseases": {
+      "file": "train_cot_traces_tufts_all.jsonl",
+      "traces": 280,
+      "images": 280,
+      "findings": 984,
+      "healthy_traces": 0,
+      "avg_turns": 11.678571428571429,
+      "avg_tool_calls": 17.757142857142856,
+      "tool_counts": {
+        "window_level": 349,
+        "locate_tooth": 1329,
+        "zoom_crop": 1919,
+        "contralateral_compare": 462,
+        "denoise": 271,
+        "enhance_contrast": 184,
+        "nudge_crop": 215,
+        "fdi_label": 230,
+        "final_answer": 13
+      },
+      "clean_match_abs_err": null
+    }
+  },
+  "corpus_totals": {
+    "total_traces": 1847,
+    "total_no_tools": 1847,
+    "total_findings": 5144,
+    "total_healthy": 687
+  },
+  "tool_totals": {
+    "window_level": 2142,
+    "locate_tooth": 15663,
+    "zoom_crop": 17292,
+    "denoise": 1610,
+    "nudge_crop": 2292,
+    "contralateral_compare": 2730,
+    "enhance_contrast": 1456,
+    "fdi_label": 1117,
+    "final_answer": 44,
+    "localize_tooth": 2,
+    "localize": 1,
+    "localize tooth 13": 1
+  },
+  "nudge_by_tier": {
+    "overall": {
+      "none": {
+        "n": 2338,
+        "n_shown_recovered": 2338,
+        "recovery_rate": 1.0,
+        "nudge_rate": 0.19375534644995723,
+        "corrected_rate": 0.011120615911035072,
+        "iou_before_mean": 1.0,
+        "iou_before_sd": 0.0,
+        "iou_after_mean": 0.2671874403089779,
+        "iou_after_sd": 0.17714125731802485,
+        "delta_mean": -0.7328125596910221,
+        "n_nudges_total": 531,
+        "n_corrective_total": 31,
+        "n_away_total": 32
+      },
+      "small": {
+        "n": 2809,
+        "n_shown_recovered": 2746,
+        "recovery_rate": 0.9775720897116411,
+        "nudge_rate": 0.125311498754005,
+        "corrected_rate": 0.07440370238519046,
+        "iou_before_mean": 0.4103526415784881,
+        "iou_before_sd": 0.158331914606959,
+        "iou_after_mean": 0.43802746240184387,
+        "iou_after_sd": 0.18462473841852872,
+        "delta_mean": 0.02767482082335576,
+        "n_nudges_total": 401,
+        "n_corrective_total": 223,
+        "n_away_total": 128
+      },
+      "big": {
+        "n": 3257,
+        "n_shown_recovered": 3147,
+        "recovery_rate": 0.9662265888854774,
+        "nudge_rate": 0.2539146453791833,
+        "corrected_rate": 0.20294749769726741,
+        "iou_before_mean": 0.09393435727221965,
+        "iou_before_sd": 0.07805773469888176,
+        "iou_after_mean": 0.23105991398328368,
+        "iou_after_sd": 0.1731665317615957,
+        "delta_mean": 0.13712555671106402,
+        "n_nudges_total": 1110,
+        "n_corrective_total": 811,
+        "n_away_total": 171
+      }
+    },
+    "gt_anchored": {
+      "none": {
+        "n": 2338,
+        "n_shown_recovered": 2338,
+        "recovery_rate": 1.0,
+        "nudge_rate": 0.19375534644995723,
+        "corrected_rate": 0.011120615911035072,
+        "iou_before_mean": 1.0,
+        "iou_before_sd": 0.0,
+        "iou_after_mean": 0.2671874403089779,
+        "iou_after_sd": 0.17714125731802485,
+        "delta_mean": -0.7328125596910221,
+        "n_nudges_total": 531,
+        "n_corrective_total": 31,
+        "n_away_total": 32
+      },
+      "small": {
+        "n": 1337,
+        "n_shown_recovered": 1316,
+        "recovery_rate": 0.9842931937172775,
+        "nudge_rate": 0.23111443530291698,
+        "corrected_rate": 0.13612565445026178,
+        "iou_before_mean": 0.45451495250666263,
+        "iou_before_sd": 0.09684617035853083,
+        "iou_after_mean": 0.4473715317762139,
+        "iou_after_sd": 0.1765701546014704,
+        "delta_mean": -0.007143420730448713,
+        "n_nudges_total": 353,
+        "n_corrective_total": 196,
+        "n_away_total": 113
+      },
+      "big": {
+        "n": 1493,
+        "n_shown_recovered": 1467,
+        "recovery_rate": 0.9825853985264568,
+        "nudge_rate": 0.4722036168787676,
+        "corrected_rate": 0.38379102478231747,
+        "iou_before_mean": 0.09502375878200467,
+        "iou_before_sd": 0.067241682706501,
+        "iou_after_mean": 0.24278278696369826,
+        "iou_after_sd": 0.17811889168691472,
+        "delta_mean": 0.1477590281816936,
+        "n_nudges_total": 980,
+        "n_corrective_total": 718,
+        "n_away_total": 147
+      }
+    },
+    "detector_anchored": {
+      "none": {
+        "n": 0,
+        "n_shown_recovered": 0,
+        "recovery_rate": 0.0,
+        "nudge_rate": 0.0,
+        "corrected_rate": 0.0,
+        "iou_before_mean": 0.0,
+        "iou_before_sd": 0.0,
+        "iou_after_mean": null,
+        "iou_after_sd": 0.0,
+        "delta_mean": null,
+        "n_nudges_total": 0,
+        "n_corrective_total": 0,
+        "n_away_total": 0
+      },
+      "small": {
+        "n": 1472,
+        "n_shown_recovered": 1430,
+        "recovery_rate": 0.9714673913043478,
+        "nudge_rate": 0.029211956521739132,
+        "corrected_rate": 0.018342391304347828,
+        "iou_before_mean": 0.3697109624306017,
+        "iou_before_sd": 0.18993602227713788,
+        "iou_after_mean": 0.37504151328572033,
+        "iou_after_sd": 0.2256531297745719,
+        "delta_mean": 0.005330550855118632,
+        "n_nudges_total": 48,
+        "n_corrective_total": 27,
+        "n_away_total": 15
+      },
+      "big": {
+        "n": 1764,
+        "n_shown_recovered": 1680,
+        "recovery_rate": 0.9523809523809523,
+        "nudge_rate": 0.0691609977324263,
+        "corrected_rate": 0.049886621315192746,
+        "iou_before_mean": 0.09298307631099666,
+        "iou_before_sd": 0.08641117829827005,
+        "iou_after_mean": 0.1547280251449025,
+        "iou_after_sd": 0.10997592556862873,
+        "delta_mean": 0.06174494883390584,
+        "n_nudges_total": 130,
+        "n_corrective_total": 93,
+        "n_away_total": 24
+      }
+    }
+  },
+  "perturbation_example": {
+    "image_id": 127,
+    "file": "train_263.png",
+    "tooth_gain": 0.8719222467538166,
+    "iou_before": 0.06565504420546292,
+    "iou_after": 0.9375772909592796
+  }
+}

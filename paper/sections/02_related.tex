@@ -1,0 +1,53 @@
+% ---------------------------------------------------------------------------
+\section{Related Work}
+\label{sec:related}
+
+\paragraph{Supervised dental AI.}
+The dominant paradigm in dental radiograph analysis is narrow, single-task supervised learning:
+CNN and Faster R-CNN cephalometric landmark detectors, U-Net-style segmentation, FDI tooth-numbering
+classifiers, and YOLO-family or Faster R-CNN detectors for caries, periapical lesions, and
+impactions \citep{hamamci2024dentex}. The DENTEX benchmark consolidated this into a hierarchical
+quadrant--enumeration--diagnosis task with expert-verified labels \citep{hamamci2024dentex} and
+remains the most structured public benchmark for our problem. Across this literature the model
+is a single forward pass trained end-to-end on labels; none of it plans, calls tools, or can
+request a closer look at an ambiguous region. A systematic review of public dental imaging
+datasets \citep{uribe2024systematic} screened 131{,}028 records and found only 16 datasets
+meeting a minimal bar --- the data scarcity that motivates our synthetic-trace approach.
+
+\paragraph{Reinforcement-learned reasoning in medical VLMs.}
+Following the GRPO recipe \citep{deepseek2025r1}, \citet{hu2025medvlmr1} fine-tuned a 2B VLM with
+GRPO on a few hundred examples and reported large gains over zero-shot across MRI, CT, and X-ray
+VQA; Med-R1 extended this across eight modalities and found that lengthening the chain of thought
+does not reliably improve accuracy --- reward alignment matters more than reasoning length
+\citep{wang2025medr1}. HuatuoGPT-o1 \citep{chen2024huatuo} and OpenMedReason
+\citep{openmedreason2026} build reasoning supervision by using a frontier model purely as a
+\emph{verifier} of evidence-grounded traces. None of this work calls tools: the reasoning is
+textual, conditioned on one static image.
+
+\paragraph{Agentic tool use in VLMs.}
+MMedAgent trains an LLM to select among grounding, segmentation, and report tools
+\citep{li2024mmedagent}; OctoTools generalizes the orchestration pattern \citep{zhang2025octotools}.
+Closest in spirit is VTool-R1 \citep{wu2026vtool}, which trains a VLM with GRPO to call
+Python-based visual-editing tools mid-reasoning, improving chart/table QA from 64.7\% to 71.7\%.
+Its tools are generic image-editing primitives, its reward is a single outcome-accuracy term, and
+its domain is not medical. Two concurrent dental systems must be addressed directly.
+\textbf{OralGPT-Plus} \citep{oralgptplus2026} pairs trained CoT, two callable image tools
+(zoom-in, contralateral mirror), and GRPO-style RL with a composite reward --- the closest
+concurrent work, but it evaluates on its own benchmark with an LLM-judge-scored reward (whose
+documented reward-hacking failure mode motivates our ground-truth-anchored accuracy term,
+\cref{sec:reward}) and does not cleanly separate tool-use from RL effects.
+\textbf{OralAgent} \citep{oralagent2026} is a broader prompted ReAct orchestrator around an
+off-the-shelf model, not an RL-trained tool-use policy. Neither system gives the policy a way to
+correct a tool's output --- the mechanism this paper is built around. We therefore position this
+work as \emph{among the first} RL-fine-tuned tool-augmented agentic VLMs for dental imaging, and
+specifically the first with DENTEX-native, leaderboard-comparable evaluation, a clean two-factor
+ablation design (tools vs.\ RL), and a self-correcting grounding loop.
+
+\paragraph{Synthetic reasoning traces without clinicians.}
+Frontier LLMs can generate and verify reasoning-trace training data of sufficient quality for
+downstream fine-tuning \citep{chen2024huatuo,openmedreason2026}, replacing prospective expert
+annotation with expert-\emph{verified benchmark labels} plus cross-model automated checks. We
+extend this pattern to \emph{multi-turn tool-use} traces: the demonstrator operates a real tool
+suite under real tool feedback (including deliberately imperfect tool output, \cref{sec:perturbation}),
+and an independent cross-family verifier audits every trace against expert labels before it
+enters the training set.

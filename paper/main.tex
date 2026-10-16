@@ -1,0 +1,84 @@
+\documentclass[11pt]{article}
+
+% ---------------------------------------------------------------------------
+% Preamble
+% ---------------------------------------------------------------------------
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage[margin=1in]{geometry}
+\usepackage{microtype}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage[font=small,labelfont=bf]{caption}
+\usepackage[round,authoryear]{natbib}
+\usepackage[colorlinks=true,linkcolor=blue!60!black,citecolor=blue!60!black,urlcolor=blue!60!black]{hyperref}
+\usepackage[nameinlink,capitalize]{cleveref}
+
+\graphicspath{{figures/pdf/}}
+
+% Pending-result marker: every unfilled number in the draft is explicit.
+\newcommand{\todo}[1]{\textcolor{red}{\textbf{[#1]}}}
+
+\title{\textbf{Look Again: Self-Correcting Tool Use for\\ Panoramic Dental Radiograph Diagnosis}}
+
+\author{%
+  Reza Nadimi\thanks{Corresponding author. \todo{Affiliations and co-author list to be
+  finalized.}}\\
+  \todo{affiliations}
+}
+\date{October 2026}
+
+% ---------------------------------------------------------------------------
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Vision-language models (VLMs) applied zero-shot to panoramic dental radiographs fail
+structurally: the best frontier models reach only 36--46\% exact-match accuracy against expert
+labels, an 11B generalist falls below the majority-class floor, and calibration is poor
+(ECE up to 0.68), because a single static forward pass cannot zoom into sub-patch pathology,
+resolve the modality's left/right display convention, or verify an anatomical hypothesis before
+committing to it. We present \textbf{VLM-DENTAL}, an agentic VLM trained on the DENTEX benchmark
+around a different contract between the policy and its tools: \emph{grounding is a hypothesis to
+interrogate, not an answer to trust}. Concretely, (1) the policy can correct its learned
+grounding tool via \texttt{nudge\_crop}, a data-only tool taking box-relative fractional shifts
+and rescales that a VLM can reason about linguistically; (2) a \emph{tiered perturbation}
+mechanism makes this skill learnable from synthetic demonstrations --- the demonstrator
+experiences deliberately imperfect tool output (45\% clean / 25\% small / 30\% large offsets,
+decoupled from the detector's real error rate so demonstrations never go stale, and never
+announced verbally so the skill survives to inference time); (3) the eight-tool interface
+exposes continuous effect parameters (denoise strength, window center/width, contrast factor,
+crop context), so tool calls carry \emph{how much}, not just \emph{which}; and (4) GRPO
+reinforcement learning uses a ground-truth-anchored composite reward with multi-finding
+set-matching whose efficiency term exempts locate-and-correct calls, so the reward never prices
+out the behavior it teaches. A corpus-level analysis of 3{,}694 verified, decontaminated
+synthetic traces shows the perturbation mechanism elicits a clean judgment gradient ---
+corrective nudges on 38.4\% of large tool errors, 13.6\% of ambiguous ones, and 1.1\% of clean
+outputs (ground-truth-anchored pathology locates), with recoveries up to IoU 0.07 $\to$ 0.94
+--- demonstrating genuine visually-driven
+self-correction rather than scripted steps. Evaluation uses DENTEX-native, leaderboard-comparable
+set-matched metrics with paired bootstrap intervals and a frozen, leak-free protocol; end-to-end
+training results are reported as runs complete. We position the work relative to concurrent
+dental agentic systems and release the corpus, audit tooling, and all figure/table sources for
+regenerability.
+\end{abstract}
+
+\input{sections/01_intro}
+\input{sections/02_related}
+\input{sections/03_method}
+\input{sections/04_experiments}
+\input{sections/05_limitations}
+\input{sections/06_conclusion}
+
+\bibliographystyle{plainnat}
+\bibliography{refs}
+
+\appendix
+\input{sections/07_appendix}
+
+\end{document}
