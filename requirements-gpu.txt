@@ -4,6 +4,9 @@
 # layers to Triton kernels, which cannot run on XLA tensors (and would bypass the TPU solve_triangular shim).
 # Without these packages transformers falls back to a pure-PyTorch implementation that is much slower on a GPU.
 
+
+#pip install --no-deps "https://github.com/ETOgaosion/verl-wheelhouse-mirror/releases/download/flash-attention-v2.8.3-py3.12-torch2.13.0/flash_attn-2.8.3-cp312-cp312-linux_x86_64.whl"
+
 flash-linear-attention==0.5.2
 # Optional (compiled from source, needs nvcc): pip install causal-conv1d==1.7.0 --no-build-isolation
 bitsandbytes==0.50.0   # --precision qlora

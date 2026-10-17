@@ -720,8 +720,10 @@ def run_training(index: int, args: argparse.Namespace):
             if torch.cuda.get_device_capability()[0] >= 8:
                 import flash_attn
                 attn_impl = "flash_attention_2"
-        except Exception:
+        except Exception as e:
+            print(f"\n\n[ATTN WARNING] flash_attn unavailable ({e!r}); falling back to sdpa\n\n")
             attn_impl = "sdpa"
+    print(f"\n[ATTN] Using attn_implementation={attn_impl}")
 
     load_kwargs: Dict[str, Any] = {
         "trust_remote_code": True,
