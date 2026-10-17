@@ -949,6 +949,108 @@ def build_input_geometry(a):
     return svg(1120, 720, "".join(p))
 
 
+def build_pipeline(a):
+    """Pipeline overview, rebuilt with real radiograph pixels (image 624 assets)."""
+    p = []
+    p.append(T(480, 26, "VLM-DENTAL: synthetic trace synthesis and two-stage training pipeline", size=14.5, weight="bold"))
+
+    # ---- row 1: trace synthesis -------------------------------------------
+    # A: public datasets (real OPG pixels)
+    p.append(R(18, 64, 152, 132, fill=C_BLUE_FILL, stroke=C_BLUE, sw=1.5))
+    p.append(T(94, 86, "Public datasets", size=12, weight="bold"))
+    p.append(IMG(28, 94, 132, 62, a["opg"]))
+    p.append(R(28, 94, 132, 62, rx=0, stroke="#666666", sw=1.0, fill="none"))
+    p.append(T(94, 174, "DENTEX + Tufts", size=10.2))
+    p.append(T(94, 188, "expert labels (FDI)", size=10.2))
+
+    p.append(arrow([(170, 124), (202, 124)], color="#666666", sw=1.5))
+
+    # B: teacher loop (real tool-output pixels: full OPG, canonical crop, real
+    # contralateral composite returned by tool_contralateral_compare)
+    p.append(R(206, 40, 306, 200, rx=8, fill="#FBF6F0", stroke="#DD8452", sw=1.5))
+    p.append(T(359, 60, "Trace generation: LangGraph agent loop", size=12, weight="bold"))
+    p.append(T(359, 76, "frontier teacher via rate-limited provider pool", size=9.6))
+    p.append(T(359, 89, "ground-truth-directed agent loop", size=9.6))
+    p.append(IMG(244, 96, 110, 52, a["opg"]))
+    p.append(R(244, 96, 110, 52, rx=0, stroke="#888888", sw=0.9, fill="none"))
+    p.append(IMG(362, 96, 35, 52, a["canon_crop"]))
+    p.append(R(362, 96, 35, 52, rx=0, stroke="#888888", sw=0.9, fill="none"))
+    p.append(IMG(405, 96, 69, 52, a["canon_compare"]))
+    p.append(R(405, 96, 69, 52, rx=0, stroke="#888888", sw=0.9, fill="none"))
+    p.append(T(359, 164, "reasoning turns interleaved with real tool output", size=9.6, fill=C_SUB))
+    p.append(T(359, 182, "8 tools: zoom_crop - window_level - denoise - enhance_contrast -", size=9.4))
+    p.append(T(359, 195, "contralateral_compare - locate_tooth - fdi_label - nudge_crop", size=9.4))
+    p.append(R(226, 204, 266, 22, rx=4, fill="#FDEBE6", stroke=C_RED, sw=1.2))
+    p.append(T(359, 219, "tiered perturbation of the box shown to the teacher", size=9.6, weight="bold", fill=C_RED))
+
+    p.append(arrow([(512, 130), (544, 130)], color="#666666", sw=1.5))
+
+    # C: verification
+    p.append(R(548, 64, 172, 132, fill=C_GREEN_FILL, stroke=C_GREEN, sw=1.5))
+    p.append(T(634, 86, "Verification", size=12, weight="bold"))
+    p.append(T(634, 106, "independent, cross-family", size=9.8))
+    p.append(T(634, 120, "verifier vs expert labels;", size=9.8))
+    p.append(T(634, 134, "repair-and-re-verify loop", size=9.8))
+    p.append(T(634, 150, "dual-gate directive audit", size=9.8))
+    p.append(T(634, 172, "92 first-pass rejections,", size=9.2, fill=C_SUB))
+    p.append(T(634, 185, "3 measured failure modes", size=9.2, fill=C_SUB))
+
+    p.append(arrow([(720, 130), (752, 130)], color="#666666", sw=1.5))
+
+    # D: verified corpus
+    p.append(R(756, 64, 186, 132, fill=C_BLUE_FILL, stroke=C_BLUE, sw=1.5))
+    p.append(T(849, 86, "Verified corpus", size=12, weight="bold"))
+    p.append(T(849, 106, "3,694 traces = 1,847 + 1,847", size=9.8))
+    p.append(T(849, 120, "two arms, exact 1:1 parity", size=9.8))
+    p.append(T(849, 134, "5 cohorts, 2 institutions", size=9.8))
+    p.append(T(849, 148, "44,350 real tool calls", size=9.8))
+    p.append(T(849, 172, "0 directive leaks", size=9.8, weight="bold", fill=C_GREEN_D))
+
+    # elbow: corpus -> SFT
+    p.append(L(849, 196, 849, 246, color="#666666", sw=1.5))
+    p.append(L(849, 246, 242, 246, color="#666666", sw=1.5))
+    p.append(arrow([(242, 246), (242, 280)], color="#666666", sw=1.5))
+
+    # ---- row 2: two-stage training ----------------------------------------
+    p.append(R(140, 284, 204, 104, fill=C_BLUE_FILL, stroke=C_BLUE, sw=1.5))
+    p.append(T(242, 306, "Stage 1 -- SFT", size=12, weight="bold"))
+    p.append(T(242, 326, "QLoRA on Qwen3.5-9B", size=10))
+    p.append(T(242, 344, "multi-turn trajectories interleave", size=9.8))
+    p.append(T(242, 358, "the real crops the tools produced;", size=9.8))
+    p.append(T(242, 372, "loss masked to assistant tokens", size=9.8))
+
+    p.append(arrow([(344, 336), (378, 336)], color="#666666", sw=1.5))
+
+    p.append(R(380, 280, 272, 112, rx=8, fill="#FBF6F0", stroke="#DD8452", sw=1.5))
+    p.append(T(516, 302, "Stage 2 -- GRPO", size=12, weight="bold"))
+    p.append(T(516, 322, "ground-truth-anchored composite reward:", size=9.8))
+    p.append(T(516, 337, "multi-finding F1 accuracy - format - tool validity", size=9.8))
+    p.append(T(516, 352, "- complexity-scaled efficiency", size=9.8))
+    p.append(T(516, 374, "locate_tooth and nudge_crop exempt from call cost", size=9.5, weight="bold", fill=C_RED))
+
+    p.append(arrow([(652, 336), (686, 336)], color="#666666", sw=1.5))
+
+    p.append(R(688, 284, 116, 104, fill=C_GREEN_FILL, stroke=C_GREEN, sw=1.5))
+    p.append(T(746, 306, "Policy", size=12, weight="bold"))
+    p.append(T(746, 326, "self-correcting", size=10))
+    p.append(T(746, 342, "tool-use agent", size=10))
+
+    p.append(arrow([(804, 336), (838, 336)], color="#666666", sw=1.5))
+
+    p.append(R(840, 284, 102, 104, fill=C_BLUE_FILL, stroke=C_BLUE, sw=1.5))
+    p.append(T(891, 306, "Eval", size=12, weight="bold"))
+    p.append(T(891, 326, "DENTEX-native", size=9.8))
+    p.append(T(891, 342, "metrics,", size=9.8))
+    p.append(T(891, 358, "ablations", size=9.8))
+
+    # ---- footnotes ----------------------------------------------------------
+    p.append(T(480, 424, "One agent loop, one tool dispatcher, one image-input geometry (native, or canonical views when training on TPU)", size=9.6, fill="#666666"))
+    p.append(T(480, 440, "across trace generation, RL rollouts, and evaluation; tool calls execute for real against the source image at every stage.", size=9.6, fill="#666666"))
+    p.append(T(480, 464, "During trace generation only: locate_tooth returns the expert-verified box for annotated teeth, and the perturbation hook independently perturbs the box shown.", size=9.0, fill=C_MUT))
+
+    return svg(960, 500, "".join(p))
+
+
 # ---------------------------------------------------------------------------
 
 
@@ -960,6 +1062,7 @@ BUILDERS = {
     "fig_datasets.svg": build_dataset_catalog,
     "fig_grounding_cv.svg": build_grounding_cv,
     "fig_input_geometry.svg": build_input_geometry,
+    "fig_pipeline.svg": build_pipeline,
 }
 
 

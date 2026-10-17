@@ -56,8 +56,9 @@ intended behavior gradient in 3{,}694 generated demonstrations: corrective use o
 and 1.1\% of clean boxes, on ground-truth-anchored pathology locates.
 \item \textbf{A tool interface with continuous parameters (\cref{sec:tools}).} Tools expose
 \emph{how much} effect to apply, not just which tool to call: \texttt{denoise(strength
-$\in[0,1]$)}, \texttt{window\_level(center, width)} as an override on top of presets,
-\texttt{enhance\_contrast(factor)}, \texttt{zoom\_crop(padding\_frac)}. Tool calls therefore
+$\in[0,1]$)}, \texttt{window\_level} with exact \texttt{center}/\texttt{width} values as an
+override on top of presets, a multiplicative \texttt{enhance\_contrast} factor, and a tunable
+\texttt{zoom\_crop} context margin. Tool calls therefore
 carry real information beyond tool identity, and the policy can match processing intensity to
 image characteristics.
 \item \textbf{A ground-truth-anchored, correction-friendly reward (\cref{sec:reward}).} GRPO

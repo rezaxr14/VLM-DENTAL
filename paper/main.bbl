@@ -1,0 +1,139 @@
+\begin{thebibliography}{17}
+\providecommand{\natexlab}[1]{#1}
+\providecommand{\url}[1]{\texttt{#1}}
+\expandafter\ifx\csname urlstyle\endcsname\relax
+  \providecommand{\doi}[1]{doi: #1}\else
+  \providecommand{\doi}{doi: \begingroup \urlstyle{rm}\Url}\fi
+
+\bibitem[Baghbanzadeh et~al.(2026)Baghbanzadeh, Sarkar, Colacci, Badawi,
+  Fallahpour, Afkanpour, Sigal, Etemad, and Dolatabadi]{openmedreason2026}
+Negin Baghbanzadeh, Pritam Sarkar, Michael Colacci, Abeer Badawi, Adibvafa
+  Fallahpour, Arash Afkanpour, Leonid Sigal, Ali Etemad, and Elham Dolatabadi.
+\newblock {OpenMedReason}: Scientific reasoning supervision for medical
+  vision-language models.
+\newblock \emph{arXiv preprint arXiv:2606.12169}, 2026.
+
+\bibitem[Bai et~al.(2025)Bai, Chen, Liu, Wang, Ge, Song, Dang, Wang, Wang,
+  Tang, Zhong, Zhu, Yang, Li, Wan, Wang, Ding, Fu, Xu, Ye,
+  et~al.]{bai2025qwen25vl}
+Shuai Bai, Keqin Chen, Xuejing Liu, Ruiqi Wang, Wenbin Ge, Sibo Song, Kai Dang,
+  Peng Wang, Shijie Wang, Jun Tang, Humen Zhong, Yuanzhi Zhu, Mingkun Yang,
+  Zhaohai Li, Jianqiang Wan, Pengfei Wang, Wei Ding, Zheren Fu, Yiheng Xu,
+  Jiabo Ye, et~al.
+\newblock {Qwen3-VL} technical report.
+\newblock \emph{arXiv preprint arXiv:2511.21631}, 2025.
+
+\bibitem[Chen et~al.(2024)]{chen2024huatuo}
+Junying Chen et~al.
+\newblock {HuatuoGPT-o1}, towards medical complex reasoning with {LLMs}.
+\newblock \emph{arXiv preprint arXiv:2412.18925}, 2024.
+
+\bibitem[{DeepSeek-AI}(2025)]{deepseek2025r1}
+{DeepSeek-AI}.
+\newblock {DeepSeek-R1}: Incentivizing reasoning capability in {LLMs} via
+  reinforcement learning.
+\newblock \emph{arXiv preprint arXiv:2501.12948}, 2025.
+\newblock Introduces and popularizes GRPO for reasoning LLMs.
+
+\bibitem[Dettmers et~al.(2023)Dettmers, Pagnoni, Holtzman, and
+  Zettlemoyer]{dettmers2023qlora}
+Tim Dettmers, Artidoro Pagnoni, Ari Holtzman, and Luke Zettlemoyer.
+\newblock {QLoRA}: Efficient finetuning of quantized {LLMs}.
+\newblock In \emph{Advances in Neural Information Processing Systems
+  (NeurIPS)}, 2023.
+
+\bibitem[Fan et~al.(2026)Fan, Hao, Chen, Bao, Shao, Liang, Hung, and
+  Tang]{oralgptplus2026}
+Yuxuan Fan, Jing Hao, Hong Chen, Jiahao Bao, Yihua Shao, Yuci Liang, Kuo~Feng
+  Hung, and Hao Tang.
+\newblock {OralGPT-Plus}: Learning to use visual tools via reinforcement
+  learning for panoramic x-ray analysis.
+\newblock In \emph{Proceedings of the IEEE/CVF Conference on Computer Vision
+  and Pattern Recognition (CVPR)}, 2026.
+\newblock arXiv:2603.06366; concurrent work; evaluates on MMOral-X with an
+  LLM-judge-scored reward.
+
+\bibitem[Guo et~al.(2017)Guo, Pleiss, Sun, and Weinberger]{guo2017calibration}
+Chuan Guo, Geoff Pleiss, Yu~Sun, and Kilian~Q. Weinberger.
+\newblock On calibration of modern neural networks.
+\newblock In \emph{International Conference on Machine Learning (ICML)}, 2017.
+
+\bibitem[Hamamci et~al.(2024)Hamamci, Er, Simsar, Yuksel,
+  et~al.]{hamamci2024dentex}
+Ibrahim~Ethem Hamamci, Sezgin Er, Enis Simsar, Atif~Emre Yuksel, et~al.
+\newblock {DENTEX}: An abnormal tooth detection with enumeration and diagnosis
+  benchmark for panoramic dental radiographs.
+\newblock In \emph{Medical Image Computing and Computer Assisted Intervention
+  (MICCAI)}, 2024.
+\newblock arXiv:2305.19112; DENTEX 2023 challenge; hierarchical
+  quadrant--enumeration--diagnosis task.
+
+\bibitem[Hao et~al.(2026)Hao, Dai, Zhang, Liang, Wu, Bao, Fan,
+  et~al.]{oralagent2026}
+Jing Hao, Siyuan Dai, Yongxin Zhang, Yuci Liang, Jiamin Wu, Jiahao Bao, Yuxuan
+  Fan, et~al.
+\newblock {OralAgent}: Integrating reasoning, tools, and knowledge for
+  interactive dental image analysis.
+\newblock \emph{arXiv preprint arXiv:2605.27378}, 2026.
+\newblock Concurrent work; ReAct-orchestrated specialist tools with RAG over
+  dental textbooks; evaluated on MMOral-Uni / MMOral-OPG / OralQA-ZH, not
+  DENTEX.
+
+\bibitem[Hu et~al.(2025)]{hu2025medvlmr1}
+Ziqian Hu et~al.
+\newblock {MedVLM-R1}: Incentivizing multimodal medical reasoning capability of
+  vision-language models via reinforcement learning.
+\newblock \emph{arXiv preprint arXiv:2502.19645}, 2025.
+
+\bibitem[Kuhn(1955)]{kuhn1955hungarian}
+Harold~W. Kuhn.
+\newblock The {Hungarian} method for the assignment problem.
+\newblock \emph{Naval Research Logistics Quarterly}, 2:\penalty0 83--97, 1955.
+
+\bibitem[Lai et~al.(2026)Lai, Zhong, Li, Zhao, Li, Psounis, and
+  Yang]{wang2025medr1}
+Yuxiang Lai, Jike Zhong, Ming Li, Shitian Zhao, Yuheng Li, Konstantinos
+  Psounis, and Xiaofeng Yang.
+\newblock {Med-R1}: Reinforcement learning for generalizable medical reasoning
+  in vision-language models.
+\newblock \emph{IEEE Transactions on Medical Imaging}, 2026.
+\newblock arXiv:2503.13939.
+
+\bibitem[Li et~al.(2024)Li, Xiao, Li, et~al.]{li2024mmedagent}
+Junying Li, Zhenyang Xiao, Chunjiang Li, et~al.
+\newblock {MMedAgent}: Learning to use medical tools with multi-modal agent.
+\newblock \emph{arXiv preprint arXiv:2407.02483}, 2024.
+
+\bibitem[Lu et~al.(2025)Lu, Chen, Liu, Thapa, Boen, and
+  Zou]{zhang2025octotools}
+Pan Lu, Bowen Chen, Sheng Liu, Rahul Thapa, Joseph Boen, and James Zou.
+\newblock {OctoTools}: An agentic framework with extensible tools for complex
+  reasoning.
+\newblock \emph{arXiv preprint arXiv:2502.11271}, 2025.
+\newblock Accepted to ACL 2026.
+
+\bibitem[{Tufts University School of Dental Medicine}(2023)]{tuftsdatabase}
+{Tufts University School of Dental Medicine}.
+\newblock The tufts dental database, 2023.
+\newblock 1,000 expert-annotated panoramic radiographs; registration-gated
+  access.
+
+\bibitem[Uribe et~al.(2024)]{uribe2024systematic}
+Sergio~E. Uribe et~al.
+\newblock Systematic review of publicly available dental imaging datasets.
+\newblock \emph{Journal of Dental Research}, 103\penalty0 (13):\penalty0
+  1365--1374, 2024.
+\newblock PMC11633071; screened 131,028 records, identified 16 public datasets.
+
+\bibitem[Wu et~al.(2026)Wu, Yang, Jiang, Li, Yan, Yu, Zhang, Zhai, and
+  Nahrstedt]{wu2026vtool}
+Mingyuan Wu, Jingcheng Yang, Jize Jiang, Meitang Li, Kaizhuo Yan, Hanchao Yu,
+  Minjia Zhang, Chengxiang Zhai, and Klara Nahrstedt.
+\newblock {VTool-R1}: {VLMs} learn to think with images via reinforcement
+  learning on multimodal tool use.
+\newblock In \emph{International Conference on Learning Representations
+  (ICLR)}, 2026.
+\newblock arXiv:2505.19255; GRPO-trained visual tool use; chart/table QA,
+  64.7\% -> 71.7\% over zero-shot.
+
+\end{thebibliography}

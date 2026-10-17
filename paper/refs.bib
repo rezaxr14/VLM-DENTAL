@@ -6,13 +6,13 @@
 % ----------------------------- Benchmark & datasets -----------------------------
 
 @inproceedings{hamamci2024dentex,
-  author    = {Hamamci, Erhan Basaran and Erden, Enis and Sekuboyina, Anjany and others},
+  author    = {Hamamci, Ibrahim Ethem and Er, Sezgin and Simsar, Enis and Yuksel, Atif Emre and others},
   title     = {{DENTEX}: An Abnormal Tooth Detection with Enumeration and Diagnosis Benchmark for Panoramic Dental Radiographs},
   booktitle = {Medical Image Computing and Computer Assisted Intervention (MICCAI)},
   year      = {2024},
-  note      = {DENTEX 2023 challenge; hierarchical quadrant--enumeration--diagnosis task},
+  note      = {arXiv:2305.19112; DENTEX 2023 challenge; hierarchical quadrant--enumeration--diagnosis task},
 }
-% TODO-verify: exact author list, arXiv ID, and venue for the DENTEX challenge paper.
+% Verified against the arXiv listing via the OralGPT-Plus reference list.
 
 @article{uribe2024systematic,
   author  = {Uribe, Sergio E. and others},
@@ -37,13 +37,14 @@
 % ----------------------------- Backbone & training ------------------------------
 
 @article{bai2025qwen25vl,
-  author  = {Bai, Shuai and others},
-  title   = {{Qwen2.5-VL} Technical Report},
-  journal = {arXiv preprint arXiv:2502.13923},
+  author  = {Bai, Shuai and Chen, Keqin and Liu, Xuejing and Wang, Ruiqi and Ge, Wenbin and Song, Sibo and Dang, Kai and Wang, Peng and Wang, Shijie and Tang, Jun and Zhong, Humen and Zhu, Yuanzhi and Yang, Mingkun and Li, Zhaohai and Wan, Jianqiang and Wang, Pengfei and Ding, Wei and Fu, Zheren and Xu, Yiheng and Ye, Jiabo and others},
+  title   = {{Qwen3-VL} Technical Report},
+  journal = {arXiv preprint arXiv:2511.21631},
   year    = {2025},
 }
-% TODO-verify: the project trains Qwen3.5-9B; cite the corresponding Qwen3.5-VL
-% technical report once confirmed (the 2.5-VL report is the closest verified ancestor).
+% NOTE: fine-tuned backbone is Qwen3.5-9B; this is the closest verified Qwen-VL
+% technical report (Qwen3-VL, Nov 2025). Replace with a Qwen3.5-VL report if and
+% when one is published.
 
 @inproceedings{hu2022lora,
   author    = {Hu, Edward J. and Shen, Yelong and Wallis, Phillip and Allen-Zhu, Zeyuan and Li, Yuanzhi and Wang, Shean and Wang, Lu and Chen, Weizhu},
@@ -107,12 +108,13 @@
 % TODO-verify: exact author list.
 
 @article{wang2025medr1,
-  author  = {Wang, Yuezhou and others},
-  title   = {{Med-R1}: Reinforcement Learning for Trustworthy Vision-Language Models in Medicine},
-  journal = {arXiv preprint},
-  year    = {2025},
+  author  = {Lai, Yuxiang and Zhong, Jike and Li, Ming and Zhao, Shitian and Li, Yuheng and Psounis, Konstantinos and Yang, Xiaofeng},
+  title   = {{Med-R1}: Reinforcement Learning for Generalizable Medical Reasoning in Vision-Language Models},
+  journal = {IEEE Transactions on Medical Imaging},
+  year    = {2026},
+  note    = {arXiv:2503.13939},
 }
-% TODO-verify: exact arXiv ID and author list.
+% Verified via arXiv/IEEE TMI listing; bib key kept as wang2025medr1 for tex stability.
 
 @article{chen2024huatuo,
   author  = {Chen, Junying and others},
@@ -120,61 +122,60 @@
   journal = {arXiv preprint arXiv:2412.18925},
   year    = {2024},
 }
-% TODO-verify: exact arXiv ID.
 
 @article{openmedreason2026,
-  author  = {others},
-  title   = {{OpenMedReason}: Verifier-Filtered Reasoning Supervision for Medical Vision-Language Models},
-  journal = {arXiv preprint},
+  author  = {Baghbanzadeh, Negin and Sarkar, Pritam and Colacci, Michael and Badawi, Abeer and Fallahpour, Adibvafa and Afkanpour, Arash and Sigal, Leonid and Etemad, Ali and Dolatabadi, Elham},
+  title   = {{OpenMedReason}: Scientific Reasoning Supervision for Medical Vision-Language Models},
+  journal = {arXiv preprint arXiv:2606.12169},
   year    = {2026},
 }
-% TODO-verify: fill in exact authors, title, and ID from the in-repo reference
-% (docs/dentex-agentic-vlm-proposal.md section 3.6).
+% Verified via arXiv (NeurIPS 2026 poster).
 
 % ----------------------------- Agentic tool-use VLMs ----------------------------
 
-@inproceedings{li2024mmedagent,
-  author    = {Li, Junying and others},
-  title     = {{MMedAgent}: Learning to Customize Medical Agents with Reinforcement Learning},
-  booktitle = {Proceedings of EMNLP},
-  year      = {2024},
+@article{li2024mmedagent,
+  author  = {Li, Junying and Xiao, Zhenyang and Li, Chunjiang and others},
+  title   = {{MMedAgent}: Learning to Use Medical Tools with Multi-modal Agent},
+  journal = {arXiv preprint arXiv:2407.02483},
+  year    = {2024},
 }
-% TODO-verify: exact title/author list.
+% Verified via the OctoTools reference list.
 
 @article{zhang2025octotools,
-  author  = {Zhang, Jiaqi and others},
+  author  = {Lu, Pan and Chen, Bowen and Liu, Sheng and Thapa, Rahul and Boen, Joseph and Zou, James},
   title   = {{OctoTools}: An Agentic Framework with Extensible Tools for Complex Reasoning},
-  journal = {arXiv preprint},
+  journal = {arXiv preprint arXiv:2502.11271},
   year    = {2025},
+  note    = {Accepted to ACL 2026},
 }
-% TODO-verify: exact arXiv ID.
+% Verified via arXiv; bib key kept as zhang2025octotools for tex stability.
 
 @inproceedings{oralgptplus2026,
-  author    = {others},
-  title     = {{OralGPT-Plus}: Reinforcement-Learned Tool-Augmented Reasoning for Dental Vision-Language Models},
-  booktitle = {Proceedings of CVPR},
+  author    = {Fan, Yuxuan and Hao, Jing and Chen, Hong and Bao, Jiahao and Shao, Yihua and Liang, Yuci and Hung, Kuo Feng and Tang, Hao},
+  title     = {{OralGPT-Plus}: Learning to Use Visual Tools via Reinforcement Learning for Panoramic X-ray Analysis},
+  booktitle = {Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},
   year      = {2026},
-  note      = {Concurrent work; evaluates on MMOral-X / MMOral-OPG with an LLM-judge-scored reward},
+  note      = {arXiv:2603.06366; concurrent work; evaluates on MMOral-X with an LLM-judge-scored reward},
 }
-% TODO-verify: exact title, authors, and claims from the published paper.
+% Verified via arXiv + CVF open access.
 
 @article{oralagent2026,
-  author  = {others},
-  title   = {{OralAgent}: A Multi-Tool Dental Agent with Retrieval-Augmented Knowledge},
-  journal = {arXiv preprint},
+  author  = {Hao, Jing and Dai, Siyuan and Zhang, Yongxin and Liang, Yuci and Wu, Jiamin and Bao, Jiahao and Fan, Yuxuan and others},
+  title   = {{OralAgent}: Integrating Reasoning, Tools, and Knowledge for Interactive Dental Image Analysis},
+  journal = {arXiv preprint arXiv:2605.27378},
   year    = {2026},
-  note    = {Concurrent work; prompted ReAct orchestrator around a general-purpose model},
+  note    = {Concurrent work; ReAct-orchestrated specialist tools with RAG over dental textbooks; evaluated on MMOral-Uni / MMOral-OPG / OralQA-ZH, not DENTEX},
 }
-% TODO-verify: exact citation from the in-repo reference.
+% Verified via arXiv.
 
 @inproceedings{wu2026vtool,
-  author    = {Wu, Yanda and others},
-  title     = {{VTool-R1}: {VLMs} Learn to Reason with Visual Tools via Reinforcement Learning},
+  author    = {Wu, Mingyuan and Yang, Jingcheng and Jiang, Jize and Li, Meitang and Yan, Kaizhuo and Yu, Hanchao and Zhang, Minjia and Zhai, Chengxiang and Nahrstedt, Klara},
+  title     = {{VTool-R1}: {VLMs} Learn to Think with Images via Reinforcement Learning on Multimodal Tool Use},
   booktitle = {International Conference on Learning Representations (ICLR)},
   year      = {2026},
-  note      = {GRPO-trained visual tool use; chart/table QA, 64.7\% -> 71.7\% over zero-shot},
+  note      = {arXiv:2505.19255; GRPO-trained visual tool use; chart/table QA, 64.7\% -> 71.7\% over zero-shot},
 }
-% TODO-verify: exact venue/year and author list.
+% Verified via arXiv + ICLR 2026 proceedings.
 
 % ----------------------------- Zero-shot dental VLM evaluations -----------------
 

@@ -1,13 +1,13 @@
 # Core ML & Deep Learning (CUDA GPU extras live in requirements-gpu.txt; never install those on TPU)
 # torch==2.13.0
 # torchvision==0.28.0
-transformers==5.18.0
-accelerate==1.14.0
-peft==0.20.0
+transformers==5.19.0
+accelerate==1.15.0
+peft==0.21.2
 bitsandbytes==0.50.0
-datasets==5.0.1
-trl==1.10.0
-huggingface-hub==1.26.1
+datasets==5.1.0
+trl==1.15.0
+huggingface-hub>=1.31.0,<3.0   # transformers 5.19 needs >=1.31; the old ==1.26.1 pin could not be installed
 qwen-vl-utils==0.0.14
 
 # Data Processing & Vision
@@ -18,7 +18,7 @@ numpy==2.5.1
 pyarrow==25.0.0
 scikit-learn==1.9.0
 tqdm==4.70.0
-ultralytics==8.2.70
+ultralytics==8.4.177   # 8.2.70 requires numpy<2, which contradicts numpy==2.5.1
 
 # API Clients (Aim 1 Trace Generation & Evaluation Judge)
 openai==2.53.0

@@ -1,4 +1,4 @@
-% ---------------------------------------------------------------------------
+﻿% ---------------------------------------------------------------------------
 \section{Experiments}
 \label{sec:experiments}
 
@@ -38,7 +38,7 @@ the native image) and additionally at original size. The no-tools arms use the \
 \subsection{Zero-shot baselines: the case for looking again}
 \label{sec:baselines}
 
-\begin{table}[t]
+\begin{table}[tbp]
   \centering
   \small
   \caption{Zero-shot frontier VLMs on the DENTEX validation set ($N=50$ panoramic radiographs;
@@ -77,18 +77,21 @@ symmetry hypotheses before commitment.
 \subsection{Main results}
 \label{sec:mainresults}
 
-\begin{table}[t]
+\begin{table}[tbp]
   \centering
   \small
-  \caption{Main results on the DENTEX validation set (pooled finding-level, set-matched).
-  Cells marked \todo{} are pending the first hardware training run; the experimental design and
+  \caption{Main results on the DENTEX validation set (pooled finding-level, set-matched);
+  ``Best zero-shot frontier'' is the best row of \cref{tab:zeroshot}. Cells marked
+  \todo{} are pending the first hardware training run; the experimental design and
   metric definitions are final and frozen (\cref{sec:eval}).}
   \label{tab:main}
-  \begin{tabular}{llccc}
+  \footnotesize
+  \setlength{\tabcolsep}{4pt}
+  \begin{tabular}{@{}llccc@{}}
     \toprule
-    Condition & Tools & Exact F1 $\uparrow$ & Tooth-only F1 $\uparrow$ & Invented on healthy $\downarrow$ \\
+    Condition & Tools & Exact F1 $\uparrow$ & Tooth-only F1 $\uparrow$ & Invented$\downarrow$ \\
     \midrule
-    Zero-shot best frontier (\cref{tab:zeroshot}) & -- & 0.222 & -- & -- \\
+    Best zero-shot frontier & -- & 0.222 & -- & -- \\
     Zero-shot Qwen3.5-9B & -- & 0.112 & -- & -- \\
     Majority-class floor & -- & 0.038 & -- & -- \\
     SFT only (no tools) & -- & \todo{pending} & \todo{pending} & \todo{pending} \\
@@ -96,7 +99,8 @@ symmetry hypotheses before commitment.
     SFT + GRPO (no tools) & -- & \todo{pending} & \todo{pending} & \todo{pending} \\
     \sys{} (SFT + GRPO) & \checkmark & \todo{pending} & \todo{pending} & \todo{pending} \\
     \midrule
-    Supervised specialist (HierarchicalDet, prior work) & -- & \multicolumn{3}{l}{AP 0.372 / AP50 0.601 / AR 0.653 on DENTEX diagnosis \citep{hamamci2024dentex}} \\
+    \multicolumn{5}{@{}l@{}}{Supervised specialist (HierarchicalDet), DENTEX: AP 0.372 / AP$_{50}$
+    0.601 / AR 0.653 \citep{hamamci2024dentex}} \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -123,7 +127,7 @@ downstream \texttt{bbox} arguments, attributed by nearest center. Each attribute
 classified by direction: \emph{corrective} if its shift moved the working box toward the
 reference center (cosine $>0.3$), \emph{away} if against it, \emph{rescaling} otherwise.
 
-\begin{table}[t]
+\begin{table}[tbp]
   \centering
   \small
   \caption{Correction behavior by perturbation tier, over the ground-truth-anchored subset of
@@ -135,7 +139,7 @@ reference center (cosine $>0.3$), \emph{away} if against it, \emph{rescaling} ot
   \input{generated/table_nudge_tier}
 \end{table}
 
-\begin{figure}[t]
+\begin{figure}[tbp]
   \centering
   \includegraphics[width=\linewidth]{fig_nudge_tier}
   \caption{Left: corrective \texttt{nudge\_crop} usage rises monotonically with perturbation
@@ -169,7 +173,7 @@ nudge \emph{rescales} skew small (scale $<1$): the dominant corrective pattern i
 tighten-after-shift, matching radiologist behavior of zooming into a suspected lesion after
 centering it.
 
-\begin{figure}[t]
+\begin{figure}[tbp]
   \centering
   \includegraphics[width=\linewidth]{fig_perturbation_example}
   \caption{A large-offset perturbation drawn from the training corpus (DENTEX image

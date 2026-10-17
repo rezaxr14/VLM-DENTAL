@@ -1,4 +1,4 @@
-% ---------------------------------------------------------------------------
+﻿% ---------------------------------------------------------------------------
 \section{\sys{}: System and Method}
 \label{sec:method}
 
@@ -19,14 +19,15 @@ environments cannot drift apart. Tool calls are capped at 50 per episode, counte
 rather than turns, and parsed by a bracket-counting JSON extractor that repairs truncated or
 markdown-wrapped outputs.
 
-\begin{figure}[t]
+\begin{figure}[tbp]
   \centering
   \includegraphics[width=\linewidth]{fig_pipeline}
   \caption{The \sys{} pipeline. Traces are synthesized by a frontier teacher operating a real
   tool suite in a LangGraph loop (with the tiered perturbation hook of \cref{sec:perturbation}),
   verified cross-family against expert labels, and used for SFT followed by GRPO with a
   ground-truth-anchored composite reward. Tool calls execute for real against the source image
-  at every stage.}
+  at every stage; the radiograph and crop pixels are real assets from the corpus (the image
+  whose trace anatomy is dissected in \cref{fig:traces}).}
   \label{fig:pipeline}
 \end{figure}
 
@@ -41,7 +42,7 @@ semantics are verified; and surgical per-image Hugging Face caching), the trace
 synthesis stack of \cref{sec:traces}, the two training stages of \cref{sec:reward}, and an
 evaluation layer (\cref{sec:eval}) whose probes feed model selection on a fixed dev split.
 
-\begin{figure}[t]
+\begin{figure}[tbp]
   \centering
   \includegraphics[width=\linewidth]{fig_datasets}
   \caption{The data layer. Two sources are in use --- DENTEX (the only panoramic dataset
@@ -55,7 +56,7 @@ evaluation layer (\cref{sec:eval}) whose probes feed model selection on a fixed 
   \label{fig:datasets}
 \end{figure}
 
-\begin{figure}[t]
+\begin{figure}[tbp]
   \centering
   \includegraphics[width=\linewidth]{fig_architecture}
   \caption{The \sys{} architecture. One agent loop, one shared tool dispatcher, and one
@@ -84,7 +85,7 @@ to emit remain valid at inference. Third, the conversion from DENTEX's zero-inde
 to FDI notation has exactly one implementation, called by the reward, the verifier, and the
 metrics alike --- an indexing bug cannot recur independently in several subsystems.
 
-\begin{figure}[t]
+\begin{figure}[tbp]
   \centering
   \includegraphics[width=\linewidth]{fig_input_geometry}
   \caption{Image-input geometry: two execution targets, one invariant. \textbf{TPU:} the policy
@@ -111,7 +112,7 @@ patient-specific judgment about how grainy a crop is --- information a fixed thr
 cannot carry --- and the resulting tool-call stream is correspondingly more informative to train
 on and to audit.
 
-\begin{table}[t]
+\begin{table}[tbp]
   \centering
   \small
   \caption{The \sys{} tool suite. Continuous or overridable parameters are shown in
@@ -145,7 +146,7 @@ errors are exactly the kind that poison downstream reasoning: a box shifted by h
 tooth-width produces a crop that still \emph{looks} like a plausible anatomical region while
 showing the wrong tooth.
 
-\begin{figure}[t]
+\begin{figure}[tbp]
   \centering
   \includegraphics[width=\linewidth]{fig_grounding_cv}
   \caption{The \texttt{locate\_tooth} backend: YOLOv8m trained with 5-fold cross-validation on
@@ -218,7 +219,7 @@ big tier is therefore sized to be self-evident from the crop alone, and the smal
 genuinely ambiguous --- the demonstrator has to look and judge, which is precisely the skill the
 deployed policy must exercise with no ground truth available at all.
 
-\begin{figure}[t]
+\begin{figure}[tbp]
   \centering
   \includegraphics[width=\linewidth]{fig_perturbation_mechanism}
   \caption{The tiered perturbation mechanism and the correction loop it trains. The perturbation
@@ -250,9 +251,9 @@ scanned for \emph{directive leakage} --- the demonstrator echoing its hidden ins
 reasoning --- and leaking cases are excised and regenerated under a dual gate (zero-leak regex
 audit + verifier re-approval); the canonical corpus contains zero leaks.
 
-\begin{figure}[t]
+\begin{figure}[tbp]
   \centering
-  \includegraphics[width=\linewidth]{fig_trace_multistage}
+  \includegraphics[width=0.92\linewidth]{fig_trace_multistage}
   \caption{Multi-stage trace synthesis. Generation (provider family A) runs a
   ground-truth-directed LangGraph loop with real tool execution and the tiered perturbation
   hook; staged verification (deliberately a \emph{different} provider family) combines a strict
@@ -264,7 +265,7 @@ audit + verifier re-approval); the canonical corpus contains zero leaks.
   \label{fig:multistage}
 \end{figure}
 
-\begin{figure}[t]
+\begin{figure}[tbp]
   \centering
   \includegraphics[width=\linewidth]{fig_corpus_composition}
   \caption{Corpus composition (measured from the released trace files). Five cohorts --- three
@@ -295,7 +296,7 @@ creates real, auditable judgment pressure rather than a scripted step. Across th
 corpus the teacher averaged 12--13 turns and 18--30 real tool calls per trace
 (\cref{tab:corpus}); the full call distribution is shown in \cref{fig:toolusage}.
 
-\begin{table}[t]
+\begin{table}[tbp]
   \centering
   \small
   \caption{The verified corpus, regenerated from the released trace files. With-tools and
@@ -306,7 +307,7 @@ corpus the teacher averaged 12--13 turns and 18--30 real tool calls per trace
   \input{generated/table_corpus}
 \end{table}
 
-\begin{figure}[t]
+\begin{figure}[tbp]
   \centering
   \includegraphics[width=0.62\linewidth]{fig_tool_usage}
   \caption{Recorded tool-call attempts over the verified with-tools corpus (44{,}350 across
@@ -332,9 +333,9 @@ box-relative \texttt{nudge\_crop} shifts until re-inspection confirmed the crown
 contralateral symmetry comparison and a contrast-enhanced re-inspection followed before the
 structured final answer, which matches the expert label.
 
-\begin{figure}[t]
+\begin{figure}[tbp]
   \centering
-  \includegraphics[width=\linewidth]{fig_traces_comparison}
+  \includegraphics[width=0.88\linewidth]{fig_traces_comparison}
   \caption{Two training traces for the same image (DENTEX, carious FDI 34) and the same expert
   label. Left: the real radiograph with the with-tools evidence trail --- the returned grounding
   box (blue), the three corrective \texttt{nudge\_crop} boxes (orange, light to dark, magnified

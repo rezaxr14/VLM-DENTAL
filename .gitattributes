@@ -1,3 +1,19 @@
+# Normalize text files to LF in the Git repository
+* text=auto
+
+# Explicit line-ending rules
+*.py        text eol=lf
+*.sh        text eol=lf
+*.yaml      text eol=lf
+*.yml       text eol=lf
+*.toml      text eol=lf
+*.json      text eol=lf
+*.jsonl     text eol=lf
+*.md        text eol=lf
+*.txt       text eol=lf
+*.gitignore text eol=lf
+*.gitattributes text eol=lf
+
 # data/traces/*.jsonl are append-only logs, and dental_agent/training/git_sync.py
 # (used by scripts/run_trace_gen.py's --git-sync-every) relies on that: multiple
 # parallel Colab/Kaggle workers, each assigned a disjoint slice of image IDs
