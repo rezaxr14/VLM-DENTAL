@@ -1241,6 +1241,102 @@ def build_pipeline(a):
 # ---------------------------------------------------------------------------
 
 
+def build_perturbation_mechanism(a):
+    """Tiered-perturbation mechanism + nudge_crop loop (was a hand-authored SVG).
+
+    Moved into the builder framework on a 640-unit canvas (labels print at
+    ~6.5-8.4 pt instead of ~5 pt). Wording, rates and offsets are copied
+    from the previous hand-authored figure; geometry is new.
+    """
+    W = 640
+    warn: list[str] = []
+    t = _checked(warn)
+    G = "#666666"
+    BLUE_F, BLUE_S = "#F0F4FA", "#4C72B0"
+    ORA_F, ORA_S = "#FBF6F0", "#DD8452"
+    GRN_F, GRN_S = "#F2F8F2", "#55A868"
+    NOTE_F, NOTE_S = "#FFFBF0", "#BCBD22"
+    TXT, SUB = "#222222", "#444444"
+    p = []
+    p.append(t(W / 2, 22, "Self-correcting grounding: tiered perturbation and the nudge_crop correction loop", size=12.4, weight="bold", fill=TXT, maxw=620))
+
+    def box(x, y, w, h, fill, stroke, head, lines, head_size=11.2, size=9.0, pitch=13.5):
+        p.append(R(x, y, w, h, rx=8, fill=fill, stroke=stroke, sw=1.5))
+        cx = x + w / 2
+        p.append(t(cx, y + 21, head, size=head_size, weight="bold", fill=TXT, maxw=w - 16))
+        yy = y + 38
+        for ln in lines:
+            p.append(t(cx, yy, ln, size=size, fill=SUB, maxw=w - 16))
+            yy += pitch
+
+    # ---- row 1: locate_tooth -> perturbation roll ----
+    y1, h1 = 36, 62
+    box(10, y1, 285, h1, BLUE_F, BLUE_S, "locate_tooth(FDI tooth)",
+        ["returns a reference box (expert-verified box for", "annotated teeth; detector box otherwise)"])
+    p.append(arrow([(295, y1 + h1 / 2), (321, y1 + h1 / 2)], color=G, sw=1.5))
+    box(323, y1, 307, h1, ORA_F, ORA_S, "Perturbation roll (fixed rates)",
+        ["applied to the box SHOWN to the policy,", "never to the logged reference box"])
+
+    # ---- row 2: three tiers ----
+    xs = [109, 319, 529]
+    bus = y1 + h1 + 18
+    p.append(L(476.5, y1 + h1, 476.5, bus, color=G, sw=1.5))
+    p.append(L(xs[0], bus, xs[2], bus, color=G, sw=1.5))
+    y2, h2 = bus + 20, 100
+    for cx in xs:
+        p.append(arrow([(cx, bus), (cx, y2 - 1)], color=G, sw=1.5))
+    box(10, y2, 198, h2, "#F4F4F4", "#999999", "none - 45%",
+        ["box unchanged", "clean accept-and-proceed", "demonstration"])
+    box(220, y2, 198, h2, "#FDF3EA", ORA_S, "small - 25%",
+        ["offset 12-28% of box size, random sign", "genuine judgment call: often still fine",
+         "given zoom padding - never resolved", "by the prompt"])
+    box(430, y2, 198, h2, "#FDEBE6", "#C44E52", "big - 30%",
+        ["offset 45-75% of box size, random sign", "visually self-evident without any", "verbal cue"])
+
+    # ---- merge -> teacher -> nudge -> zoom ----
+    mb = y2 + h2 + 16
+    for cx in (xs[0], xs[2]):
+        p.append(L(cx, y2 + h2, cx, mb, color=G, sw=1.5))
+    p.append(L(xs[0], mb, xs[2], mb, color=G, sw=1.5))
+    y3, h3 = mb + 18, 50
+    p.append(L(319, mb, 319, y3 - 10, color=G, sw=1.5))
+    p.append(arrow([(319, y3 - 12), (319, y3 - 1)], color=G, sw=1.5))
+    box(119, y3, 400, h3, BLUE_F, BLUE_S, "Teacher inspects the crop (zoom_crop)",
+        ["and decides from the pixels alone whether the box is acceptable"])
+    y4, h4 = y3 + h3 + 18, 44
+    p.append(arrow([(319, y3 + h3), (319, y4 - 1)], color=G, sw=1.5))
+    box(169, y4, 300, h4, GRN_F, GRN_S, "nudge_crop", ["dx_frac, dy_frac, scale"])
+    y5, h5 = y4 + h4 + 18, 58
+    p.append(arrow([(319, y4 + h4), (319, y5 - 1)], color=G, sw=1.5))
+    box(109, y5, 420, h5, GRN_F, GRN_S, "zoom_crop on the corrected box - verify - commit finding",
+        ["the same judgment the deployed policy faces at inference,", "with no ground truth available"],
+        head_size=10.6)
+
+    # ---- row: side notes + schematic ----
+    y6, h6 = y5 + h5 + 20, 98
+    for x0, head, lines in (
+        (10, "Decoupled from the detector",
+         ["rates are configured constants,", "not the detector's real error rate,", "so demonstrations stay valid as", "the grounding tool improves."]),
+        (220, "No verbal cue",
+         ["an error is never announced in text;", "magnitude alone must carry the", "signal, so the learned behavior", "survives to GRPO and inference."]),
+    ):
+        p.append(R(x0, y6, 198, h6, rx=8, fill=NOTE_F, stroke=NOTE_S, sw=1.2))
+        p.append(t(x0 + 99, y6 + 20, head, size=9.8, weight="bold", fill=TXT, maxw=184))
+        for i, ln in enumerate(lines):
+            p.append(t(x0 + 99, y6 + 38 + i * 13.5, ln, size=9.0, fill=SUB, maxw=184))
+    sx = 430
+    p.append(R(sx, y6, 198, h6, rx=8, fill="#FAFAFA", stroke="#CCCCCC", sw=1.2))
+    p.append(t(sx + 99, y6 + 17, "reference vs. shown box", size=9.0, fill=SUB, maxw=184))
+    p.append(R(sx + 44, y6 + 28, 66, 40, rx=0, fill="none", stroke="#2ca02c", sw=2))
+    p.append(R(sx + 70, y6 + 46, 66, 40 - 6, rx=0, fill="none", stroke="#d62728", sw=2, dash="6,3"))
+    p.append(arrow([(sx + 82, y6 + 50), (sx + 104, y6 + 66)], color="#444444", sw=1.2))
+    p.append(t(sx + 99, y6 + 94, "shift given in box-relative fractions", size=8.6, fill=SUB, maxw=190))
+
+    if warn:
+        print("  perturbation_mechanism text-fit warnings:\n   " + "\n   ".join(warn))
+    return svg(W, y6 + h6 + 12, "".join(p))
+
+
 BUILDERS = {
     "fig_traces_comparison.svg": build_traces_comparison,
     "fig_trace_multistage.svg": build_multistage,
@@ -1250,6 +1346,7 @@ BUILDERS = {
     "fig_grounding_cv.svg": build_grounding_cv,
     "fig_input_geometry.svg": build_input_geometry,
     "fig_pipeline.svg": build_pipeline,
+    "fig_perturbation_mechanism.svg": build_perturbation_mechanism,
 }
 
 
