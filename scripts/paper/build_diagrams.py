@@ -989,71 +989,88 @@ def build_grounding_cv(a):
 
 
 def build_input_geometry(a):
+    """Image-input geometry on a 640-unit canvas (labels print at ~6.3-7.5 pt).
+
+    TPU views sit in one row (FULL | CROP -> COMPARE) so the panel stays
+    short; the GPU branch is a dashed route down the left margin.
+    """
+    W = 640
+    warn: list[str] = []
+    t = _checked(warn)
     p = []
-    p.append(T(560, 24, "Image-input geometry: two execution targets, one invariant", size=14.5, weight="bold"))
-    p.append(T(560, 42, "canonical views rendered by the project's own geometry module from DENTEX image 624; the target choice is deliberately open", size=9.5, fill=C_SUB))
+    p.append(TC(W / 2, 22, "Image-input geometry: two execution targets, one invariant", size=13, weight="bold"))
+    p.append(t(W / 2, 38, "canonical views rendered by the project's own geometry module from DENTEX image 624; the target choice is deliberately open", size=8.8, fill=C_SUB, maxw=620))
 
     # native input
-    p.append(IMG(32, 140, 320, 150, a["opg"]))
-    p.append(R(32, 140, 320, 150, rx=3, stroke="#666666", sw=1.2, fill="none"))
-    sx, sy = 320.0 / a["native_w"], 150.0 / a["native_h"]
-    mx = 32 + CROP_FINAL_REGION[0] * sx
-    my = 140 + CROP_FINAL_REGION[1] * sy
+    nx, ny, nw, nh = 16, 54, 270, 127
+    p.append(IMG(nx, ny, nw, nh, a["opg"]))
+    p.append(R(nx, ny, nw, nh, rx=3, stroke="#666666", sw=1.2, fill="none"))
+    sx, sy = nw / a["native_w"], nh / a["native_h"]
+    mx = nx + CROP_FINAL_REGION[0] * sx
+    my = ny + CROP_FINAL_REGION[1] * sy
     mw = (CROP_FINAL_REGION[2] - CROP_FINAL_REGION[0]) * sx
     mh = (CROP_FINAL_REGION[3] - CROP_FINAL_REGION[1]) * sy
     p.append(R(mx, my, mw, mh, rx=0, fill="none", stroke=C_ORANGE, sw=1.6))
-    p.append(T(192, 310, "native · 2,808 × 1,316 px", size=8.8, weight="bold"))
-    p.append(T(192, 324, "~17k visual tokens if fed as-is", size=7.8, fill=C_SUB))
-
-    # branch stem
-    p.append(L(352, 215, 376, 215, color="#999999", sw=1.5))
-    p.append(arrow([(376, 215), (398, 215)], color="#999999", sw=1.5))
-    p.append(arrow([(376, 215), (376, 554), (398, 554)], color="#999999", sw=1.3, dash="4,3"))
+    p.append(t(302, 90, "native · 2,808 × 1,316 px", size=9.8, weight="bold", anchor="start", maxw=320))
+    p.append(t(302, 105, "~17k visual tokens if fed as-is", size=8.8, fill=C_SUB, anchor="start", maxw=320))
 
     # TPU panel (canonical + static slots)
-    p.append(R(400, 64, 704, 416, fill=C_BLUE_FILL, stroke="#C7D3E8", sw=1.2))
-    p.append(R(416, 78, 96, 22, rx=11, fill=C_BLUE, stroke="none", sw=0))
-    p.append(T(464, 93, "TPU v5e-8", size=8.8, weight="bold", fill="#FFFFFF"))
-    p.append(T(1088, 93, "canonical resizing + static slot padding (required)", size=8.2, fill=C_BLUE_D, anchor="end"))
+    ty0, th = 210, 296
+    p.append(arrow([(nx + nw / 2, ny + nh), (nx + nw / 2, ty0 - 2)], color="#999999", sw=1.5))
+    p.append(R(16, ty0, 614, th, fill=C_BLUE_FILL, stroke="#C7D3E8", sw=1.2))
+    p.append(R(28, ty0 + 10, 92, 20, rx=10, fill=C_BLUE, stroke="none", sw=0))
+    p.append(t(74, ty0 + 24, "TPU v5e-8", size=9.0, weight="bold", fill="#FFFFFF"))
+    p.append(t(130, ty0 + 24, "canonical resizing + static slot padding (required)", size=8.6, fill=C_BLUE_D, anchor="start", maxw=240))
 
-    p.append(IMG(430, 120, 290, 145, a["canon_full"]))
-    p.append(R(430, 120, 290, 145, rx=2, stroke="#666666", sw=1.0, fill="none"))
-    p.append(T(575, 116, "FULL · 1536 × 768 · 1,152 tokens", size=8.4, weight="bold", fill=C_BLUE_D))
-    p.append(IMG(790, 112, 120, 180, a["canon_crop"]))
-    p.append(R(790, 112, 120, 180, rx=2, stroke="#666666", sw=1.0, fill="none"))
-    p.append(T(840, 312, "CROP · 256 × 384 · 96 tokens", size=8.4, weight="bold", fill=C_BLUE_D, anchor="end"))
-    p.append(IMG(430, 300, 200, 150, a["canon_compare"]))
-    p.append(R(430, 300, 200, 150, rx=2, stroke="#666666", sw=1.0, fill="none"))
-    p.append(T(530, 294, "COMPARE · 512 × 384 · 192 tokens", size=8.4, weight="bold", fill=C_BLUE_D))
-
-    # leader: the marked crop feeds the CROP view
-    p.append(arrow([(226, 199), (226, 104), (850, 104), (850, 112)], color=C_ORANGE, sw=1.3, dash="4,3"))
+    iy = ty0 + 62
+    p.append(t(28, iy - 6, "FULL · 1536 × 768 · 1,152 tokens", size=8.6, weight="bold", fill=C_BLUE_D, anchor="start", maxw=290))
+    p.append(IMG(28, iy, 280, 140, a["canon_full"]))
+    p.append(R(28, iy, 280, 140, rx=2, stroke="#666666", sw=1.0, fill="none"))
+    p.append(t(324, iy + 188, "CROP · 256 × 384 · 96 tokens", size=8.6, weight="bold", fill=C_BLUE_D, anchor="start", maxw=134))
+    p.append(IMG(324, iy, 116, 174, a["canon_crop"]))
+    p.append(R(324, iy, 116, 174, rx=2, stroke="#666666", sw=1.0, fill="none"))
+    p.append(t(462, iy - 6, "COMPARE · 512 × 384 · 192 tokens", size=8.6, weight="bold", fill=C_BLUE_D, anchor="start", maxw=160))
+    p.append(IMG(462, iy, 160, 120, a["canon_compare"]))
+    p.append(R(462, iy, 160, 120, rx=2, stroke="#666666", sw=1.0, fill="none"))
     # the CROP view feeds the COMPARE composite (real tool output)
-    p.append(arrow([(850, 292), (850, 375), (632, 375)], color="#999999", sw=1.3))
+    p.append(arrow([(440, iy + 60), (460, iy + 60)], color="#999999", sw=1.3))
+    # leader: the marked crop on the native image feeds the CROP view
+    lx = 382
+    p.append(arrow([(mx + mw, my + mh / 2), (lx, my + mh / 2), (lx, iy - 1)], color=C_ORANGE, sw=1.3, dash="4,3"))
 
-    p.append(T(430, 468, "static slots: 5 FULL + 10 CROP + 4 COMPARE = 19 slots = 7,488 vision tokens - one XLA graph, no recompilation", size=8.0, fill=C_BLUE_D, anchor="start"))
+    p.append(t(28, iy + 206, "static slots: 5 FULL + 10 CROP + 4 COMPARE = 19 slots = 7,488 vision tokens -", size=8.8, fill=C_BLUE_D, anchor="start", maxw=590))
+    p.append(t(28, iy + 219, "one XLA graph, no recompilation", size=8.8, fill=C_BLUE_D, anchor="start", maxw=590))
 
     # GPU panel
-    p.append(R(400, 496, 704, 116, fill="#F7F8FA", stroke="#BBBBBB", sw=1.2))
-    p.append(R(416, 510, 60, 22, rx=11, fill="#777777", stroke="none", sw=0))
-    p.append(T(446, 525, "GPU", size=8.8, weight="bold", fill="#FFFFFF"))
-    p.append(T(1088, 525, "runs so far: original images, dynamic shapes", size=8.2, fill="#555555", anchor="end"))
-    p.append(T(416, 552, "GPU runs so far feed native images with dynamic padding; a --canonical-resize flag", size=8.0, anchor="start"))
-    p.append(T(416, 566, "exists for the same views - the final choice is pending the first GPU run", size=8.0, anchor="start"))
-    p.append(R(416, 580, 124, 22, rx=11, fill="#FFFFFF", stroke="#BBBBBB", sw=1.0))
-    p.append(T(478, 594, "RTX 4090 · QLoRA", size=7.6, fill="#555555"))
-    p.append(R(548, 580, 122, 22, rx=11, fill="#FFFFFF", stroke="#BBBBBB", sw=1.0))
-    p.append(T(609, 594, "RTX Pro 6000", size=7.6, fill="#555555"))
-    p.append(R(678, 580, 100, 22, rx=11, fill="#FFFFFF", stroke="#BBBBBB", sw=1.0))
-    p.append(T(728, 594, "A100 · bf16", size=7.6, fill="#555555"))
+    gy0, gh = ty0 + th + 12, 108
+    p.append(R(16, gy0, 614, gh, fill="#F7F8FA", stroke="#BBBBBB", sw=1.2))
+    p.append(R(28, gy0 + 10, 56, 20, rx=10, fill="#777777", stroke="none", sw=0))
+    p.append(t(56, gy0 + 24, "GPU", size=9.0, weight="bold", fill="#FFFFFF"))
+    p.append(t(618, gy0 + 24, "runs so far: original images, dynamic shapes", size=8.6, fill="#555555", anchor="end", maxw=470))
+    p.append(t(28, gy0 + 48, "GPU runs so far feed native images with dynamic padding; a --canonical-resize flag", size=8.8, anchor="start", maxw=590))
+    p.append(t(28, gy0 + 61, "exists for the same views - the final choice is pending the first GPU run", size=8.8, anchor="start", maxw=590))
+    cx = 28
+    for cw, label in ((126, "RTX 4090 · QLoRA"), (118, "RTX Pro 6000"), (100, "A100 · bf16")):
+        p.append(R(cx, gy0 + 74, cw, 20, rx=10, fill="#FFFFFF", stroke="#BBBBBB", sw=1.0))
+        p.append(t(cx + cw / 2, gy0 + 88, label, size=8.4, fill="#555555", maxw=cw - 8))
+        cx += cw + 8
+    # branch to the GPU target runs down the left margin (dashed)
+    p.append(arrow([(nx, ny + nh / 2), (6, ny + nh / 2), (6, gy0 + gh / 2), (14, gy0 + gh / 2)], color="#999999", sw=1.3, dash="4,3"))
 
     # decision band
-    p.append(R(16, 628, 1088, 76, rx=8, fill=C_ORANGE_L, stroke="#F0B27A", sw=1.2))
-    p.append(T(32, 650, "OPEN DECISION - execution target: GPU (RTX 4090 / RTX Pro 6000 / A100) vs TPU v5e-8; to be settled by the first GPU run", size=8.8, weight="bold", fill=C_ORANGE_D, anchor="start"))
-    p.append(T(32, 668, "shared invariant: tools always execute on the native image · evaluation runs at original size · SFT, GRPO and evaluation use the same setting", size=8.2, fill=C_ORANGE_D, anchor="start"))
-    p.append(T(32, 688, "TPU padding changes no gradients: the padded tail carries labels = -100 and attention_mask = 0 (verified against the reference implementation)", size=7.8, fill=C_ORANGE_D, anchor="start"))
+    dy0 = gy0 + gh + 12
+    p.append(R(10, dy0, 620, 104, rx=8, fill=C_ORANGE_L, stroke="#F0B27A", sw=1.2))
+    dx = 22
+    p.append(t(dx, dy0 + 18, "OPEN DECISION - execution target: GPU (RTX 4090 / RTX Pro 6000 / A100) vs TPU v5e-8;", size=9.0, weight="bold", fill=C_ORANGE_D, anchor="start", maxw=596))
+    p.append(t(dx, dy0 + 30, "to be settled by the first GPU run", size=9.0, weight="bold", fill=C_ORANGE_D, anchor="start", maxw=596))
+    p.append(t(dx, dy0 + 50, "shared invariant: tools always execute on the native image · evaluation runs at original size ·", size=8.6, fill=C_ORANGE_D, anchor="start", maxw=596))
+    p.append(t(dx, dy0 + 62, "SFT, GRPO and evaluation use the same setting", size=8.6, fill=C_ORANGE_D, anchor="start", maxw=596))
+    p.append(t(dx, dy0 + 82, "TPU padding changes no gradients: the padded tail carries labels = -100 and attention_mask = 0", size=8.4, fill=C_ORANGE_D, anchor="start", maxw=596))
+    p.append(t(dx, dy0 + 94, "(verified against the reference implementation)", size=8.4, fill=C_ORANGE_D, anchor="start", maxw=596))
 
-    return svg(1120, 720, "".join(p))
+    if warn:
+        print("  input_geometry text-fit warnings:\n   " + "\n   ".join(warn))
+    return svg(W, dy0 + 116, "".join(p))
 
 
 def build_pipeline(a):
