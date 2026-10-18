@@ -479,172 +479,223 @@ def build_multistage(a):
 
 
 def build_architecture(a):
+    """System architecture on a 764-unit, two-column canvas.
+
+    The previous 1200x760 three-column canvas printed its 7-8 unit labels at
+    ~3 pt. Same content, two columns (offline data/training on the left, the
+    agent loop + evaluation on the right), numbered flow 1-6 unchanged.
+    Every label is checked against its box width with reportlab metrics.
+    """
+    from reportlab.pdfbase.pdfmetrics import stringWidth
+
+    W = 764
+    warn: list[str] = []
+
+    def t(x, y, s_, size=9.0, fill=C_TXT, anchor="middle", weight=None, maxw=None, font=None):
+        face = "Courier" if font else ("Helvetica-Bold" if weight == "bold" else "Helvetica")
+        if maxw is not None and stringWidth(s_, face, size) > maxw:
+            warn.append(f"overflow {stringWidth(s_, face, size):.0f}>{maxw}: {s_!r}")
+        return TC(x, y, s_, size=size, fill=fill, anchor=anchor, weight=weight, font=font)
+
     p = []
-    p.append(T(600, 24, "VLM-DENTAL system architecture", size=14.5, weight="bold"))
-    p.append(T(600, 42, "an agentic tool loop over native-resolution radiographs, trained on verified self-correcting traces", size=9.5, fill=C_SUB))
+    p.append(TC(W / 2, 22, "VLM-DENTAL system architecture", size=13, weight="bold"))
+    p.append(t(W / 2, 38, "an agentic tool loop over native-resolution radiographs, trained on verified self-correcting traces", size=9.4, fill=C_SUB, maxw=700))
 
-    # ---- center: OPG + agent cycle (generous clearance between cards) ----
-    p.append(IMG(412, 70, 320, 150, a["opg"]))
-    p.append(R(412, 70, 320, 150, rx=3, stroke="#666666", sw=1.2, fill="none"))
-    p.append(T(600, 236, "input · native OPG (2,808 × 1,316 px)", size=8.0, fill=C_SUB))
-    p.append(T(600, 249, "every tool executes at full resolution", size=7.4, fill=C_MUT))
+    LX, LW = 10, 350           # left column
+    RX, RW = 410, 340          # right column
+    LC_ = LX + LW / 2          # left column centre x
+    G = "#999999"
 
-    # policy card
-    p.append(R(412, 266, 172, 130, rx=8, stroke=C_BLUE, sw=1.5))
-    p.append(T(498, 290, "Policy", size=11, weight="bold", fill=C_BLUE_D))
-    p.append(T(498, 308, "Qwen3.5-9B", size=10, weight="bold"))
-    p.append(T(498, 326, "reasoning node", size=8.2, fill=C_SUB))
-    p.append(T(498, 338, "thought + JSON tool calls", size=8.2, fill=C_SUB))
-    p.append(T(498, 358, "LoRA adapters:", size=7.8, fill=C_MUT))
-    p.append(T(498, 370, "SFT · GRPO (pluggable)", size=7.8, fill=C_MUT))
+    # =================== LEFT COLUMN ===================
+    # ---- Data layer ----
+    y1, h1 = 54, 222
+    p.append(R(LX, y1, LW, h1))
+    p.append(icon_db(LX + 14, y1 + 12))
+    p.append(t(LX + 38, y1 + 24, "Data layer", size=11.5, weight="bold", anchor="start"))
+    tx = LX + 14
+    p.append(t(tx, y1 + 46, "2 datasets in use: DENTEX · Tufts", size=9.2, anchor="start", maxw=320))
+    p.append(t(tx, y1 + 59, "(8 more catalogued as candidates - pending)", size=8.8, fill=C_SUB, anchor="start", maxw=320))
+    p.append(t(tx, y1 + 76, "loaders: DENTEX full · Tufts partial (1 open question)", size=8.8, fill=C_SUB, anchor="start", maxw=320))
+    p.append(t(tx, y1 + 89, "FDI notation conversion at ingest", size=8.8, fill=C_SUB, anchor="start", maxw=320))
+    p.append(IMG(tx, y1 + 100, 150, 70, a["opg"]))
+    p.append(R(tx, y1 + 100, 150, 70, rx=2, stroke="#666666", sw=1.0, fill="none"))
+    p.append(t(tx + 75, y1 + 183, "panoramic radiograph + per-tooth", size=8.6, fill=C_SUB, maxw=156))
+    p.append(t(tx + 75, y1 + 194, "boxes + diagnoses", size=8.6, fill=C_SUB, maxw=156))
+    p.append(R(LX + 186, y1 + 100, 150, 54, fill="#F0F7F0", stroke=C_GREEN, sw=1.1))
+    p.append(t(LX + 261, y1 + 118, "multi-finding ground truth", size=8.8, weight="bold", fill=C_GREEN_D, maxw=140))
+    p.append(t(LX + 261, y1 + 132, "1-7 findings per image", size=8.8, fill=C_GREEN_D, maxw=140))
+    p.append(t(LX + 261, y1 + 146, "full set - never truncated", size=8.8, fill=C_GREEN_D, maxw=140))
+    p.append(R(tx, y1 + 196, LW - 28, 20, rx=10, fill="#EEF2FA", stroke=C_BLUE, sw=1.0))
+    p.append(t(LC_, y1 + 210, "grounding model: YOLOv8m · 5-fold CV · mAP50 ~ 0.87", size=8.8, fill=C_BLUE_D, maxw=318))
+    ya = y1 + h1
+    p.append(arrow([(LC_, ya), (LC_, ya + 26)], color=G, sw=1.5))
+    p.append(badge(1, LC_, ya + 13))
 
-    # tools card with real crop (24 px clear of the training card at x=824)
-    p.append(R(624, 266, 176, 200, rx=8, stroke=C_BLUE, sw=1.5))
-    p.append(T(712, 288, "Tool node", size=11, weight="bold", fill=C_BLUE_D))
-    p.append(IMG(634, 300, 38, 128, a["crop_final"]))
-    p.append(R(634, 300, 38, 128, rx=1, stroke="#888888", sw=0.9, fill="none"))
-    p.append(T(653, 442, "live crop", size=7.4, fill=C_MUT))
-    p.append(T(682, 314, "8 registered tools", size=8.4, weight="bold", anchor="start"))
-    p.append(T(682, 330, "zoom · window · denoise", size=7.6, fill=C_SUB, anchor="start"))
-    p.append(T(682, 342, "enhance · contrast", size=7.6, fill=C_SUB, anchor="start"))
-    p.append(T(682, 354, "locate · nudge", size=7.6, fill=C_SUB, anchor="start"))
-    p.append(T(682, 366, "bilateral compare · fdi", size=7.6, fill=C_SUB, anchor="start"))
-    p.append(T(682, 384, "continuous parameters:", size=7.6, fill=C_MUT, anchor="start"))
-    p.append(T(682, 396, "strength · center · width", size=7.6, fill=C_MUT, anchor="start"))
-
-    # cycle arrows (labels sit inside the 40 px corridor)
-    p.append(arrow([(584, 316), (624, 316)], color=C_BLUE, sw=1.6))
-    p.append(T(604, 308, "call", size=7.4, fill=C_BLUE_D))
-    p.append(arrow([(624, 384), (584, 384)], color="#8DA2C4", sw=1.6))
-    p.append(T(604, 376, "obs", size=7.4, fill="#8DA2C4"))
-    p.append(arrow([(432, 220), (432, 266)], color="#999999", sw=1.4))
-    p.append(arrow([(732, 160), (776, 160), (776, 266)], color="#999999", sw=1.2, dash="4,3"))
-    p.append(T(736, 178, "base_image", size=7.2, fill=C_MUT, anchor="start"))
-    p.append(arrow([(490, 396), (490, 492)], color="#999999", sw=1.4))
-    p.append(T(498, 448, "on answer / budget", size=7.2, fill=C_MUT, anchor="start"))
-
-    # final answer card
-    p.append(R(412, 492, 400, 58, rx=8, fill="#F2F8F2", stroke=C_GREEN, sw=1.4))
-    p.append(T(612, 514, "final answer - findings JSON", size=9.6, weight="bold", fill=C_GREEN_D))
-    p.append(T(428, 534, '{"findings":[{"quadrant":3,"tooth":34,"diagnosis":"Caries","confidence":0.82}]}', size=7.6, fill=C_BLUE_D, anchor="start", font=MONO))
-
-    # dispatcher / input-geometry badges
-    p.append(R(412, 566, 400, 84, rx=8, fill=C_BLUE_FILL, stroke="#AAB8CE", sw=1.2, dash="5,3"))
-    p.append(T(428, 588, "shared dispatcher - every image-consuming tool runs on base_image;", size=7.8, fill=C_BLUE_D, anchor="start"))
-    p.append(T(428, 601, "the crop chain never compounds", size=7.8, fill=C_BLUE_D, anchor="start"))
-    p.append(T(428, 622, "input geometry: TPU = canonical views + static slots (no recompile);", size=7.8, fill=C_BLUE_D, anchor="start"))
-    p.append(T(428, 635, "GPU = native so far - decision pending; tools always run native", size=7.8, fill=C_BLUE_D, anchor="start"))
-
-    # ---- left column ----
-    p.append(R(24, 70, 332, 250))
-    p.append(icon_db(40, 84))
-    p.append(T(64, 96, "Data layer", size=11, weight="bold", anchor="start"))
-    p.append(T(40, 118, "2 datasets in use: DENTEX · Tufts", size=8.4, anchor="start"))
-    p.append(T(40, 131, "(8 more catalogued as candidates - pending)", size=8.0, fill=C_SUB, anchor="start"))
-    p.append(T(40, 149, "loaders: DENTEX full · Tufts partial (1 open question)", size=7.8, fill=C_SUB, anchor="start"))
-    p.append(T(40, 162, "FDI notation conversion at ingest", size=7.8, fill=C_SUB, anchor="start"))
-    p.append(IMG(40, 176, 140, 66, a["opg"]))
-    p.append(R(40, 176, 140, 66, rx=2, stroke="#666666", sw=1.0, fill="none"))
-    p.append(T(110, 256, "panoramic radiograph + per-tooth", size=7.2, fill=C_MUT))
-    p.append(T(110, 267, "boxes + diagnoses", size=7.2, fill=C_MUT))
-    p.append(R(196, 176, 148, 44, fill="#F0F7F0", stroke=C_GREEN, sw=1.1))
-    p.append(T(270, 192, "multi-finding ground truth", size=7.2, weight="bold", fill=C_GREEN_D))
-    p.append(T(270, 204, "1-7 findings per image", size=7.2, fill=C_GREEN_D))
-    p.append(T(270, 215, "full set - never truncated", size=7.2, fill=C_GREEN_D))
-    p.append(R(40, 278, 304, 24, rx=12, fill="#EEF2FA", stroke=C_BLUE, sw=1.0))
-    p.append(T(192, 293, "grounding model: YOLOv8m · 5-fold CV · mAP50 ~ 0.87", size=7.6, fill=C_BLUE_D))
-    p.append(arrow([(190, 320), (190, 352)], color="#999999", sw=1.5))
-    p.append(badge(1, 190, 336))
-
-    p.append(R(24, 352, 332, 304, rx=8, stroke=C_BLUE, sw=1.4))
-    p.append(icon_doc(40, 362))
-    p.append(T(64, 374, "Trace synthesis (offline)", size=11, weight="bold", fill=C_BLUE_D, anchor="start"))
+    # ---- Trace synthesis ----
+    y2, h2 = ya + 26, 262
+    p.append(R(LX, y2, LW, h2, rx=8, stroke=C_BLUE, sw=1.4))
+    p.append(icon_doc(LX + 14, y2 + 10))
+    p.append(t(LX + 38, y2 + 22, "Trace synthesis (offline)", size=11.5, weight="bold", fill=C_BLUE_D, anchor="start"))
     flow = [
-        (390, C_BLUE_FILL, "#C7D3E8", C_BLUE_D, "family A generates with-tools traces", "+ paired no-tools traces"),
-        (430, C_ORANGE_L, "#F0B27A", C_ORANGE_D, "tiered perturbation of displayed boxes", "(nudge behavior stays demonstrable)"),
-        (470, C_GREEN_FILL, "#BFDCC6", C_GREEN_D, "family B verifies + repairs every trace", "staged · cross-provider · multi-finding"),
-        (510, C_SAND_FILL, "#E5D9B8", C_SAND_D, "dual-gate decontamination", "regex sweep + re-verification"),
+        (C_BLUE_FILL, "#C7D3E8", C_BLUE_D, "family A generates with-tools traces", "+ paired no-tools traces"),
+        (C_ORANGE_L, "#F0B27A", C_ORANGE_D, "tiered perturbation of displayed boxes", "(nudge behavior stays demonstrable)"),
+        (C_GREEN_FILL, "#BFDCC6", C_GREEN_D, "family B verifies + repairs every trace", "staged · cross-provider · multi-finding"),
+        (C_SAND_FILL, "#E5D9B8", C_SAND_D, "dual-gate decontamination", "regex sweep + re-verification"),
     ]
-    for fy, fill, stroke, col, l1, l2 in flow:
-        p.append(R(40, fy, 300, 30, rx=6, fill=fill, stroke=stroke, sw=1.0))
-        p.append(T(190, fy + 12, l1, size=7.8, fill=col))
-        p.append(T(190, fy + 24, l2, size=7.2, fill=col))
-        p.append(arrow([(190, fy + 30), (190, fy + 40)], color="#999999", sw=1.2))
-    p.append(R(40, 550, 300, 32, rx=6, fill="#EEF2FA", stroke=C_BLUE, sw=1.2))
-    p.append(T(190, 564, "corpus: 1,847 + 1,847 · 3,694 traces", size=8.0, weight="bold", fill=C_BLUE_D))
-    p.append(T(190, 577, "exact per-cohort parity", size=7.2, fill=C_BLUE_D))
-    p.append(T(40, 606, "details in the trace-synthesis figure", size=7.8, fill=C_MUT, anchor="start"))
-    p.append(T(40, 620, "(all quotes, boxes and stats are real)", size=7.8, fill=C_MUT, anchor="start"))
+    fy = y2 + 34
+    for fill, stroke, col, l1, l2 in flow:
+        p.append(R(LX + 14, fy, LW - 28, 32, rx=6, fill=fill, stroke=stroke, sw=1.0))
+        p.append(t(LC_, fy + 14, l1, size=9.2, fill=col, maxw=310))
+        p.append(t(LC_, fy + 26, l2, size=8.6, fill=col, maxw=310))
+        p.append(arrow([(LC_, fy + 32), (LC_, fy + 42)], color=G, sw=1.2))
+        fy += 42
+    p.append(R(LX + 14, fy, LW - 28, 36, rx=6, fill="#EEF2FA", stroke=C_BLUE, sw=1.2))
+    p.append(t(LC_, fy + 15, "corpus: 1,847 + 1,847 · 3,694 traces", size=9.2, weight="bold", fill=C_BLUE_D, maxw=310))
+    p.append(t(LC_, fy + 28, "exact per-cohort parity", size=8.6, fill=C_BLUE_D, maxw=310))
+    p.append(t(LX + 14, fy + 54, "details in the trace-synthesis figure", size=8.8, fill=C_SUB, anchor="start", maxw=320))
+    p.append(t(LX + 14, fy + 66, "(all quotes, boxes and stats are real)", size=8.8, fill=C_SUB, anchor="start", maxw=320))
+    yb = y2 + h2
+    p.append(arrow([(LC_, yb), (LC_, yb + 26)], color="#7FA98B", sw=1.6))
+    p.append(badge(2, LC_, yb + 13))
 
-    # ---- right column ----
-    p.append(R(824, 70, 296, 354, rx=8, stroke=C_BLUE, sw=1.4))
-    p.append(icon_gear(840, 86))
-    p.append(T(864, 98, "Training", size=11, weight="bold", fill=C_BLUE_D, anchor="start"))
-    p.append(R(840, 114, 264, 50, rx=6, fill=C_BLUE_FILL, stroke="#C7D3E8", sw=1.0))
-    p.append(T(852, 132, "1 · SFT on verified traces", size=9.0, weight="bold", fill=C_BLUE_D, anchor="start"))
-    p.append(T(852, 147, "behavior cloning of the tool loop", size=7.6, fill=C_SUB, anchor="start"))
-    p.append(T(852, 158, "(1,847 with-tools traces)", size=7.4, fill=C_MUT, anchor="start"))
-    p.append(arrow([(972, 164), (972, 180)], color="#999999", sw=1.2))
-    p.append(T(982, 175, "then", size=7.2, fill=C_MUT, anchor="start"))
-    p.append(badge(3, 996, 172))
-    p.append(R(840, 180, 264, 92, rx=6, fill=C_BLUE_FILL, stroke="#C7D3E8", sw=1.0))
-    p.append(T(852, 198, "2 · GRPO on fresh rollouts", size=9.0, weight="bold", fill=C_BLUE_D, anchor="start"))
-    p.append(T(852, 214, "same loop, live tool execution", size=7.6, fill=C_SUB, anchor="start"))
-    p.append(T(852, 226, "group-relative advantage", size=7.6, fill=C_SUB, anchor="start"))
-    for cx, cw, label in ((852, 58, "accuracy"), (916, 52, "format"), (974, 54, "tool use"), (1034, 62, "efficiency")):
-        p.append(R(cx, 236, cw, 18, rx=9, fill="#EEF2FA", stroke="#C7D3E8", sw=1.0))
-        p.append(T(cx + cw / 2, 249, label, size=6.8, fill=C_BLUE_D))
-    p.append(T(852, 266, "efficiency term exempts locate_tooth + nudge_crop", size=6.8, fill=C_ORANGE_D, anchor="start"))
-    p.append(R(840, 284, 264, 46, rx=6, fill="#F0F7F0", stroke=C_GREEN, sw=1.1))
-    p.append(T(852, 302, "output: LoRA adapters", size=8.6, weight="bold", fill=C_GREEN_D, anchor="start"))
-    p.append(T(852, 317, "loaded by the policy at inference", size=7.6, fill=C_SUB, anchor="start"))
-    p.append(T(840, 352, "rollouts execute the real dispatcher -", size=7.6, fill=C_SUB, anchor="start"))
-    p.append(T(840, 364, "same code path as trace generation", size=7.6, fill=C_SUB, anchor="start"))
-    p.append(T(840, 382, "checkpoint selection on the dev split", size=7.6, fill=C_MUT, anchor="start"))
-    p.append(T(840, 394, "(test set evaluated once, at the end)", size=7.6, fill=C_MUT, anchor="start"))
+    # ---- Training ----
+    y3 = yb + 26
+    h3 = 306
+    p.append(R(LX, y3, LW, h3, rx=8, stroke=C_BLUE, sw=1.4))
+    p.append(icon_gear(LX + 22, y3 + 20))
+    p.append(t(LX + 38, y3 + 24, "Training", size=11.5, weight="bold", fill=C_BLUE_D, anchor="start"))
+    ix, iw = LX + 14, LW - 28
+    p.append(R(ix, y3 + 34, iw, 52, rx=6, fill=C_BLUE_FILL, stroke="#C7D3E8", sw=1.0))
+    p.append(t(ix + 12, y3 + 51, "1 · SFT on verified traces", size=9.6, weight="bold", fill=C_BLUE_D, anchor="start", maxw=300))
+    p.append(t(ix + 12, y3 + 65, "behavior cloning of the tool loop", size=8.8, fill=C_SUB, anchor="start", maxw=300))
+    p.append(t(ix + 12, y3 + 78, "(1,847 with-tools traces)", size=8.6, fill=C_SUB, anchor="start", maxw=300))
+    p.append(arrow([(LC_, y3 + 86), (LC_, y3 + 104)], color=G, sw=1.2))
+    p.append(t(LC_ + 12, y3 + 99, "then", size=8.6, fill=C_SUB, anchor="start"))
+    p.append(badge(3, LC_ + 42, y3 + 95, r=7.5))
+    p.append(R(ix, y3 + 104, iw, 92, rx=6, fill=C_BLUE_FILL, stroke="#C7D3E8", sw=1.0))
+    p.append(t(ix + 12, y3 + 121, "2 · GRPO on fresh rollouts", size=9.6, weight="bold", fill=C_BLUE_D, anchor="start", maxw=300))
+    p.append(t(ix + 12, y3 + 135, "same loop, live tool execution", size=8.8, fill=C_SUB, anchor="start", maxw=300))
+    p.append(t(ix + 12, y3 + 147, "group-relative advantage", size=8.8, fill=C_SUB, anchor="start", maxw=300))
+    px = ix + 12
+    for cw, label in ((60, "accuracy"), (54, "format"), (58, "tool use"), (66, "efficiency")):
+        p.append(R(px, y3 + 154, cw, 17, rx=8.5, fill="#EEF2FA", stroke="#C7D3E8", sw=1.0))
+        p.append(t(px + cw / 2, y3 + 166, label, size=8.4, fill=C_BLUE_D, maxw=cw - 6))
+        px += cw + 8
+    p.append(t(ix + 12, y3 + 186, "efficiency term exempts locate_tooth + nudge_crop", size=8.6, fill=C_ORANGE_D, anchor="start", maxw=300))
+    oy = y3 + 206
+    p.append(R(ix, oy, iw, 40, rx=6, fill="#F0F7F0", stroke=C_GREEN, sw=1.1))
+    p.append(t(ix + 12, oy + 16, "output: LoRA adapters", size=9.4, weight="bold", fill=C_GREEN_D, anchor="start", maxw=300))
+    p.append(t(ix + 12, oy + 31, "loaded by the policy at inference", size=8.8, fill=C_SUB, anchor="start", maxw=300))
+    p.append(t(ix, y3 + 264, "rollouts execute the real dispatcher - same code path as trace generation", size=8.6, fill=C_SUB, anchor="start", maxw=iw))
+    p.append(t(ix, y3 + 277, "checkpoint selection on the dev split", size=8.6, fill=C_SUB, anchor="start", maxw=iw))
+    p.append(t(ix, y3 + 290, "(test set evaluated once, at the end)", size=8.6, fill=C_SUB, anchor="start", maxw=iw))
+    bottom = y3 + h3
 
-    p.append(R(824, 448, 296, 236))
-    p.append(icon_magnifier(840, 466, r=4.5))
-    p.append(T(864, 474, "Evaluation", size=11, weight="bold", anchor="start"))
-    p.append(T(840, 498, "set-matched precision / recall / F1", size=8.4, anchor="start"))
-    p.append(T(840, 511, "over multi-finding predictions", size=8.0, fill=C_SUB, anchor="start"))
-    p.append(T(840, 529, "95% bootstrap confidence intervals", size=8.4, anchor="start"))
-    p.append(R(840, 542, 264, 96, rx=6, fill=C_BLUE_FILL, stroke="#C7D3E8", sw=1.0))
-    p.append(T(852, 560, "probes (mechanism evidence):", size=8.2, weight="bold", fill=C_BLUE_D, anchor="start"))
-    p.append(T(852, 578, "- tool removal: with vs without", size=7.6, fill=C_BLUE_D, anchor="start"))
-    p.append(T(852, 592, "- perturbation: shown-box vs true-box", size=7.6, fill=C_BLUE_D, anchor="start"))
-    p.append(T(852, 606, "- nudge budget K sweep", size=7.6, fill=C_BLUE_D, anchor="start"))
-    p.append(T(852, 624, "(results pending, reported as open cells)", size=7.2, fill=C_MUT, anchor="start"))
-    p.append(T(840, 658, "heavy runs on GPU or TPU", size=7.6, fill=C_MUT, anchor="start"))
-    p.append(T(840, 670, "(target decision pending - see input geometry)", size=7.6, fill=C_MUT, anchor="start"))
+    # =================== RIGHT COLUMN ===================
+    # ---- Evaluation (top) ----
+    e0, eh = 54, 214
+    p.append(R(RX, e0, RW, eh))
+    p.append(icon_magnifier(RX + 20, e0 + 20, r=4.5))
+    p.append(t(RX + 38, e0 + 24, "Evaluation", size=11.5, weight="bold", anchor="start"))
+    p.append(t(RX + 14, e0 + 46, "set-matched precision / recall / F1", size=9.2, anchor="start", maxw=316))
+    p.append(t(RX + 14, e0 + 59, "over multi-finding predictions", size=8.8, fill=C_SUB, anchor="start", maxw=316))
+    p.append(t(RX + 14, e0 + 76, "95% bootstrap confidence intervals", size=9.2, anchor="start", maxw=316))
+    p.append(R(RX + 14, e0 + 88, RW - 28, 84, rx=6, fill=C_BLUE_FILL, stroke="#C7D3E8", sw=1.0))
+    p.append(t(RX + 26, e0 + 104, "probes (mechanism evidence):", size=9.0, weight="bold", fill=C_BLUE_D, anchor="start", maxw=290))
+    p.append(t(RX + 26, e0 + 120, "- tool removal: with vs without", size=8.8, fill=C_BLUE_D, anchor="start", maxw=290))
+    p.append(t(RX + 26, e0 + 133, "- perturbation: shown-box vs true-box", size=8.8, fill=C_BLUE_D, anchor="start", maxw=290))
+    p.append(t(RX + 26, e0 + 146, "- nudge budget K sweep", size=8.8, fill=C_BLUE_D, anchor="start", maxw=290))
+    p.append(t(RX + 26, e0 + 163, "(results pending, reported as open cells)", size=8.6, fill=C_SUB, anchor="start", maxw=290))
+    p.append(t(RX + 14, e0 + 190, "heavy runs on GPU or TPU", size=8.8, fill=C_SUB, anchor="start", maxw=316))
+    p.append(t(RX + 14, e0 + 203, "(target decision pending - see input geometry)", size=8.8, fill=C_SUB, anchor="start", maxw=316))
 
-    # ---- numbered flow connectors (routed with generous clearance) ----
-    # 2: corpus -> SFT (over the top, upper lane)
-    p.append(arrow([(356, 563), (374, 563), (374, 54), (1024, 54), (1024, 70)], color="#7FA98B", sw=1.6))
-    p.append(badge(2, 374, 120))
-    # 4: LoRA adapters -> policy (over the top, lower lane, clear of lane 2)
-    p.append(arrow([(1004, 70), (1004, 64), (396, 64), (396, 335), (412, 335)], color="#7FA98B", sw=1.6))
-    p.append(badge(4, 396, 140))
-    # 5: policy -> evaluation (around the bottom)
-    p.append(arrow([(612, 650), (612, 694), (972, 694), (972, 684)], color="#999999", sw=1.5))
-    p.append(badge(5, 632, 694))
-    p.append(T(706, 708, "per-image findings", size=7.4, fill=C_MUT))
-    # 6: evaluation -> training (selection signal, right edge, dashed)
-    p.append(arrow([(1120, 566), (1136, 566), (1136, 254), (1120, 254)], color="#999999", sw=1.3, dash="5,3"))
-    p.append(badge(6, 1136, 410))
-    p.append(T(1128, 441, "dev-split signal", size=7.2, fill=C_MUT, anchor="end"))
+    # ---- Final answer ----
+    a0 = e0 + eh + 34
+    p.append(arrow([(RX + RW / 2, a0), (RX + RW / 2, e0 + eh + 2)], color=G, sw=1.5))
+    p.append(badge(5, RX + RW / 2, a0 - 17))
+    p.append(t(RX + RW / 2 + 16, a0 - 14, "per-image findings", size=8.6, fill=C_SUB, anchor="start"))
+    p.append(R(RX, a0, RW, 70, rx=8, fill="#F2F8F2", stroke=C_GREEN, sw=1.4))
+    p.append(t(RX + RW / 2, a0 + 19, "final answer - findings JSON", size=9.8, weight="bold", fill=C_GREEN_D, maxw=316))
+    p.append(t(RX + 14, a0 + 39, '{"findings":[{"quadrant":3,"tooth":34,', size=8.4, fill=C_BLUE_D, anchor="start", font=MONO, maxw=316))
+    p.append(t(RX + 14, a0 + 53, ' "diagnosis":"Caries","confidence":0.82}]}', size=8.4, fill=C_BLUE_D, anchor="start", font=MONO, maxw=316))
+
+    # ---- Policy <-> Tool node ----
+    c0 = a0 + 70 + 36
+    ch = 170
+    px0, pw = RX, 140
+    tx0, tw = RX + 170, 170
+    p.append(arrow([(px0 + 60, c0), (px0 + 60, a0 + 72)], color=G, sw=1.4))
+    p.append(t(px0 + 70, a0 + 70 + 20, "on answer / budget", size=8.6, fill=C_SUB, anchor="start", maxw=120))
+    p.append(R(px0, c0, pw, ch, rx=8, stroke=C_BLUE, sw=1.5))
+    p.append(t(px0 + pw / 2, c0 + 24, "Policy", size=11.5, weight="bold", fill=C_BLUE_D))
+    p.append(t(px0 + pw / 2, c0 + 44, "Qwen3.5-9B", size=10.2, weight="bold", maxw=pw - 12))
+    p.append(t(px0 + pw / 2, c0 + 64, "reasoning node", size=8.8, fill=C_SUB, maxw=pw - 12))
+    p.append(t(px0 + pw / 2, c0 + 77, "thought + JSON tool calls", size=8.8, fill=C_SUB, maxw=pw - 10))
+    p.append(t(px0 + pw / 2, c0 + 102, "LoRA adapters:", size=8.8, fill=C_SUB, maxw=pw - 12))
+    p.append(t(px0 + pw / 2, c0 + 115, "SFT · GRPO (pluggable)", size=8.8, fill=C_SUB, maxw=pw - 10))
+    p.append(R(tx0, c0, tw, ch, rx=8, stroke=C_BLUE, sw=1.5))
+    p.append(t(tx0 + tw / 2, c0 + 24, "Tool node", size=11.5, weight="bold", fill=C_BLUE_D))
+    p.append(IMG(tx0 + 10, c0 + 34, 34, 110, a["crop_final"]))
+    p.append(R(tx0 + 10, c0 + 34, 34, 110, rx=1, stroke="#888888", sw=0.9, fill="none"))
+    p.append(t(tx0 + 27, c0 + 158, "live crop", size=8.4, fill=C_SUB))
+    tt = tx0 + 52
+    p.append(t(tt, c0 + 46, "8 registered tools", size=9.2, weight="bold", anchor="start", maxw=tw - 58))
+    for i, line in enumerate(("zoom · window · denoise", "enhance · contrast", "locate · nudge", "bilateral compare · fdi")):
+        p.append(t(tt, c0 + 62 + 12 * i, line, size=8.8, fill=C_SUB, anchor="start", maxw=tw - 58))
+    p.append(t(tt, c0 + 124, "continuous parameters:", size=8.8, fill=C_SUB, anchor="start", maxw=tw - 58))
+    p.append(t(tt, c0 + 136, "strength · center · width", size=8.8, fill=C_SUB, anchor="start", maxw=tw - 58))
+    # cycle arrows in the 30-unit corridor
+    gx0, gx1 = px0 + pw, tx0
+    p.append(arrow([(gx0, c0 + 56), (gx1, c0 + 56)], color=C_BLUE, sw=1.6))
+    p.append(t((gx0 + gx1) / 2, c0 + 48, "call", size=8.6, fill=C_BLUE_D))
+    p.append(arrow([(gx1, c0 + 108), (gx0, c0 + 108)], color="#8DA2C4", sw=1.6))
+    p.append(t((gx0 + gx1) / 2, c0 + 100, "obs", size=8.6, fill="#8DA2C4"))
+
+    # ---- OPG input (feeds policy solid, tools dashed base_image) ----
+    o0 = c0 + ch + 34
+    p.append(IMG(RX + 10, o0, 224, 105, a["opg"]))
+    p.append(R(RX + 10, o0, 224, 105, rx=3, stroke="#666666", sw=1.2, fill="none"))
+    p.append(arrow([(px0 + 60, o0), (px0 + 60, c0 + ch + 2)], color=G, sw=1.4))
+    p.append(t(RX + 122, o0 + 119, "input · native OPG (2,808 × 1,316 px)", size=8.8, fill=C_SUB, maxw=330))
+    p.append(t(RX + 122, o0 + 131, "every tool executes at full resolution", size=8.6, fill=C_SUB, maxw=330))
+    bx = tx0 + tw - 24
+    p.append(arrow([(RX + 234, o0 + 52), (bx, o0 + 52), (bx, c0 + ch + 2)], color=G, sw=1.2, dash="4,3"))
+    p.append(t(bx - 6, o0 + 44, "base_image", size=8.6, fill=C_SUB, anchor="end"))
+
+    # ---- dispatcher / input-geometry note ----
+    d0 = o0 + 150
+    p.append(R(RX, d0, RW, 80, rx=8, fill=C_BLUE_FILL, stroke="#AAB8CE", sw=1.2, dash="5,3"))
+    p.append(t(RX + 14, d0 + 18, "shared dispatcher - every image-consuming tool runs on base_image;", size=8.8, fill=C_BLUE_D, anchor="start", maxw=316))
+    p.append(t(RX + 14, d0 + 31, "the crop chain never compounds", size=8.8, fill=C_BLUE_D, anchor="start", maxw=316))
+    p.append(t(RX + 14, d0 + 50, "input geometry: TPU = canonical views + static slots (no recompile);", size=8.8, fill=C_BLUE_D, anchor="start", maxw=316))
+    p.append(t(RX + 14, d0 + 63, "GPU = native so far - decision pending; tools always run native", size=8.8, fill=C_BLUE_D, anchor="start", maxw=316))
+    right_bottom = d0 + 80
+
+    # ---- cross-column connectors ----
+    # 4: LoRA adapters -> policy (short horizontal hop across the gutter)
+    ay = oy + 20
+    p.append(arrow([(ix + iw, ay), (LX + LW + 18, ay), (LX + LW + 18, c0 + 60), (px0, c0 + 60)], color="#7FA98B", sw=1.6))
+    p.append(badge(4, LX + LW + 18, ay - 30))
+    # 6: evaluation -> training (dev-split signal, right margin then bottom lane, dashed)
+    lane = max(bottom, right_bottom) + 22
+    mx = RX + RW + 8
+    p.append(arrow([(RX + RW, e0 + 100), (mx, e0 + 100), (mx, lane), (LC_ + 70, lane), (LC_ + 70, bottom + 2)], color=G, sw=1.3, dash="5,3"))
+    p.append(badge(6, mx, e0 + eh + 17))
+    p.append(t(mx - 12, e0 + eh + 20, "dev-split signal", size=8.6, fill=C_SUB, anchor="end"))
     p.append(
-        T(
-            24,
-            694,
+        t(
+            LX,
+            lane + 24,
             "numbered path: 1 data -> traces · 2 corpus -> SFT · 3 SFT -> GRPO · 4 adapters -> policy · 5 findings -> eval · 6 dev-split signal",
-            size=7.8,
-            fill=C_MUT,
+            size=8.6,
+            fill=C_SUB,
             anchor="start",
+            maxw=W - 2 * LX,
         )
     )
-
-    return svg(1200, 760, "".join(p))
+    if warn:
+        print("  architecture text-fit warnings:\n   " + "\n   ".join(warn))
+    return svg(W + 8, lane + 40, "".join(p))
 
 
 # ---------------------------------------------------------------------------
