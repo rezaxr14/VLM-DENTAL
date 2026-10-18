@@ -703,20 +703,38 @@ def build_architecture(a):
 # ---------------------------------------------------------------------------
 
 
+def _checked(warn):
+    """Return a T() wrapper that records labels wider than their box (maxw)."""
+    from reportlab.pdfbase.pdfmetrics import stringWidth
+
+    def t(x, y, s_, size=9.0, fill=C_TXT, anchor="middle", weight=None, maxw=None, font=None):
+        face = "Courier" if font else ("Helvetica-Bold" if weight == "bold" else "Helvetica")
+        if maxw is not None and stringWidth(s_, face, size) > maxw:
+            warn.append(f"overflow {stringWidth(s_, face, size):.0f}>{maxw}: {s_!r}")
+        return TC(x, y, s_, size=size, fill=fill, anchor=anchor, weight=weight, font=font)
+
+    return t
+
+
 def build_corpus_composition(a):
+    """Corpus composition on a 640-unit canvas (labels print at ~6.3-7.5 pt)."""
+    W = 640
+    warn: list[str] = []
+    t = _checked(warn)
     p = []
-    p.append(T(530, 24, "Corpus composition: five cohorts, two exact arms", size=14.5, weight="bold"))
-    p.append(T(530, 42, "all counts measured from the released trace files (per-cohort 1:1 parity by construction)", size=9.5, fill=C_SUB))
+    p.append(TC(W / 2, 22, "Corpus composition: five cohorts, two exact arms", size=13, weight="bold"))
+    p.append(t(W / 2, 38, "all counts measured from the released trace files (per-cohort 1:1 parity by construction)", size=9.2, fill=C_SUB, maxw=600))
 
-    p.append(R(16, 58, 1028, 400, fill="#FCFCFD", stroke="#DDDDDD", sw=1.2))
-    p.append(T(40, 88, "cohort", size=8, fill=C_MUT, anchor="start"))
-    p.append(T(300, 88, "with-tools traces (bar length = cohort size)", size=8, fill=C_MUT, anchor="start"))
-    p.append(T(690, 88, "traces", size=8, fill=C_MUT, anchor="start"))
-    p.append(T(760, 88, "findings", size=8, fill=C_MUT, anchor="start"))
-    p.append(T(850, 88, "healthy", size=8, fill=C_MUT, anchor="start"))
-    p.append(T(930, 88, "avg calls", size=8, fill=C_MUT, anchor="start"))
+    p.append(R(10, 50, 620, 262, fill="#FCFCFD", stroke="#DDDDDD", sw=1.2))
+    hy = 74
+    p.append(t(24, hy, "cohort", size=8.8, fill=C_SUB, anchor="start"))
+    p.append(t(190, hy, "with-tools traces (bar = cohort size)", size=8.8, fill=C_SUB, anchor="start", maxw=210))
+    p.append(t(412, hy, "traces", size=8.8, fill=C_SUB, anchor="start"))
+    p.append(t(464, hy, "findings", size=8.8, fill=C_SUB, anchor="start"))
+    p.append(t(522, hy, "healthy", size=8.8, fill=C_SUB, anchor="start"))
+    p.append(t(574, hy, "avg calls", size=8.8, fill=C_SUB, anchor="start", maxw=52))
 
-    scale = 380.0 / 678
+    scale = 205.0 / 678
     rows = [
         ("dentex · pathology", 678, "3,529", "0", 25.2, C_BLUE),
         ("dentex · healthy", 27, "-", "27", 29.9, C_GREEN),
@@ -724,52 +742,53 @@ def build_corpus_composition(a):
         ("tufts · healthy", 660, "-", "660", 27.0, C_GREEN),
         ("tufts · all diseases", 280, "984", "0", 17.8, C_BLUE),
     ]
-    y = 104
+    y = 84
     for name, n, findings, healthy, calls, color in rows:
         bw = n * scale
-        p.append(T(40, y + 20, name, size=9.2, weight="bold", anchor="start"))
-        p.append(R(300, y + 6, bw, 20, rx=3, fill=color, stroke="none", sw=0))
-        p.append(T(690, y + 20, f"{n}", size=8.6, weight="bold", anchor="start"))
-        p.append(T(760, y + 20, findings, size=8.6, anchor="start"))
-        p.append(T(850, y + 20, healthy, size=8.6, anchor="start"))
-        p.append(T(930, y + 20, f"{calls:.1f}", size=8.6, anchor="start"))
-        y += 52
+        p.append(t(24, y + 17, name, size=9.4, weight="bold", anchor="start", maxw=160))
+        p.append(R(190, y + 5, max(bw, 2), 17, rx=3, fill=color, stroke="none", sw=0))
+        p.append(t(412, y + 17, f"{n}", size=9.2, weight="bold", anchor="start"))
+        p.append(t(464, y + 17, findings, size=9.2, anchor="start"))
+        p.append(t(522, y + 17, healthy, size=9.2, anchor="start"))
+        p.append(t(574, y + 17, f"{calls:.1f}", size=9.2, anchor="start"))
+        y += 32
 
-    p.append(R(32, 352, 996, 56, rx=6, fill="#F7F8FA", stroke="#E3E3E3", sw=1.0))
-    p.append(T(48, 378, "totals", size=9.5, weight="bold", anchor="start"))
-    p.append(T(120, 378, "1,847 with-tools + 1,847 no-tools · exact parity", size=9.0, anchor="start"))
-    p.append(T(430, 378, "5,144 findings (4,513 unique)", size=9.0, anchor="start"))
-    p.append(T(640, 378, "687 healthy images", size=9.0, anchor="start"))
-    p.append(T(790, 378, "44,350 executed tool calls", size=9.0, anchor="start"))
-    p.append(T(120, 398, "with-tools arm: 12-13 turns and 18-30 real tool calls per trace", size=8.0, fill=C_SUB, anchor="start"))
+    ty = 246
+    p.append(R(22, ty - 8, 596, 52, rx=6, fill="#F7F8FA", stroke="#E3E3E3", sw=1.0))
+    p.append(t(34, ty + 8, "totals", size=9.6, weight="bold", anchor="start"))
+    p.append(t(84, ty + 8, "1,847 with-tools + 1,847 no-tools · exact parity · 44,350 executed tool calls", size=9.0, anchor="start", maxw=526))
+    p.append(t(84, ty + 21, "5,144 findings (4,513 unique) · 687 healthy images", size=9.0, anchor="start", maxw=526))
+    p.append(t(84, ty + 34, "with-tools arm: 12-13 turns and 18-30 real tool calls per trace", size=8.6, fill=C_SUB, anchor="start", maxw=526))
 
-    p.append(L(300, 442, 324, 442, color=C_BLUE, sw=3))
-    p.append(T(330, 445, "pathology cohorts (findings-bearing)", size=8.4, anchor="start"))
-    p.append(L(560, 442, 584, 442, color=C_GREEN, sw=3))
-    p.append(T(590, 445, "healthy cohorts (negative controls)", size=8.4, anchor="start"))
+    ly = 304
+    p.append(L(24, ly - 3, 46, ly - 3, color=C_BLUE, sw=3))
+    p.append(t(52, ly, "pathology cohorts (findings-bearing)", size=8.8, anchor="start", maxw=190))
+    p.append(L(262, ly - 3, 284, ly - 3, color=C_GREEN, sw=3))
+    p.append(t(290, ly, "healthy cohorts (negative controls)", size=8.8, anchor="start", maxw=190))
 
     # unique findings by class
-    p.append(R(16, 474, 1028, 112, fill="#FCFCFD", stroke="#DDDDDD", sw=1.2))
-    p.append(T(40, 498, "unique findings by class", size=9.5, weight="bold", anchor="start"))
+    py0 = 326
+    p.append(R(10, py0, 620, 154, fill="#FCFCFD", stroke="#DDDDDD", sw=1.2))
+    p.append(t(24, py0 + 22, "unique findings by class", size=10, weight="bold", anchor="start"))
     classes = [
-        ("caries", 2189, 500),
-        ("deep caries", 578, 132),
-        ("impacted teeth", 604, 138),
-        ("periapical lesions", 789, 180),
-        ("further Tufts classes", 353, 81),
+        ("caries", 2189),
+        ("deep caries", 578),
+        ("impacted teeth", 604),
+        ("periapical lesions", 789),
+        ("further Tufts classes", 353),
     ]
-    cy = 522
-    for name, n, bw in classes:
-        p.append(T(40, cy, name, size=8.2, anchor="start"))
-        p.append(R(190, cy - 8, bw, 9, rx=2, fill=C_BLUE, stroke="none", sw=0))
-        p.append(T(190 + bw + 6, cy, f"{n:,}", size=8.0, weight="bold", anchor="start"))
-        cy += 15
-    p.append(T(830, 528, "4,513 unique findings;", size=8.4, anchor="start"))
-    p.append(T(830, 544, "5,144 annotations total", size=8.4, anchor="start"))
-    p.append(T(830, 560, "(the 202-image Tufts overlap cohort", size=7.6, fill=C_SUB, anchor="start"))
-    p.append(T(830, 572, "is contained in the 280-image all-diseases cohort)", size=7.6, fill=C_SUB, anchor="start"))
-
-    return svg(1060, 606, "".join(p))
+    cy = py0 + 44
+    for name, n in classes:
+        bw = 300.0 * n / 2189
+        p.append(t(24, cy, name, size=8.8, anchor="start", maxw=104))
+        p.append(R(134, cy - 8, bw, 10, rx=2, fill=C_BLUE, stroke="none", sw=0))
+        p.append(t(134 + bw + 6, cy, f"{n:,}", size=8.8, weight="bold", anchor="start"))
+        cy += 17
+    p.append(t(24, py0 + 134, "4,513 unique findings; 5,144 annotations total (the 202-image Tufts overlap cohort", size=8.6, fill=C_SUB, anchor="start", maxw=596))
+    p.append(t(24, py0 + 146, "is contained in the 280-image all-diseases cohort)", size=8.6, fill=C_SUB, anchor="start", maxw=596))
+    if warn:
+        print("  corpus_composition text-fit warnings:\n   " + "\n   ".join(warn))
+    return svg(W, py0 + 162, "".join(p))
 
 
 # ---------------------------------------------------------------------------
@@ -778,49 +797,61 @@ def build_corpus_composition(a):
 
 
 def build_dataset_catalog(a):
+    """Dataset catalog on a 640-unit canvas: in-use cards side by side, 2x4 candidates."""
+    W = 640
+    warn: list[str] = []
+    t = _checked(warn)
     p = []
-    p.append(T(540, 24, "The data layer: two sources in use, eight candidates on file", size=14.5, weight="bold"))
-    p.append(T(540, 42, "a candidate is promoted only after its annotation semantics are verified - two loaders deliberately stop at one open question each", size=9.5, fill=C_SUB))
+    p.append(TC(W / 2, 22, "The data layer: two sources in use, eight candidates on file", size=13, weight="bold"))
+    p.append(t(W / 2, 37, "a candidate is promoted only after its annotation semantics are verified -", size=9.2, fill=C_SUB, maxw=610))
+    p.append(t(W / 2, 49, "two loaders deliberately stop at one open question each", size=9.2, fill=C_SUB, maxw=610))
 
     # ---- in use ----
-    p.append(R(16, 58, 384, 522, fill=C_GREEN_FILL, stroke=C_GREEN, sw=1.4))
-    p.append(R(32, 74, 70, 20, rx=10, fill=C_GREEN, stroke="none", sw=0))
-    p.append(T(67, 88, "IN USE", size=8.6, weight="bold", fill="#FFFFFF"))
-    p.append(T(384, 88, "feeds the released corpus", size=8.2, fill=C_GREEN_D, anchor="end"))
+    y0 = 60
+    p.append(R(10, y0, 620, 232, fill=C_GREEN_FILL, stroke=C_GREEN, sw=1.4))
+    p.append(R(22, y0 + 10, 62, 18, rx=9, fill=C_GREEN, stroke="none", sw=0))
+    p.append(t(53, y0 + 23, "IN USE", size=8.8, weight="bold", fill="#FFFFFF"))
+    p.append(t(618, y0 + 23, "feeds the released corpus", size=8.8, fill=C_GREEN_D, anchor="end"))
 
-    p.append(R(32, 106, 352, 210))
-    p.append(icon_db(48, 122))
-    p.append(T(76, 134, "DENTEX", size=12, weight="bold", anchor="start"))
-    p.append(T(368, 134, "2,332 images", size=9.2, fill=C_BLUE_D, anchor="end"))
-    p.append(T(48, 158, "quadrant · enumeration · diagnosis labels", size=8.2, anchor="start"))
-    p.append(T(48, 172, "4 pathology classes + box coordinates", size=8.2, anchor="start"))
-    p.append(T(48, 188, "the only panoramic source pairing tooth position", size=7.8, fill=C_SUB, anchor="start"))
-    p.append(T(48, 200, "with all four reward-relevant classes", size=7.8, fill=C_SUB, anchor="start"))
-    p.append(R(48, 214, 160, 22, rx=11, fill="#F0F7F0", stroke=C_GREEN, sw=1.0))
-    p.append(T(128, 229, "loader: complete", size=8.2, weight="bold", fill=C_GREEN_D))
-    p.append(T(48, 260, "contributes 705 corpus traces", size=9.0, weight="bold", fill=C_BLUE_D, anchor="start"))
-    p.append(T(48, 276, "(678 pathology + 27 healthy)", size=8.0, fill=C_SUB, anchor="start"))
-    p.append(T(48, 296, "grounding pool: 1,339 images · 21,624 tooth boxes", size=7.8, fill=C_SUB, anchor="start"))
+    cy = y0 + 38
+    # DENTEX card
+    p.append(R(22, cy, 298, 184))
+    p.append(icon_db(34, cy + 10))
+    p.append(t(58, cy + 24, "DENTEX", size=11.5, weight="bold", anchor="start"))
+    p.append(t(308, cy + 24, "2,332 images", size=9.2, fill=C_BLUE_D, anchor="end"))
+    p.append(t(34, cy + 46, "quadrant · enumeration · diagnosis labels", size=8.8, anchor="start", maxw=276))
+    p.append(t(34, cy + 59, "4 pathology classes + box coordinates", size=8.8, anchor="start", maxw=276))
+    p.append(t(34, cy + 75, "the only panoramic source pairing tooth position", size=8.6, fill=C_SUB, anchor="start", maxw=276))
+    p.append(t(34, cy + 87, "with all four reward-relevant classes", size=8.6, fill=C_SUB, anchor="start", maxw=276))
+    p.append(R(34, cy + 98, 130, 20, rx=10, fill="#F0F7F0", stroke=C_GREEN, sw=1.0))
+    p.append(t(99, cy + 112, "loader: complete", size=8.8, weight="bold", fill=C_GREEN_D))
+    p.append(t(34, cy + 140, "contributes 705 corpus traces", size=9.4, weight="bold", fill=C_BLUE_D, anchor="start", maxw=276))
+    p.append(t(34, cy + 153, "(678 pathology + 27 healthy)", size=8.6, fill=C_SUB, anchor="start", maxw=276))
+    p.append(t(34, cy + 172, "grounding pool: 1,339 images · 21,624 tooth boxes", size=8.6, fill=C_SUB, anchor="start", maxw=276))
 
-    p.append(R(32, 328, 352, 210))
-    p.append(icon_db(48, 344))
-    p.append(T(76, 356, "Tufts Dental Database", size=12, weight="bold", anchor="start"))
-    p.append(T(368, 356, "1,000 images", size=9.2, fill=C_BLUE_D, anchor="end"))
-    p.append(T(48, 380, "per-tooth boxes (Universal Numbering)", size=8.2, anchor="start"))
-    p.append(T(48, 394, "expert pathology layer · 25,184 boxes", size=8.2, anchor="start"))
-    p.append(T(48, 410, "periapical maps onto the DENTEX taxonomy;", size=7.8, fill=C_SUB, anchor="start"))
-    p.append(T(48, 422, "no caries findings in this layer", size=7.8, fill=C_SUB, anchor="start"))
-    p.append(R(48, 436, 230, 22, rx=11, fill=C_ORANGE_L, stroke="#F0B27A", sw=1.0))
-    p.append(T(163, 451, "loader: partial - 1 open question", size=8.2, weight="bold", fill=C_ORANGE_D))
-    p.append(T(48, 482, "contributes 1,142 corpus traces", size=9.0, weight="bold", fill=C_BLUE_D, anchor="start"))
-    p.append(T(48, 498, "(202 overlap + 660 healthy + 280 all-diseases)", size=8.0, fill=C_SUB, anchor="start"))
-    p.append(T(48, 518, "grounding pool: 1,000 images · 25,184 boxes", size=7.8, fill=C_SUB, anchor="start"))
+    # Tufts card
+    tx = 330
+    p.append(R(tx, cy, 290, 184))
+    p.append(icon_db(tx + 12, cy + 10))
+    p.append(t(tx + 36, cy + 24, "Tufts Dental Database", size=11.5, weight="bold", anchor="start", maxw=150))
+    p.append(t(tx + 278, cy + 24, "1,000 images", size=9.2, fill=C_BLUE_D, anchor="end"))
+    p.append(t(tx + 12, cy + 46, "per-tooth boxes (Universal Numbering)", size=8.8, anchor="start", maxw=268))
+    p.append(t(tx + 12, cy + 59, "expert pathology layer · 25,184 boxes", size=8.8, anchor="start", maxw=268))
+    p.append(t(tx + 12, cy + 75, "periapical maps onto the DENTEX taxonomy;", size=8.6, fill=C_SUB, anchor="start", maxw=268))
+    p.append(t(tx + 12, cy + 87, "no caries findings in this layer", size=8.6, fill=C_SUB, anchor="start", maxw=268))
+    p.append(R(tx + 12, cy + 98, 190, 20, rx=10, fill=C_ORANGE_L, stroke="#F0B27A", sw=1.0))
+    p.append(t(tx + 107, cy + 112, "loader: partial - 1 open question", size=8.8, weight="bold", fill=C_ORANGE_D, maxw=180))
+    p.append(t(tx + 12, cy + 140, "contributes 1,142 corpus traces", size=9.4, weight="bold", fill=C_BLUE_D, anchor="start", maxw=268))
+    p.append(t(tx + 12, cy + 153, "(202 overlap + 660 healthy + 280 all-diseases)", size=8.6, fill=C_SUB, anchor="start", maxw=268))
+    p.append(t(tx + 12, cy + 172, "grounding pool: 1,000 images · 25,184 boxes", size=8.6, fill=C_SUB, anchor="start", maxw=268))
 
     # ---- candidates ----
-    p.append(R(416, 58, 648, 522, fill="#FBFBFC", stroke="#CCCCCC", sw=1.2))
-    p.append(R(432, 74, 140, 20, rx=10, fill="#9AA5B1", stroke="none", sw=0))
-    p.append(T(502, 88, "CANDIDATE POOL", size=8.6, weight="bold", fill="#FFFFFF"))
-    p.append(T(1048, 88, "pending - not used in this work", size=8.2, fill=C_SUB, anchor="end"))
+    c0 = y0 + 232 + 12
+    ch = 38 + 4 * 66 + 44
+    p.append(R(10, c0, 620, ch, fill="#FBFBFC", stroke="#CCCCCC", sw=1.2))
+    p.append(R(22, c0 + 10, 124, 18, rx=9, fill="#9AA5B1", stroke="none", sw=0))
+    p.append(t(84, c0 + 23, "CANDIDATE POOL", size=8.8, weight="bold", fill="#FFFFFF"))
+    p.append(t(618, c0 + 23, "pending - not used in this work", size=8.8, fill=C_SUB, anchor="end"))
 
     candidates = [
         ("Dental Radiography", "1,272", "no confirmed diagnosis taxonomy", "systematic review"),
@@ -834,22 +865,31 @@ def build_dataset_catalog(a):
     ]
     for i, (name, n, reason, source) in enumerate(candidates):
         col, row = i % 2, i // 2
-        cx = 432 + col * 316
-        cy = 106 + row * 88
-        p.append(R(cx, cy, 300, 80))
-        p.append(T(cx + 12, cy + 20, name, size=9.2, weight="bold", anchor="start"))
-        p.append(T(cx + 288, cy + 20, n, size=8.6, fill=C_BLUE_D, anchor="end"))
-        p.append(T(cx + 12, cy + 38, reason, size=7.6, fill=C_SUB, anchor="start"))
-        p.append(T(cx + 12, cy + 62, f"({source})", size=7.0, fill=C_MUT, anchor="start"))
-    p.append(T(432, 496, "diagnosis-labeled: 1 of 8 (binary caries masks) · grounding-only: 7 of 8", size=7.8, anchor="start"))
-    p.append(T(432, 512, "promotion rule: verified end-to-end annotation semantics, per dataset", size=7.8, anchor="start"))
+        cx = 22 + col * 304
+        cyy = c0 + 38 + row * 66
+        p.append(R(cx, cyy, 292, 58))
+        p.append(t(cx + 10, cyy + 17, name, size=9.4, weight="bold", anchor="start", maxw=200))
+        p.append(t(cx + 282, cyy + 17, n, size=9.0, fill=C_BLUE_D, anchor="end"))
+        p.append(t(cx + 10, cyy + 33, reason, size=8.6, fill=C_SUB, anchor="start", maxw=272))
+        p.append(t(cx + 10, cyy + 48, f"({source})", size=8.4, fill=C_SUB, anchor="start", maxw=272))
+    ny = c0 + 38 + 4 * 66 + 8
+    p.append(t(22, ny + 6, "diagnosis-labeled: 1 of 8 (binary caries masks) · grounding-only: 7 of 8", size=8.8, anchor="start", maxw=596))
+    p.append(t(22, ny + 20, "promotion rule: verified end-to-end annotation semantics, per dataset", size=8.8, anchor="start", maxw=596))
 
     # ---- footer ----
-    p.append(R(16, 596, 1048, 52, fill="#F7F8FA", stroke="#E3E3E3", sw=1.0))
-    p.append(T(32, 618, "catalog transcribed from a systematic review of 16 public dental imaging datasets (Uribe et al. 2024) plus targeted follow-up search", size=7.8, fill=C_SUB, anchor="start"))
-    p.append(T(32, 636, "the diagnosis-label vs grounding-only flag drives purpose: grounding candidates generalize locate_tooth, diagnosis candidates feed trace generation", size=7.8, fill=C_SUB, anchor="start"))
-
-    return svg(1080, 664, "".join(p))
+    f0 = c0 + ch + 12
+    p.append(R(10, f0, 620, 76, fill="#F7F8FA", stroke="#E3E3E3", sw=1.0))
+    foot = [
+        "catalog transcribed from a systematic review of 16 public dental imaging datasets",
+        "(Uribe et al. 2024) plus targeted follow-up search",
+        "the diagnosis-label vs grounding-only flag drives purpose: grounding candidates generalize",
+        "locate_tooth, diagnosis candidates feed trace generation",
+    ]
+    for i, line in enumerate(foot):
+        p.append(t(22, f0 + 16 + i * 13 + (6 if i >= 2 else 0), line, size=8.6, fill=C_SUB, anchor="start", maxw=596))
+    if warn:
+        print("  dataset_catalog text-fit warnings:\n   " + "\n   ".join(warn))
+    return svg(W, f0 + 88, "".join(p))
 
 
 # ---------------------------------------------------------------------------
@@ -858,73 +898,89 @@ def build_dataset_catalog(a):
 
 
 def build_grounding_cv(a):
+    """Grounding CV on a 620-unit canvas: fold chart on top, two text columns below."""
+    W = 620
+    warn: list[str] = []
+    t = _checked(warn)
     p = []
-    p.append(T(540, 24, "Grounding model: 5-fold CV and held-out verification", size=14.5, weight="bold"))
-    p.append(T(540, 42, "YOLOv8m backend of locate_tooth (one class per FDI quadrant-position pair) - target-filtered protocol", size=9.5, fill=C_SUB))
+    p.append(TC(W / 2, 22, "Grounding model: 5-fold CV and held-out verification", size=13, weight="bold"))
+    p.append(t(W / 2, 38, "YOLOv8m backend of locate_tooth (one class per FDI quadrant-position pair) - target-filtered protocol", size=9.0, fill=C_SUB, maxw=600))
 
-    # left: fold bars
-    p.append(R(16, 58, 620, 500, fill="#FCFCFD", stroke="#DDDDDD", sw=1.2))
-    p.append(T(36, 82, "in-fold CV: target mAP50 per fold", size=10.5, weight="bold", anchor="start"))
-    p.append(L(36, 98, 60, 98, color=C_BLUE, sw=3))
-    p.append(T(66, 101, "DENTEX-only (mean 0.9508)", size=8.4, anchor="start"))
-    p.append(L(250, 98, 274, 98, color=C_GREEN, sw=3))
-    p.append(T(280, 101, "DENTEX + Tufts (mean 0.9376)", size=8.4, anchor="start"))
+    # ---- panel A: fold bars ----
+    p.append(R(10, 50, 600, 284, fill="#FCFCFD", stroke="#DDDDDD", sw=1.2))
+    p.append(t(26, 74, "in-fold CV: target mAP50 per fold", size=10.4, weight="bold", anchor="start"))
+    p.append(L(26, 90, 50, 90, color=C_BLUE, sw=3))
+    p.append(t(56, 93, "DENTEX-only (mean 0.9508)", size=8.8, anchor="start", maxw=180))
+    p.append(L(262, 90, 286, 90, color=C_GREEN, sw=3))
+    p.append(t(292, 93, "DENTEX + Tufts (mean 0.9376)", size=8.8, anchor="start", maxw=200))
 
-    top, bot = 130.0, 500.0
+    top, bot = 112.0, 290.0
 
     def yv(v):
         return bot - (v - 0.80) * (bot - top) / 0.20
 
+    x0, x1 = 62, 596
     for gv in (0.85, 0.90, 0.95, 1.00):
         gy = yv(gv)
-        p.append(L(70, gy, 600, gy, color="#E6E6E6", sw=0.8))
-        p.append(T(64, gy + 3, f"{gv:.2f}", size=7.4, fill=C_MUT, anchor="end"))
+        p.append(L(x0, gy, x1, gy, color="#E6E6E6", sw=0.8))
+        p.append(t(x0 - 6, gy + 3, f"{gv:.2f}", size=8.4, fill=C_SUB, anchor="end"))
     donly = [0.9534, 0.9405, 0.9614, 0.9564, 0.9423]
     dtfts = [0.9676, 0.9502, 0.9384, 0.9504, 0.8814]
+    gw = (x1 - x0) / 5.0
+    p.append(L(x0, yv(0.9508), x1, yv(0.9508), color=C_BLUE, sw=1.0, dash="5,3"))
+    p.append(L(x0, yv(0.9376), x1, yv(0.9376), color=C_GREEN, sw=1.0, dash="5,3"))
     for i, (vd, vt) in enumerate(zip(donly, dtfts)):
-        gx = 70 + i * 106
-        p.append(R(gx + 8, yv(vd), 34, bot - yv(vd), rx=2, fill=C_BLUE, stroke="none", sw=0))
-        p.append(T(gx + 25, yv(vd) - 5, f"{vd:.3f}", size=6.6, fill=C_BLUE_D))
-        p.append(R(gx + 46, yv(vt), 34, bot - yv(vt), rx=2, fill=C_GREEN, stroke="none", sw=0))
-        p.append(T(gx + 63, yv(vt) - 5, f"{vt:.3f}", size=6.6, fill=C_GREEN_D))
-        p.append(T(gx + 44, bot + 16, f"fold {i}", size=7.8, fill=C_SUB))
-    p.append(L(70, bot, 600, bot, color="#999999", sw=1.0))
-    p.append(L(70, yv(0.9508), 600, yv(0.9508), color=C_BLUE, sw=1.0, dash="5,3"))
-    p.append(L(70, yv(0.9376), 600, yv(0.9376), color=C_GREEN, sw=1.0, dash="5,3"))
+        gx = x0 + i * gw
+        p.append(R(gx + 6, yv(vd), 40, bot - yv(vd), rx=2, fill=C_BLUE, stroke="none", sw=0))
+        p.append(t(gx + 26, yv(vd) + 12, f"{vd:.3f}", size=8.4, fill="#FFFFFF", weight="bold", maxw=42))
+        p.append(R(gx + 50, yv(vt), 40, bot - yv(vt), rx=2, fill=C_GREEN, stroke="none", sw=0))
+        p.append(t(gx + 70, yv(vt) + 12, f"{vt:.3f}", size=8.4, fill="#FFFFFF", weight="bold", maxw=42))
+        p.append(t(gx + 48, bot + 15, f"fold {i}", size=8.8, fill=C_SUB))
+    p.append(L(x0, bot, x1, bot, color="#999999", sw=1.0))
 
-    # right: pool + held-out
-    p.append(R(652, 58, 412, 500, fill="#FCFCFD", stroke="#DDDDDD", sw=1.2))
-    p.append(T(668, 82, "training pool", size=10.5, weight="bold", anchor="start"))
-    bw1 = 380 * 1339 / 2339
-    bw2 = 380 * 1000 / 2339
-    p.append(R(668, 96, bw1, 18, rx=2, fill=C_BLUE, stroke="none", sw=0))
-    p.append(R(668 + bw1, 96, bw2, 18, rx=2, fill=C_GREEN, stroke="none", sw=0))
-    p.append(T(668, 134, "DENTEX  1,339 images · 21,624 boxes", size=8.2, anchor="start"))
-    p.append(T(668, 148, "Tufts    1,000 images · 25,184 boxes", size=8.2, anchor="start"))
-    p.append(T(668, 166, "combined 2,339 images · 46,808 boxes", size=8.4, weight="bold", anchor="start"))
+    # ---- panel B left: pool + co-training effect ----
+    b0, bh = 348, 238
+    p.append(R(10, b0, 296, bh, fill="#FCFCFD", stroke="#DDDDDD", sw=1.2))
+    lx = 24
+    p.append(t(lx, b0 + 22, "training pool", size=10.4, weight="bold", anchor="start"))
+    bw1 = 268 * 1339 / 2339
+    bw2 = 268 * 1000 / 2339
+    p.append(R(lx, b0 + 32, bw1, 16, rx=2, fill=C_BLUE, stroke="none", sw=0))
+    p.append(R(lx + bw1, b0 + 32, bw2, 16, rx=2, fill=C_GREEN, stroke="none", sw=0))
+    p.append(t(lx, b0 + 68, "DENTEX  1,339 images · 21,624 boxes", size=8.8, anchor="start", maxw=270))
+    p.append(t(lx, b0 + 82, "Tufts    1,000 images · 25,184 boxes", size=8.8, anchor="start", maxw=270))
+    p.append(t(lx, b0 + 100, "combined 2,339 images · 46,808 boxes", size=9.0, weight="bold", anchor="start", maxw=270))
+    p.append(t(lx, b0 + 140, "effect of co-training with Tufts", size=10.4, weight="bold", anchor="start", maxw=270))
+    p.append(t(lx, b0 + 160, "precision 0.9637 -> 0.9680", size=8.8, anchor="start"))
+    p.append(t(lx, b0 + 175, "raw val mAP50 0.5820 -> 0.8695", size=8.8, anchor="start"))
+    p.append(t(lx, b0 + 192, "(different protocol from the target-filtered", size=8.4, fill=C_SUB, anchor="start", maxw=270))
+    p.append(t(lx, b0 + 204, "CV above - both measured)", size=8.4, fill=C_SUB, anchor="start", maxw=270))
 
-    p.append(T(668, 198, "held-out official DENTEX validation", size=10.5, weight="bold", anchor="start"))
-    p.append(T(668, 216, "50 images · 46 pathological · 182 target boxes", size=8.2, anchor="start"))
-    p.append(R(668, 228, 380, 64, rx=6, fill="#F2F8F2", stroke=C_GREEN, sw=1.3))
-    p.append(T(682, 250, "best: DENTEX + Tufts, fold 1", size=9.0, weight="bold", fill=C_GREEN_D, anchor="start"))
-    p.append(T(682, 268, "target mAP50 0.9593 · precision 0.9864", size=8.6, anchor="start"))
-    p.append(T(682, 284, "deployed as the locate_tooth backend", size=7.8, fill=C_SUB, anchor="start"))
-
-    p.append(T(668, 320, "effect of co-training with Tufts", size=10.5, weight="bold", anchor="start"))
-    p.append(T(668, 340, "precision 0.9637 -> 0.9680", size=8.4, anchor="start"))
-    p.append(T(668, 356, "raw val mAP50 0.5820 -> 0.8695", size=8.4, anchor="start"))
-    p.append(T(668, 372, "(different protocol from the target-filtered", size=7.6, fill=C_SUB, anchor="start"))
-    p.append(T(668, 384, "CV above - both measured)", size=7.6, fill=C_SUB, anchor="start"))
-
-    p.append(R(668, 404, 380, 130, rx=6, fill=C_BLUE_FILL, stroke="#C7D3E8", sw=1.1))
-    p.append(T(682, 426, "trace-generation guarantee", size=9.0, weight="bold", fill=C_BLUE_D, anchor="start"))
-    p.append(T(682, 444, "when the requested tooth exists in the ground truth,", size=7.8, anchor="start"))
-    p.append(T(682, 456, "locate_tooth returns its exact box - the detector's", size=7.8, anchor="start"))
-    p.append(T(682, 468, "measured accuracy governs only the unannotated-tooth", size=7.8, anchor="start"))
-    p.append(T(682, 480, "fallback; what the model is shown is then perturbed", size=7.8, anchor="start"))
-    p.append(T(682, 492, "independently (tiered), keeping accept-vs-nudge live", size=7.8, anchor="start"))
-
-    return svg(1080, 584, "".join(p))
+    # ---- panel B right: held-out + guarantee ----
+    rx0 = 318
+    p.append(R(rx0, b0, 292, bh, fill="#FCFCFD", stroke="#DDDDDD", sw=1.2))
+    rx = rx0 + 14
+    p.append(t(rx, b0 + 22, "held-out official DENTEX validation", size=10.4, weight="bold", anchor="start", maxw=270))
+    p.append(t(rx, b0 + 38, "50 images · 46 pathological · 182 target boxes", size=8.8, anchor="start", maxw=270))
+    p.append(R(rx, b0 + 48, 264, 58, rx=6, fill="#F2F8F2", stroke=C_GREEN, sw=1.3))
+    p.append(t(rx + 12, b0 + 66, "best: DENTEX + Tufts, fold 1", size=9.4, weight="bold", fill=C_GREEN_D, anchor="start", maxw=244))
+    p.append(t(rx + 12, b0 + 82, "target mAP50 0.9593 · precision 0.9864", size=8.8, anchor="start", maxw=244))
+    p.append(t(rx + 12, b0 + 97, "deployed as the locate_tooth backend", size=8.4, fill=C_SUB, anchor="start", maxw=244))
+    p.append(R(rx, b0 + 118, 264, 108, rx=6, fill=C_BLUE_FILL, stroke="#C7D3E8", sw=1.1))
+    p.append(t(rx + 12, b0 + 136, "trace-generation guarantee", size=9.4, weight="bold", fill=C_BLUE_D, anchor="start", maxw=244))
+    guar = [
+        "when the requested tooth exists in the ground",
+        "truth, locate_tooth returns its exact box - the",
+        "detector's measured accuracy governs only the",
+        "unannotated-tooth fallback; what the model is",
+        "shown is then perturbed independently (tiered),",
+        "keeping accept-vs-nudge live",
+    ]
+    for i, line in enumerate(guar):
+        p.append(t(rx + 12, b0 + 153 + i * 12, line, size=8.6, anchor="start", maxw=244))
+    if warn:
+        print("  grounding_cv text-fit warnings:\n   " + "\n   ".join(warn))
+    return svg(W, b0 + bh + 12, "".join(p))
 
 
 # ---------------------------------------------------------------------------
