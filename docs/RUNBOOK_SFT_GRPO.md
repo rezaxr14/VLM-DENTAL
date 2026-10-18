@@ -83,7 +83,31 @@ After changing either setting recompute the token-length manifest (the check say
 
 The GPU path pads each batch to its longest sample. There are no vision slots, no solver shim and no SPMD here, because they exist only to stop XLA recompiling on TPU. `--max-seq-len` is a ceiling: traces longer than it are dropped, and the longest remaining trace sets the peak memory.
 
-**A1. Install**
+**A0. Fresh Linux GPU server: one command (patch 0039)**
+```
+git clone https://github.com/rezaxr14/VLM-DENTAL.git && cd VLM-DENTAL
+bash scripts/setup_gpu_server.sh --report-only      # the machine report and the choices it would make; installs nothing
+bash scripts/setup_gpu_server.sh                    # does it; safe to re-run after any stop, finished steps are skipped
+```
+It inspects the machine first (driver, the CUDA the driver supports, GPU name, VRAM, **compute capability**, cores, RAM, free disk at the repo and at `~`) and stops with the numbers if the disk is too small. Every choice then follows the compute capability, never the card name: the "48 GB Pro 6000" may be an RTX 6000 Ada (8.9) or a Blackwell workstation card (12.0), and the plan differs.
+
+| Step | What it does | Where it is decided |
+|---|---|---|
+| system packages | installs only what is missing (`git`, `curl`, `build-essential`, `git-lfs`, `aria2`, `tmux`); `sudo` only for `apt-get` and it says so; `--no-sudo` prints the command instead | `scripts/setup_gpu_server.sh` |
+| Python | `uv python install 3.12` and a venv `.venv` from it (Ubuntu 22.04 has no apt `python3.12`); an existing working `.venv` is reused and never deleted | the script |
+| torch | the CUDA build that the driver and the GPU generation both allow, downloaded into a wheelhouse (`~/.cache/vlm-dental/wheelhouse`, `--no-cache-dir`) so a stalled download resumes; the pair `torch==X torchvision==Y` is then written to `.venv/torch-constraints.txt` and to the venv's `pip.conf`, so `pip install -r requirements.txt` (or a notebook `!pip install -U`) can never replace it. `requirements.txt` and `requirements-gpu.txt` are not edited | `select_torch_index` |
+| attention | FlashAttention-2 on Ampere / Ada / Hopper (an official prebuilt wheel, else PyTorch SDPA with a printed notice); Blackwell: SDPA. FlashAttention-3 is Hopper-only and is never installed. A real forward + backward pass decides whether a kernel counts as installed | `attention_plan` |
+| accelerators | `flash-linear-attention` and `causal-conv1d` (official wheel; else built only when an `nvcc` of the same CUDA major exists; else reported as missing, with the reason). The check imports them the way transformers does and runs a toy forward + backward, because transformers silently falls back to a slow reference path when the import fails | `verify_fla`, `verify_causal_conv1d` |
+| secrets | `.env` from `.env.example` if absent, `chmod 600`, confirms git ignores it, takes `HF_TOKEN` from the environment if set, validates it with one `whoami` call; token values are never printed | `ensure_env_file`, `check_hf_token` |
+| project | `pip install -e . --no-deps`, `pip check`, `python -m bitsandbytes`, a torch import that prints the CUDA device and runs a bf16 matmul | the script |
+| data and model | only existing code: `resolve_qwen_model()` (base model at `data/models/Qwen3.5-9B`), `resolve_stage_traces()`, `ensure_trace_images()` from `dental_agent/utils/inputs.py` | `fetch_data` |
+| preflight | `scripts/train_sft.py ... --preflight` with the discovery flags the notebook's GPU path passes (no precision, no length, no LoRA, no hyperparameter) | `build_preflight_argv` |
+
+It ends with a summary: what was installed, which attention backend `train_sft.py` will pick and why, what is missing, and the next step: open `notebooks/VLM_Dental_Colab_SFT.ipynb`, choose the kernel **VLM-DENTAL (.venv)**, run cells 2, 6, 8, 10 (set `PRECISION` yourself), 12 and 20 (0-based cell indices). Options: `bash scripts/setup_gpu_server.sh --help`.
+
+What it never does: change a training setting (the precision line is a hint, nothing selects or switches precision), commit or push, delete a file, kill a process (other users' jobs may hold GPU memory; the report lists them), or run `tune2fs` (it only mentions `sudo tune2fs -m 1 <device>` for the machine's owner). The decision logic is unit-tested without a GPU (`tests/test_gpu_setup.py`); what a test cannot prove is listed with the patch (the real GPU, the real driver, the real downloads).
+
+**A1. Install** (done by A0; the manual way)
 ```
 pip install -r requirements.txt
 pip install -r requirements-gpu.txt
