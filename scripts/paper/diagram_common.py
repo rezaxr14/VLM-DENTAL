@@ -87,31 +87,38 @@ def IMG(x, y, w, h, b64):
     return f'<image x="{x}" y="{y}" width="{w}" height="{h}" xlink:href="data:image/png;base64,{b64}"/>'
 
 
-_ARROW_COLORS = {}
-
-
 def arrow(points, color="#666666", sw=1.5, dash=None):
-    """Orthogonal polyline with an arrowhead. Registers its marker color."""
-    key = color.strip("#")
-    _ARROW_COLORS.setdefault(key, color)
-    pts = " ".join(f"{p[0]:.1f},{p[1]:.1f}" for p in points)
+    """Orthogonal polyline ending in an explicit triangular arrowhead.
+
+    svglib silently drops SVG <marker> elements, so heads drawn with
+    marker-end vanish in the PDF the paper actually includes. The head is
+    therefore a plain polygon, which every converter renders identically.
+    """
+    import math
+
+    (x0, y0), (x1, y1) = points[-2], points[-1]
+    dx, dy = x1 - x0, y1 - y0
+    n = math.hypot(dx, dy) or 1.0
+    ux, uy = dx / n, dy / n
+    head_len, head_hw = 5.6 * sw, 2.6 * sw
+    bx, by = x1 - ux * head_len, y1 - uy * head_len  # base centre of the head
+    line_pts = list(points[:-1]) + [(bx, by)]
+    pts = " ".join(f"{p[0]:.1f},{p[1]:.1f}" for p in line_pts)
     d = f' stroke-dasharray="{dash}"' if dash else ""
+    tri = (
+        f"{x1:.1f},{y1:.1f} "
+        f"{bx - uy * head_hw:.1f},{by + ux * head_hw:.1f} "
+        f"{bx + uy * head_hw:.1f},{by - ux * head_hw:.1f}"
+    )
     return (
-        f'<polyline points="{pts}" fill="none" stroke="{color}" stroke-width="{sw}"'
-        f'{d} marker-end="url(#arr{key})"/>'
+        f'<polyline points="{pts}" fill="none" stroke="{color}" stroke-width="{sw}"{d}/>'
+        f'<polygon points="{tri}" fill="{color}" stroke="none"/>'
     )
 
 
 def marker_defs() -> str:
-    parts = ["<defs>"]
-    for key, color in sorted(_ARROW_COLORS.items()):
-        parts.append(
-            f'<marker id="arr{key}" viewBox="0 0 10 10" refX="8.5" refY="5" '
-            f'markerWidth="6.5" markerHeight="6.5" orient="auto">'
-            f'<path d="M 0 0 L 10 5 L 0 10 z" fill="{color}"/></marker>'
-        )
-    parts.append("</defs>")
-    return "".join(parts)
+    """Kept for API compatibility; arrowheads are now explicit polygons."""
+    return ""
 
 
 def svg(w, h, body):
