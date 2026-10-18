@@ -279,204 +279,225 @@ def build_traces_comparison(a):
 
 
 def build_multistage(a):
-    p = []
-    p.append(T(540, 26, "Trace synthesis: generate, verify, decontaminate", size=14.5, weight="bold"))
-    p.append(T(540, 44, "all counts measured on the released corpus - nothing projected", size=9.5, fill=C_SUB))
+    """Trace synthesis (generate -> verify -> decontaminate) on a 780-unit canvas.
 
-    # ================= band A: generation =================
-    p.append(R(16, 64, 1048, 252, fill=C_BLUE_FILL, stroke="#C7D3E8", sw=1.2))
-    p.append(R(16, 64, 196, 24, rx=6, fill=C_BLUE, stroke="none", sw=0))
-    p.append(T(114, 80, "STAGE 1 · GENERATION", size=9.2, weight="bold", fill="#FFFFFF"))
-    p.append(T(1048, 80, "provider family A: generators", size=8.4, fill=C_BLUE_D, anchor="end"))
+    Three full-width bands of three cards each. The old 1080x870 canvas
+    printed ~3 pt labels; here labels print at ~5-6.5 pt. Every label
+    carries a width limit derived from its card and is checked with font
+    metrics at build time (overflow is printed).
+    """
+    W = 780
+    warn: list[str] = []
+    t = _checked(warn)
+    p = []
+    G = "#999999"
+    p.append(TC(W / 2, 22, "Trace synthesis: generate, verify, decontaminate", size=13, weight="bold"))
+    p.append(t(W / 2, 38, "all counts measured on the released corpus - nothing projected", size=9.2, fill=C_SUB, maxw=700))
+
+    def band(y, h, fill, stroke, pill_fill, pill_text, pill_w, right_text, right_col):
+        p.append(R(10, y, 760, h, fill=fill, stroke=stroke, sw=1.2))
+        p.append(R(10, y, pill_w, 22, rx=6, fill=pill_fill, stroke="none", sw=0))
+        p.append(t(10 + pill_w / 2, y + 15, pill_text, size=8.8, weight="bold", fill="#FFFFFF", maxw=pill_w - 12))
+        p.append(t(758, y + 15, right_text, size=8.6, fill=right_col, anchor="end", maxw=520))
+
+    def title(x, y, icon, text, w):
+        p.append(icon)
+        p.append(t(x + 38, y + 24, text, size=10.4, weight="bold", anchor="start", maxw=w - 50))
+
+    # ===================== band A: generation =====================
+    ya = 50
+    ca = ya + 34
+    cha = 244
+    ha = 34 + cha + 12
+    band(ya, ha, C_BLUE_FILL, "#C7D3E8", C_BLUE, "STAGE 1 · GENERATION", 176, "provider family A: generators", C_BLUE_D)
 
     # inputs card
-    p.append(R(32, 100, 190, 200))
-    p.append(icon_db(46, 112))
-    p.append(T(98, 124, "Expert labels", size=10, weight="bold", anchor="start"))
-    p.append(IMG(44, 136, 150, 70, a["opg"]))
-    p.append(R(44, 136, 150, 70, rx=2, stroke="#666666", sw=1.0, fill="none"))
-    p.append(T(44, 222, "DENTEX · Tufts loaders", size=8.0, fill=C_SUB, anchor="start"))
-    p.append(T(44, 234, "FDI conversion at ingest", size=8.0, fill=C_SUB, anchor="start"))
-    p.append(R(44, 244, 150, 44, fill="#F0F7F0", stroke=C_GREEN, sw=1.1))
-    p.append(T(119, 260, "ground truth per image", size=7.8, weight="bold", fill=C_GREEN_D))
-    p.append(T(119, 274, "FDI 34 · Caries · bbox", size=7.6, fill=C_GREEN_D))
-    p.append(arrow([(222, 200), (234, 200)], color="#999999", sw=1.5))
+    ix, iw = 22, 160
+    p.append(R(ix, ca, iw, cha))
+    title(ix, ca, icon_db(ix + 12, ca + 10), "Expert labels", iw)
+    p.append(IMG(ix + 14, ca + 38, 132, 62, a["opg"]))
+    p.append(R(ix + 14, ca + 38, 132, 62, rx=2, stroke="#666666", sw=1.0, fill="none"))
+    p.append(t(ix + 14, ca + 116, "DENTEX · Tufts loaders", size=8.8, fill=C_SUB, anchor="start", maxw=iw - 24))
+    p.append(t(ix + 14, ca + 129, "FDI conversion at ingest", size=8.8, fill=C_SUB, anchor="start", maxw=iw - 24))
+    p.append(R(ix + 14, ca + 142, 132, 46, fill="#F0F7F0", stroke=C_GREEN, sw=1.1))
+    p.append(t(ix + 80, ca + 160, "ground truth per image", size=8.6, weight="bold", fill=C_GREEN_D, maxw=122))
+    p.append(t(ix + 80, ca + 175, "FDI 34 · Caries · bbox", size=8.4, fill=C_GREEN_D, maxw=122))
+    p.append(arrow([(ix + iw, ca + 110), (ix + iw + 18, ca + 110)], color=G, sw=1.5))
 
     # loop card
-    p.append(R(234, 100, 414, 200))
-    p.append(T(250, 120, "Ground-truth-directed LangGraph loop", size=10, weight="bold", anchor="start"))
-    p.append(R(250, 134, 64, 24, rx=12, fill="#EEF2FA", stroke="#C7D3E8", sw=1.0))
-    p.append(T(282, 149, "thought", size=8, fill=C_BLUE_D))
-    p.append(arrow([(316, 146), (326, 146)], color="#999999", sw=1.1))
-    p.append(R(326, 134, 72, 24, rx=12, fill="#EEF2FA", stroke="#C7D3E8", sw=1.0))
-    p.append(T(362, 149, "tool call", size=8, fill=C_BLUE_D))
-    p.append(arrow([(400, 146), (410, 146)], color="#999999", sw=1.1))
-    p.append(R(410, 134, 84, 24, rx=12, fill="#EEF2FA", stroke="#C7D3E8", sw=1.0))
-    p.append(T(452, 149, "observation", size=8, fill=C_BLUE_D))
-    p.append(arrow([(496, 146), (506, 146)], color="#999999", sw=1.1))
-
-    # zoom monitor: before / after a nudge (real crops)
-    p.append(R(506, 128, 130, 84, rx=4, fill="#FAFBFD", stroke="#DDDDDD", sw=1.0))
-    p.append(IMG(514, 136, 20, 46, a["crop_located"]))
-    p.append(R(514, 136, 20, 46, rx=1, stroke="#888888", sw=0.8, fill="none"))
-    p.append(T(549, 150, "nudge", size=6.6, fill=C_ORANGE_D))
-    p.append(arrow([(540, 159), (558, 159)], color=C_ORANGE, sw=1.6))
-    p.append(IMG(562, 136, 13, 46, a["crop_final"]))
-    p.append(R(562, 136, 13, 46, rx=1, stroke="#888888", sw=0.8, fill="none"))
-    p.append(T(571, 196, "before / after", size=6.8, fill="#888888"))
-    p.append(arrow([(452, 158), (452, 186), (282, 186), (282, 158)], color="#B9C6DC", sw=1.2))
-    p.append(T(367, 181, "repeat every turn", size=7.2, fill="#8DA2C4"))
-
-    # provider chips
-    p.append(T(250, 213, "generation pool:", size=8.0, fill=C_SUB, anchor="start"))
-    p.append(R(250, 218, 104, 18, rx=9, fill="#EEF2FA", stroke="#C7D3E8", sw=1.0))
-    p.append(T(302, 231, "Gemini 3.5 Flash Lite", size=7.4, fill=C_BLUE_D))
-    p.append(R(360, 218, 72, 18, rx=9, fill="#EEF2FA", stroke="#C7D3E8", sw=1.0))
-    p.append(T(396, 231, "MiniMax M3", size=7.4, fill=C_BLUE_D))
-    p.append(R(438, 218, 72, 18, rx=9, fill="#EEF2FA", stroke="#C7D3E8", sw=1.0))
-    p.append(T(474, 231, "NVIDIA NIM", size=7.4, fill=C_BLUE_D))
-    p.append(R(516, 218, 62, 18, rx=9, fill="#EEF2FA", stroke="#C7D3E8", sw=1.0))
-    p.append(T(547, 231, "local vLLM", size=7.4, fill=C_BLUE_D))
-
+    lx, lw = ix + iw + 20, 312
+    p.append(R(lx, ca, lw, cha))
+    p.append(t(lx + 12, ca + 22, "Ground-truth-directed LangGraph loop", size=10.2, weight="bold", anchor="start", maxw=lw - 24))
+    py = ca + 32
+    p.append(R(lx + 12, py, 58, 22, rx=11, fill="#EEF2FA", stroke="#C7D3E8", sw=1.0))
+    p.append(t(lx + 41, py + 15, "thought", size=8.6, fill=C_BLUE_D, maxw=50))
+    p.append(arrow([(lx + 71, py + 11), (lx + 81, py + 11)], color=G, sw=1.1))
+    p.append(R(lx + 82, py, 68, 22, rx=11, fill="#EEF2FA", stroke="#C7D3E8", sw=1.0))
+    p.append(t(lx + 116, py + 15, "tool call", size=8.6, fill=C_BLUE_D, maxw=60))
+    p.append(arrow([(lx + 151, py + 11), (lx + 161, py + 11)], color=G, sw=1.1))
+    p.append(R(lx + 162, py, 82, 22, rx=11, fill="#EEF2FA", stroke="#C7D3E8", sw=1.0))
+    p.append(t(lx + 203, py + 15, "observation", size=8.6, fill=C_BLUE_D, maxw=74))
+    p.append(arrow([(lx + 203, py + 22), (lx + 203, py + 40), (lx + 41, py + 40), (lx + 41, py + 23)], color="#B9C6DC", sw=1.2))
+    p.append(t(lx + 122, py + 35, "repeat every turn", size=8.4, fill="#6F86AD", maxw=140))
+    # generation pool (stacked chips) | zoom monitor
+    gy = py + 56
+    p.append(t(lx + 12, gy, "generation pool:", size=8.6, fill=C_SUB, anchor="start", maxw=140))
+    cy_ = gy + 6
+    for cwid, label in ((104, "Gemini 3.5 Flash Lite"), (66, "MiniMax M3"), (66, "NVIDIA NIM"), (66, "local vLLM")):
+        p.append(R(lx + 12, cy_, cwid, 17, rx=8.5, fill="#EEF2FA", stroke="#C7D3E8", sw=1.0))
+        p.append(t(lx + 12 + cwid / 2, cy_ + 12, label, size=8.2, fill=C_BLUE_D, maxw=cwid - 8))
+        cy_ += 21
+    mx, my, mw, mh = lx + 168, gy - 8, 132, 84
+    p.append(R(mx, my, mw, mh, rx=4, fill="#FAFBFD", stroke="#DDDDDD", sw=1.0))
+    p.append(IMG(mx + 10, my + 8, 24, 56, a["crop_located"]))
+    p.append(R(mx + 10, my + 8, 24, 56, rx=1, stroke="#888888", sw=0.8, fill="none"))
+    p.append(t(mx + 66, my + 30, "nudge", size=8.2, fill=C_ORANGE_D, maxw=40))
+    p.append(arrow([(mx + 40, my + 42), (mx + 92, my + 42)], color=C_ORANGE, sw=1.6))
+    p.append(IMG(mx + 98, my + 8, 16, 56, a["crop_final"]))
+    p.append(R(mx + 98, my + 8, 16, 56, rx=1, stroke="#888888", sw=0.8, fill="none"))
+    p.append(t(mx + mw / 2, my + 78, "before / after", size=8.2, fill="#777777", maxw=mw - 8))
     # perturbation callout
-    p.append(R(250, 246, 380, 42, rx=6, fill=C_ORANGE_L, stroke="#F0B27A", sw=1.1))
-    p.append(T(262, 262, "tiered display perturbation, independent of the true box:", size=7.8, fill=C_ORANGE_D, anchor="start"))
-    p.append(T(262, 277, "45% small · 25% big · 30% none - keeps accept-vs-nudge demonstrable", size=7.4, fill=C_ORANGE_D, anchor="start"))
-    p.append(arrow([(648, 200), (660, 200)], color="#999999", sw=1.5))
+    qy = ca + 188
+    p.append(R(lx + 12, qy, lw - 24, 46, rx=6, fill=C_ORANGE_L, stroke="#F0B27A", sw=1.1))
+    p.append(t(lx + 22, qy + 14, "tiered display perturbation, independent of the true box:", size=8.6, fill=C_ORANGE_D, anchor="start", maxw=lw - 44))
+    p.append(t(lx + 22, qy + 27, "45% small · 25% big · 30% none -", size=8.4, fill=C_ORANGE_D, anchor="start", maxw=lw - 44))
+    p.append(t(lx + 22, qy + 39, "keeps accept-vs-nudge demonstrable", size=8.4, fill=C_ORANGE_D, anchor="start", maxw=lw - 44))
+    p.append(arrow([(lx + lw, ca + 110), (lx + lw + 18, ca + 110)], color=G, sw=1.5))
 
     # unverified pool card
-    p.append(R(660, 100, 388, 200))
-    p.append(icon_doc(674, 112))
-    p.append(T(700, 124, "Unverified trace pool", size=10, weight="bold", anchor="start"))
-    p.append(R(672, 136, 364, 92, rx=4, fill="#F7F8FA", stroke="#E3E3E3", sw=1.0))
+    ux, uw = lx + lw + 20, 232
+    p.append(R(ux, ca, uw, cha))
+    title(ux, ca, icon_doc(ux + 12, ca + 10), "Unverified trace pool", uw)
+    p.append(R(ux + 12, ca + 36, uw - 24, 64, rx=4, fill="#F7F8FA", stroke="#E3E3E3", sw=1.0))
     snip = [
-        "T4 thought \"crop shows only bone and",
-        "         root area ... too low\"",
+        'T4 thought "crop shows only bone and',
+        '         root area ... too low"',
         "T4 call    nudge_crop(dy=-0.30, s=0.60)",
         "T5 obs     bbox -> [1685, 885, 50, 193]",
     ]
-    y = 152
+    yy = ca + 52
     for ln in snip:
-        p.append(T(682, y, ln, size=7.4, fill="#444444", anchor="start", font=MONO))
-        y += 13
-    p.append(R(672, 238, 178, 24, rx=12, fill="#EEF2FA", stroke="#C7D3E8", sw=1.0))
-    p.append(T(761, 254, "44,350 executed tool calls", size=7.8, weight="bold", fill=C_BLUE_D))
-    p.append(R(858, 238, 178, 24, rx=12, fill="#EEF2FA", stroke="#C7D3E8", sw=1.0))
-    p.append(T(947, 254, "2,292 corrective nudges", size=7.8, weight="bold", fill=C_BLUE_D))
-    p.append(T(854, 286, "no training value until verified", size=8.2, fill=C_SUB))
+        p.append(t(ux + 20, yy, ln, size=7.8, fill="#444444", anchor="start", font=MONO, maxw=uw - 40))
+        yy += 13
+    p.append(R(ux + 12, ca + 112, uw - 24, 22, rx=11, fill="#EEF2FA", stroke="#C7D3E8", sw=1.0))
+    p.append(t(ux + uw / 2, ca + 127, "44,350 executed tool calls", size=8.8, weight="bold", fill=C_BLUE_D, maxw=uw - 36))
+    p.append(R(ux + 12, ca + 142, uw - 24, 22, rx=11, fill="#EEF2FA", stroke="#C7D3E8", sw=1.0))
+    p.append(t(ux + uw / 2, ca + 157, "2,292 corrective nudges", size=8.8, weight="bold", fill=C_BLUE_D, maxw=uw - 36))
+    p.append(t(ux + uw / 2, ca + 184, "no training value until verified", size=8.6, fill=C_SUB, maxw=uw - 24))
 
-    # ================= band B: verification =================
-    p.append(R(16, 332, 1048, 252, fill=C_GREEN_FILL, stroke="#BFDCC6", sw=1.2))
-    p.append(R(16, 332, 196, 24, rx=6, fill=C_GREEN, stroke="none", sw=0))
-    p.append(T(114, 348, "STAGE 2 · VERIFICATION", size=9.2, weight="bold", fill="#FFFFFF"))
-    p.append(T(1048, 348, "provider family B - never the generator pool", size=8.4, fill=C_GREEN_D, anchor="end"))
+    # ===================== band B: verification =====================
+    yb = ya + ha + 12
+    cb = yb + 46
+    chb = 196
+    hb = 46 + chb + 12
+    band(yb, hb, C_GREEN_FILL, "#BFDCC6", C_GREEN, "STAGE 2 · VERIFICATION", 176, "provider family B - never the generator pool", C_GREEN_D)
 
-    # strict verifier card
-    p.append(R(32, 368, 300, 190))
-    p.append(icon_shield(48, 382))
-    p.append(T(72, 394, "Strict verifier", size=10, weight="bold", anchor="start"))
-    p.append(T(48, 414, "staged cross-family check per trace:", size=8.2, fill=C_SUB, anchor="start"))
+    vx, vw = 22, 220
+    p.append(R(vx, cb, vw, chb))
+    title(vx, cb, icon_shield(vx + 14, cb + 12), "Strict verifier", vw)
+    p.append(t(vx + 14, cb + 44, "staged cross-family check per trace:", size=8.4, fill=C_SUB, anchor="start", maxw=vw - 24))
     items = [
-        (432, "diagnosis set-matches the full", "multi-finding ground truth"),
-        (462, "evidence trail consistent - no", "claims on healthy tissue"),
-        (492, "no directive leakage in CoT", None),
-        (510, "format + FDI notation valid", None),
+        (cb + 66, "diagnosis set-matches the full", "multi-finding ground truth"),
+        (cb + 96, "evidence trail consistent - no", "claims on healthy tissue"),
+        (cb + 126, "no directive leakage in CoT", None),
+        (cb + 144, "format + FDI notation valid", None),
     ]
-    for iy, l1, l2 in items:
-        p.append(icon_check(48, iy - 5.5))
-        p.append(T(60, iy, l1, size=8.2, anchor="start"))
+    for iy_, l1, l2 in items:
+        p.append(icon_check(vx + 14, iy_ - 5.5))
+        p.append(t(vx + 28, iy_, l1, size=8.6, anchor="start", maxw=vw - 38))
         if l2:
-            p.append(T(60, iy + 12, l2, size=8.2, anchor="start"))
-    p.append(T(48, 538, "strict rate pacing via the provider pool", size=7.6, fill=C_MUT, anchor="start"))
+            p.append(t(vx + 28, iy_ + 12, l2, size=8.6, anchor="start", maxw=vw - 38))
+    p.append(t(vx + 14, cb + 176, "strict rate pacing via the provider pool", size=8.2, fill=C_SUB, anchor="start", maxw=vw - 24))
 
-    p.append(arrow([(332, 462), (396, 462)], color=C_RED, sw=1.6))
-    p.append(T(364, 454, "REJECT · 92", size=8, fill=C_RED))
+    rx_, rw_ = vx + vw + 45, 190
+    p.append(arrow([(vx + vw, cb + 96), (rx_ - 2, cb + 96)], color=C_RED, sw=1.6))
+    p.append(t((vx + vw + rx_) / 2, cb + 80, "REJECT", size=8.2, weight="bold", fill=C_RED, maxw=42))
+    p.append(t((vx + vw + rx_) / 2, cb + 90, "· 92", size=8.2, weight="bold", fill=C_RED, maxw=42))
+    p.append(R(rx_, cb, rw_, chb))
+    title(rx_, cb, icon_gear(rx_ + 14, cb + 12), "Repair loop", rw_)
+    p.append(t(rx_ + 14, cb + 44, "editor rewrites the trace,", size=8.4, fill=C_SUB, anchor="start", maxw=rw_ - 24))
+    p.append(t(rx_ + 14, cb + 57, "keeping the valid CoT prefix:", size=8.4, fill=C_SUB, anchor="start", maxw=rw_ - 24))
+    for ry_, txt in ((cb + 82, "fix tool-arg / FDI slips"), (cb + 102, "drop phantom claims"), (cb + 122, "excise directive leakage")):
+        p.append(R(rx_ + 14, ry_ - 5, 5, 5, rx=1, fill=C_ORANGE, stroke="none", sw=0))
+        p.append(t(rx_ + 26, ry_, txt, size=8.6, anchor="start", maxw=rw_ - 38))
+    p.append(t(rx_ + 14, cb + 160, "re-verified after every repair", size=8.2, fill=C_SUB, anchor="start", maxw=rw_ - 24))
+    # re-verify loop above the cards
+    lane = yb + 38
+    p.append(arrow([(rx_ + rw_ / 2, cb), (rx_ + rw_ / 2, lane), (vx + vw / 2, lane), (vx + vw / 2, cb - 1)], color="#7FA98B", sw=1.3))
+    p.append(t((rx_ + rw_ / 2 + vx + vw / 2) / 2, lane - 4, "re-verify until pass", size=8.4, fill=C_GREEN_D, maxw=200))
 
-    # repair card
-    p.append(R(400, 368, 260, 190))
-    p.append(icon_gear(416, 384))
-    p.append(T(440, 394, "Repair loop", size=10, weight="bold", anchor="start"))
-    p.append(T(416, 414, "editor rewrites the trace,", size=8.2, fill=C_SUB, anchor="start"))
-    p.append(T(416, 426, "keeping the valid CoT prefix:", size=8.2, fill=C_SUB, anchor="start"))
-    for ry, txt in ((448, "fix tool-arg / FDI slips"), (466, "drop phantom claims"), (484, "excise directive leakage")):
-        p.append(R(416, ry - 5, 5, 5, rx=1, fill=C_ORANGE, stroke="none", sw=0))
-        p.append(T(428, ry, txt, size=8.2, anchor="start"))
-    p.append(T(416, 514, "re-verified after every repair", size=7.8, fill=C_MUT, anchor="start"))
-    p.append(arrow([(530, 368), (530, 350), (182, 350), (182, 368)], color="#7FA98B", sw=1.3))
-    p.append(T(356, 344, "re-verify until pass", size=7.8, fill=C_GREEN_D))
-
-    p.append(arrow([(660, 462), (732, 462)], color="#BBBBBB", sw=1.2, dash="3,2.5"))
-    p.append(T(696, 454, "logged", size=7.4, fill=C_MUT))
-
-    # audit card with data-driven bars
-    p.append(R(736, 368, 312, 190))
-    p.append(icon_magnifier(752, 386, r=4.5))
-    p.append(T(770, 394, "First-pass audit", size=10, weight="bold", anchor="start"))
-    p.append(T(752, 416, "92 rejections on 3,694 traces (97.5% pass)", size=8.4, weight="bold", anchor="start"))
+    ax, aw = rx_ + rw_ + 45, 236
+    p.append(arrow([(rx_ + rw_, cb + 96), (ax - 2, cb + 96)], color="#BBBBBB", sw=1.2, dash="3,2.5"))
+    p.append(t((rx_ + rw_ + ax) / 2, cb + 88, "logged", size=8.2, fill=C_SUB, maxw=42))
+    p.append(R(ax, cb, aw, chb))
+    title(ax, cb, icon_magnifier(ax + 18, cb + 18, r=4.5), "First-pass audit", aw)
+    p.append(t(ax + 14, cb + 46, "92 rejections on 3,694 traces", size=8.8, weight="bold", anchor="start", maxw=aw - 24))
+    p.append(t(ax + 14, cb + 58, "(97.5% pass)", size=8.8, weight="bold", anchor="start", maxw=aw - 24))
     bars = [
-        (438, "hallucinated findings on healthy tissue", 150, C_RED, "66", C_RED),
-        (472, "contradicted the ground truth", 34, "#DD8452", "15", C_RED),
-        (506, "drift left uncorrected", 25, C_ORANGE, "11", C_ORANGE_D),
+        (cb + 82, "hallucinated findings on healthy tissue", 130, C_RED, "66", C_RED),
+        (cb + 114, "contradicted the ground truth", 30, "#DD8452", "15", C_RED),
+        (cb + 146, "drift left uncorrected", 22, C_ORANGE, "11", C_ORANGE_D),
     ]
-    for by, label, bw, bc, cnt, cc in bars:
-        p.append(T(752, by, label, size=7.6, fill=C_SUB, anchor="start"))
-        p.append(R(752, by + 6, bw, 9, rx=2, fill=bc, stroke="none", sw=0))
-        p.append(T(752 + bw + 6, by + 14, cnt, size=8, weight="bold", fill=cc, anchor="start"))
-    p.append(T(752, 544, "category 3 exists because perturbation pressure", size=7.4, fill=C_ORANGE_D, anchor="start"))
+    for by_, label, bw_, bc, cnt, cc in bars:
+        p.append(t(ax + 14, by_, label, size=8.2, fill=C_SUB, anchor="start", maxw=aw - 24))
+        p.append(R(ax + 14, by_ + 6, bw_, 9, rx=2, fill=bc, stroke="none", sw=0))
+        p.append(t(ax + 14 + bw_ + 6, by_ + 14, cnt, size=8.4, weight="bold", fill=cc, anchor="start"))
+    p.append(t(ax + 14, cb + 180, "category 3 exists because perturbation pressure", size=8.0, fill=C_ORANGE_D, anchor="start", maxw=aw - 24))
 
-    # PASS arrow down to band C
-    p.append(arrow([(182, 558), (182, 672)], color=C_GREEN, sw=1.8))
-    p.append(T(190, 590, "PASS · 97.5% first-pass", size=8.2, fill=C_GREEN_D, anchor="start"))
-    p.append(arrow([(530, 558), (530, 672)], color="#7FA98B", sw=1.3))
-    p.append(T(538, 600, "PASS", size=7.6, fill=C_GREEN_D, anchor="start"))
+    # ===================== band C: decontamination + release =====================
+    yc = yb + hb + 24
+    cc_ = yc + 34
+    chc = 168
+    hc = 34 + chc + 12
+    band(yc, hc, C_SAND_FILL, "#E5D9B8", "#DD8452", "STAGE 3 · DECONTAMINATION + RELEASE", 214, "only clean traces enter the corpus", C_SAND_D)
 
-    # ================= band C: decontamination + release =================
-    p.append(R(16, 644, 1048, 210, fill=C_SAND_FILL, stroke="#E5D9B8", sw=1.2))
-    p.append(R(16, 644, 240, 24, rx=6, fill="#DD8452", stroke="none", sw=0))
-    p.append(T(136, 660, "STAGE 3 · DECONTAMINATION + RELEASE", size=9.2, weight="bold", fill="#FFFFFF"))
-    p.append(T(1048, 660, "only clean traces enter the corpus", size=8.4, fill=C_SAND_D, anchor="end"))
+    gx, gw = 22, 244
+    # PASS arrows from the verification band
+    p.append(arrow([(238, cb + chb), (238, cc_ - 1)], color=C_GREEN, sw=1.8))
+    p.append(t(248, yc + 15, "PASS · 97.5% first-pass", size=8.4, fill=C_GREEN_D, anchor="start", maxw=140))
+    cx_, cw_ = gx + gw + 26, 244
+    px_ = cx_ + 150
+    p.append(arrow([(px_, cb + chb), (px_, cc_ - 1)], color="#7FA98B", sw=1.3))
+    p.append(t(px_ + 8, yc + 15, "PASS", size=8.4, fill=C_GREEN_D, anchor="start", maxw=60))
 
-    # dual-gate card
-    p.append(R(32, 672, 300, 160))
-    p.append(icon_shield(48, 686, color=C_SAND_D))
-    p.append(T(72, 698, "Dual-gate decontamination", size=10, weight="bold", anchor="start"))
-    p.append(T(48, 720, "Gate 1 - regex sweep for directive", size=8.2, anchor="start"))
-    p.append(T(48, 732, "phrasings leaked into the CoT", size=8.2, anchor="start"))
-    p.append(T(48, 752, "Gate 2 - flagged traces re-verified", size=8.2, anchor="start"))
-    p.append(T(48, 764, "by family B before any action", size=8.2, anchor="start"))
-    p.append(R(48, 776, 170, 22, rx=11, fill="#FDEEEE", stroke=C_RED, sw=1.0))
-    p.append(T(133, 791, "105 traces excised", size=7.8, weight="bold", fill="#8A2E33"))
-    p.append(T(48, 814, "0 false positives on clinical \"hint of\"", size=7.6, fill=C_GREEN_D, anchor="start"))
-    p.append(arrow([(332, 752), (396, 752)], color="#999999", sw=1.5))
-    p.append(T(364, 744, "clean", size=7.4, fill=C_MUT))
+    p.append(R(gx, cc_, gw, chc))
+    title(gx, cc_, icon_shield(gx + 14, cc_ + 12, color=C_SAND_D), "Dual-gate decontamination", gw)
+    p.append(t(gx + 14, cc_ + 46, "Gate 1 - regex sweep for directive", size=8.6, anchor="start", maxw=gw - 24))
+    p.append(t(gx + 14, cc_ + 58, "phrasings leaked into the CoT", size=8.6, anchor="start", maxw=gw - 24))
+    p.append(t(gx + 14, cc_ + 78, "Gate 2 - flagged traces re-verified", size=8.6, anchor="start", maxw=gw - 24))
+    p.append(t(gx + 14, cc_ + 90, "by family B before any action", size=8.6, anchor="start", maxw=gw - 24))
+    p.append(R(gx + 14, cc_ + 104, 150, 22, rx=11, fill="#FDEEEE", stroke=C_RED, sw=1.0))
+    p.append(t(gx + 89, cc_ + 119, "105 traces excised", size=8.6, weight="bold", fill="#8A2E33", maxw=140))
+    p.append(t(gx + 14, cc_ + 146, '0 false positives on clinical "hint of"', size=8.2, fill=C_GREEN_D, anchor="start", maxw=gw - 24))
+    p.append(arrow([(gx + gw, cc_ + 90), (cx_ - 2, cc_ + 90)], color=G, sw=1.5))
+    p.append(t((gx + gw + cx_) / 2, cc_ + 82, "clean", size=8.0, fill=C_SUB, maxw=24))
 
-    # corpus card with parity bars
-    p.append(R(400, 672, 320, 160))
-    p.append(icon_db(416, 686, color=C_GREEN_D))
-    p.append(T(440, 698, "Released corpus", size=10, weight="bold", anchor="start"))
-    p.append(R(416, 714, 120, 14, rx=2, fill=C_BLUE, stroke="none", sw=0))
-    p.append(T(476, 742, "1,847 with-tools", size=7.8, fill=C_BLUE_D))
-    p.append(R(544, 714, 120, 14, rx=2, fill=C_GREEN, stroke="none", sw=0))
-    p.append(T(604, 742, "1,847 no-tools", size=7.8, fill=C_GREEN_D))
-    p.append(T(416, 758, "exact per-cohort 1:1 parity (5 cohorts)", size=7.6, fill=C_MUT, anchor="start"))
-    p.append(T(416, 780, "3,694 verified traces · 5,144 findings", size=8.2, anchor="start"))
-    p.append(T(416, 796, "687 healthy images · 44,350 tool calls", size=8.2, anchor="start"))
-    p.append(arrow([(720, 752), (784, 752)], color="#999999", sw=1.5))
-    p.append(T(752, 744, "clean", size=7.4, fill=C_MUT))
+    p.append(R(cx_, cc_, cw_, chc))
+    title(cx_, cc_, icon_db(cx_ + 12, cc_ + 10, color=C_GREEN_D), "Released corpus", cw_)
+    p.append(R(cx_ + 14, cc_ + 40, 100, 14, rx=2, fill=C_BLUE, stroke="none", sw=0))
+    p.append(t(cx_ + 64, cc_ + 68, "1,847 with-tools", size=8.4, fill=C_BLUE_D, maxw=100))
+    p.append(R(cx_ + 124, cc_ + 40, 100, 14, rx=2, fill=C_GREEN, stroke="none", sw=0))
+    p.append(t(cx_ + 174, cc_ + 68, "1,847 no-tools", size=8.4, fill=C_GREEN_D, maxw=100))
+    p.append(t(cx_ + 14, cc_ + 88, "exact per-cohort 1:1 parity (5 cohorts)", size=8.2, fill=C_SUB, anchor="start", maxw=cw_ - 24))
+    p.append(t(cx_ + 14, cc_ + 114, "3,694 verified traces · 5,144 findings", size=8.8, anchor="start", maxw=cw_ - 24))
+    p.append(t(cx_ + 14, cc_ + 128, "687 healthy images · 44,350 tool calls", size=8.8, anchor="start", maxw=cw_ - 24))
+    p.append(arrow([(cx_ + cw_, cc_ + 90), (cx_ + cw_ + 24, cc_ + 90)], color=G, sw=1.5))
+    p.append(t(cx_ + cw_ + 12, cc_ + 82, "clean", size=8.0, fill=C_SUB, maxw=24))
 
-    # release card
-    p.append(R(788, 672, 260, 160))
-    p.append(icon_doc(804, 686))
-    p.append(T(828, 698, "Release", size=10, weight="bold", anchor="start"))
-    p.append(T(804, 720, "public on the Hugging Face Hub", size=8.2, anchor="start"))
-    p.append(T(804, 736, "per-call audit: perturbation tier,", size=8.2, anchor="start"))
-    p.append(T(804, 748, "shown vs true bbox, offsets", size=8.2, anchor="start"))
-    p.append(R(804, 762, 220, 22, rx=11, fill="#EEF2FA", stroke=C_BLUE, sw=1.0))
-    p.append(T(914, 777, "every number regenerable", size=7.8, weight="bold", fill=C_BLUE_D))
-    p.append(T(804, 804, "scripts/paper rebuilds all figures", size=7.6, fill=C_MUT, anchor="start"))
-    p.append(T(804, 816, "and tables in this paper", size=7.6, fill=C_MUT, anchor="start"))
+    rlx, rlw = cx_ + cw_ + 26, 192
+    p.append(R(rlx, cc_, rlw, chc))
+    title(rlx, cc_, icon_doc(rlx + 12, cc_ + 10), "Release", rlw)
+    p.append(t(rlx + 14, cc_ + 46, "public on the Hugging Face Hub", size=8.6, anchor="start", maxw=rlw - 24))
+    p.append(t(rlx + 14, cc_ + 62, "per-call audit: perturbation tier,", size=8.6, anchor="start", maxw=rlw - 24))
+    p.append(t(rlx + 14, cc_ + 74, "shown vs true bbox, offsets", size=8.6, anchor="start", maxw=rlw - 24))
+    p.append(R(rlx + 14, cc_ + 90, rlw - 28, 22, rx=11, fill="#EEF2FA", stroke=C_BLUE, sw=1.0))
+    p.append(t(rlx + rlw / 2, cc_ + 105, "every number regenerable", size=8.6, weight="bold", fill=C_BLUE_D, maxw=rlw - 36))
+    p.append(t(rlx + 14, cc_ + 134, "scripts/paper rebuilds all figures", size=8.2, fill=C_SUB, anchor="start", maxw=rlw - 24))
+    p.append(t(rlx + 14, cc_ + 146, "and tables in this paper", size=8.2, fill=C_SUB, anchor="start", maxw=rlw - 24))
 
-    return svg(1080, 870, "".join(p))
+    if warn:
+        print("  multistage text-fit warnings:\n   " + "\n   ".join(warn))
+    return svg(W, yc + hc + 12, "".join(p))
 
 
 # ---------------------------------------------------------------------------
