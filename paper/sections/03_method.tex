@@ -34,7 +34,8 @@ markdown-wrapped outputs.
 \subsection{System architecture}
 \label{sec:architecture}
 
-\cref{fig:architecture} shows the complete system. Five component groups surround one agent
+\cref{fig:architecture,fig:training} show the complete system: the agent loop used at inference
+and evaluation time, and the offline stack that produces its weights. Five component groups surround one agent
 core --- a Qwen3.5-9B vision-language policy running the loop of \cref{sec:setup}: a data layer
 (\cref{fig:datasets}: registry-driven loaders for the two in-use sources, DENTEX and Tufts; a
 candidate pool of eight further public panoramic datasets, promoted only after their annotation
@@ -58,14 +59,27 @@ evaluation layer (\cref{sec:eval}) whose probes feed model selection on a fixed 
 
 \begin{figure}[tbp]
   \centering
-  \includegraphics[width=0.97\linewidth]{fig_architecture}
-  \caption{The \sys{} architecture. One agent loop, one shared tool dispatcher, and one
-  canonical vision geometry are shared by trace generation, RL rollouts, and evaluation; the
-  trace synthesis stack produces the verified corpus consumed by SFT and GRPO; evaluation
-  probes select on a dev split only, with the test split run once at the end. Numbered badges
-  trace the corpus-to-policy life cycle (legend in the figure); radiograph and crop pixels are
-  real assets from the corpus.}
+  \includegraphics[width=\linewidth]{fig_architecture}
+  \caption{The \sys{} agent loop. One agent loop, one shared tool dispatcher, and one canonical
+  vision geometry are shared by trace generation, RL rollouts, and evaluation. The policy
+  (Qwen3.5-9B with pluggable SFT/GRPO LoRA adapters) calls the registered tools, which always
+  execute on the native source image; the final findings JSON is scored by an evaluation layer
+  whose probes select on a dev split only, with the test split run once at the end. Badges 4--6
+  continue the numbered path of \cref{fig:training}; radiograph and crop pixels are real assets
+  from the corpus.}
   \label{fig:architecture}
+\end{figure}
+
+\begin{figure}[tbp]
+  \centering
+  \includegraphics[width=\linewidth]{fig_architecture_training}
+  \caption{The \sys{} offline stack. The data layer (DENTEX and Tufts, ground truth with one to
+  seven findings per image, and the YOLOv8m grounding model) feeds the trace-synthesis stack
+  (stage details in \cref{fig:tracegen,fig:traceverif}); the verified corpus is consumed by SFT
+  and then GRPO, which produce the LoRA adapters loaded by the policy of \cref{fig:architecture}.
+  Numbered badges trace the corpus-to-policy life cycle (legend under the figure); the dashed
+  boxes are the agent-loop components shown in \cref{fig:architecture}.}
+  \label{fig:training}
 \end{figure}
 
 Three single-source-of-truth decisions hold the system together. First, one shared dispatcher
@@ -90,7 +104,7 @@ metrics alike --- an indexing bug cannot recur independently in several subsyste
   \includegraphics[width=\linewidth]{fig_input_geometry}
   \caption{Image-input geometry: two execution targets, one invariant. \textbf{TPU:} the policy
   sees aspect-preserving canonical views in three fixed families (renders produced by the
-  geometry module itself, and the \texttt{contralateral\_compare} tool, from a DENTEX image),
+  geometry module itself, and the \texttt{contralateral\_compare} tool, from DENTEX image 624),
   padded to a static 19-slot budget of 7{,}488 vision tokens so XLA compiles one graph; the
   padded tail carries $\text{labels}=-100$ and $\text{attention\_mask}=0$, so padding changes no
   gradient. \textbf{GPU:} runs so far feed original images with dynamic shapes. The choice
@@ -150,10 +164,11 @@ showing the wrong tooth.
   \centering
   \includegraphics[width=\linewidth]{fig_grounding_cv}
   \caption{The \texttt{locate\_tooth} backend: YOLOv8m trained with 5-fold cross-validation on
-  the combined DENTEX+Tufts pool (2{,}339 images, 46{,}808 tooth boxes). Left: in-fold
+  the combined DENTEX+Tufts pool (2{,}339 images, 46{,}808 tooth boxes; one class per FDI
+  quadrant--position pair, target-filtered protocol). Top: in-fold
   target mAP50 per fold for the DENTEX-only and multi-dataset models (means 0.9508 / 0.9376).
-  Right: pool composition, the held-out official DENTEX validation (best target mAP50 0.9593 at
-  precision 0.9864 --- the deployed checkpoint), and the trace-generation guarantee: when a
+  Bottom: pool composition and co-training effect (left), the held-out official DENTEX validation (best target mAP50 0.9593 at
+  precision 0.9864 --- the deployed checkpoint) and the trace-generation guarantee (right): when a
   requested tooth exists in the ground truth, \texttt{locate\_tooth} returns its exact box, and
   only the \emph{displayed} copy is perturbed. Exact per-fold numbers in \cref{app:grounding}.}
   \label{fig:groundingcv}
@@ -240,7 +255,7 @@ correctly-labeled demonstrations. Every trace then passes an independent, cross-
 \emph{verifier} conditioned on the image and the expert labels, which rejects reasoning not
 supported by what the model was actually shown (verifier prompt and gating rules in
 \cref{app:verifier}). Verification is staged rather than monolithic
-(\cref{fig:multistage}): a strict pass checks diagnostic correctness, FDI validity, and whether
+(\cref{fig:tracegen,fig:traceverif}): a strict pass checks diagnostic correctness, FDI validity, and whether
 every claim is supported by what the model was actually shown --- treating valid
 \texttt{nudge\_crop} correction loops as evidence of diligence rather than as errors --- and
 rejected traces are routed to a verifier-editor that surgically repairs FDI labels, diagnosis
@@ -255,16 +270,25 @@ audit + verifier re-approval); the canonical corpus contains zero leaks.
 
 \begin{figure}[tbp]
   \centering
-  \includegraphics[width=\linewidth]{fig_trace_multistage}
-  \caption{Multi-stage trace synthesis. Generation (provider family A) runs a
-  ground-truth-directed LangGraph loop with real tool execution and the tiered perturbation
-  hook; staged verification (deliberately a \emph{different} provider family) combines a strict
-  clinical pass with a repair-and-re-verify loop; a dual-gate leak audit and corpus assembly
-  produce the frozen canonical release; the audit bars are measured counts. The verifier's
-  92 first-pass rejections span three
-  categories --- the third (uncorrected spatial drift) exists only because the perturbation
-  mechanism creates genuine judgment pressure.}
-  \label{fig:multistage}
+  \includegraphics[width=\linewidth]{fig_trace_generation}
+  \caption{Trace synthesis, stage 1: generation. Provider family A runs a ground-truth-directed
+  LangGraph loop (thought, tool call, observation, repeated every turn) with real tool execution;
+  the tiered perturbation hook perturbs only the box shown to the teacher, and the zoom monitor
+  shows a real before/after nudge. The unverified pool carries the real executed tool calls and
+  corrective nudges and has no training value until verified.}
+  \label{fig:tracegen}
+\end{figure}
+
+\begin{figure}[tbp]
+  \centering
+  \includegraphics[width=\linewidth]{fig_trace_verification}
+  \caption{Trace synthesis, stages 2--3: verification, decontamination, and release. Staged
+  verification (deliberately a \emph{different} provider family) combines a strict clinical pass
+  with a repair-and-re-verify loop; a dual-gate leak audit and corpus assembly produce the
+  frozen canonical release; the audit bars are measured counts. The verifier's 92 first-pass
+  rejections span three categories --- the third (uncorrected spatial drift) exists only because
+  the perturbation mechanism creates genuine judgment pressure.}
+  \label{fig:traceverif}
 \end{figure}
 
 \begin{figure}[tbp]
@@ -323,7 +347,7 @@ corpus the teacher averaged 12--13 turns and 18--30 real tool calls per trace
 \subsection{Anatomy of a trace: with tools vs.\ without}
 \label{sec:traceanatomy}
 
-\cref{fig:traces} shows both halves of the paired corpus for one DENTEX image (a carious FDI
+\cref{fig:evidence,fig:traces} show both halves of the paired corpus for one DENTEX image (a carious FDI
 tooth 34, a single finding). The no-tools trace is one turn: a fluent, well-structured direct
 diagnosis that happens to reach the right answer, with no evidence trail --- the reasoning
 cannot be checked against anything the model was actually shown, and the model never had the
@@ -337,18 +361,25 @@ structured final answer, which matches the expert label.
 
 \begin{figure}[tbp]
   \centering
-  \includegraphics[width=0.95\linewidth]{fig_traces_comparison}
-  \caption{Two training traces for the same image (DENTEX, carious FDI 34) and the same expert
-  label. Top: the real radiograph with the with-tools evidence trail --- the returned grounding
-  box (blue), the three corrective \texttt{nudge\_crop} boxes (orange, light to dark, magnified
-  in the inset; the arrow marks the upward walk from the returned box to the corrected one),
-  and the expert box (green dashed); all coordinates are the
-  values actually returned by the tools, and the narrow right-hand panel shows the crop the
-  teacher finally saw. Bottom left: the single-turn no-tools trace --- fluent, correct, and
-  unverifiable. Bottom right: the with-tools trace (23 turns, 22 real tool calls), in which the grounding box is inspected,
-  judged wrong, corrected three times, and re-inspected before the answer; quotes are abridged
-  from the released traces. The two arms exist in exact per-cohort 1:1 parity, so the evaluation
-  can vary only the tool interface.}
+  \includegraphics[width=\linewidth]{fig_traces_evidence}
+  \caption{Evidence trail for one DENTEX image (image 624, a carious FDI tooth 34): the real
+  radiograph with the returned grounding box (blue), the three corrective
+  \texttt{nudge\_crop} boxes (orange, light to dark, magnified in the 4.5$\times$ inset; the arrow
+  marks the upward walk from the returned box to the corrected one), and the expert box (green
+  dashed). All coordinates are the values actually returned by the tools, and the narrow
+  right-hand panel shows the crop the teacher finally saw.}
+  \label{fig:evidence}
+\end{figure}
+
+\begin{figure}[tbp]
+  \centering
+  \includegraphics[width=\linewidth]{fig_traces_comparison}
+  \caption{Two training traces for the same image and the same expert label. Left: the
+  single-turn no-tools trace --- fluent, correct, and unverifiable. Right: the with-tools trace
+  (23 turns, 22 real tool calls), in which the grounding box is inspected, judged wrong,
+  corrected three times, and re-inspected before the answer; quotes are abridged from the
+  released traces. The two arms exist in exact per-cohort 1:1 parity, so the evaluation can vary
+  only the tool interface.}
   \label{fig:traces}
 \end{figure}
 

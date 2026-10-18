@@ -18,17 +18,7 @@ from pathlib import Path
 from reportlab.pdfbase.pdfmetrics import stringWidth
 
 SVG_DIR = Path(__file__).resolve().parents[2] / "paper" / "figures" / "svg"
-NAMES = [
-    "pipeline",
-    "architecture",
-    "trace_multistage",
-    "traces_comparison",
-    "corpus_composition",
-    "datasets",
-    "grounding_cv",
-    "input_geometry",
-    "perturbation_mechanism",
-]
+NAMES = sorted(f.stem[len("fig_"):] for f in SVG_DIR.glob("fig_*.svg"))  # matplotlib figures have no <text>
 RECT = re.compile(r'<rect x="([-\d.]+)" y="([-\d.]+)" width="([\d.]+)" height="([\d.]+)"[^>]*?/>')
 TEXT = re.compile(r'<text x="([-\d.]+)" y="([-\d.]+)" font-family="([^"]*)" font-size="([\d.]+)"([^>]*)>([^<]*)</text>')
 

@@ -22,7 +22,8 @@ labels, refs = set(), set()
 for name, t in texts.items():
     labels.update(re.findall(r'\\label\{([^}]+)\}', t))
     for cmd in ('cref', 'Cref', 'ref', 'eqref'):
-        refs.update(re.findall(r'\\%s\{([^}]+)\}' % cmd, t))
+        for group in re.findall(r'\\%s\{([^}]+)\}' % cmd, t):
+            refs.update(k.strip() for k in group.split(','))  # \cref{a,b}
 missing = refs - labels
 if missing:
     errors.append(f'missing labels: {sorted(missing)}')

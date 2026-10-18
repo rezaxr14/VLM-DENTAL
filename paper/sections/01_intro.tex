@@ -30,8 +30,8 @@ because the crop looks authoritative.
 
 This paper develops and evaluates \sys{}, an agentic VLM for OPG diagnosis built around a
 different contract between the policy and its tools: \emph{grounding is a hypothesis, not an
-answer}. \cref{fig:architecture} gives the complete system architecture, and \cref{fig:traces}
-contrasts the two trace arms on one image. Our contributions are:
+answer}. \cref{fig:architecture,fig:training} give the complete system architecture (agent loop and offline
+training stack), and \cref{fig:evidence,fig:traces} contrast the two trace arms on one image. Our contributions are:
 
 \begin{enumerate}[leftmargin=*,itemsep=2pt,topsep=3pt]
 \item \textbf{A self-correcting grounding tool (\texttt{nudge\_crop}, \cref{sec:nudge}).}
