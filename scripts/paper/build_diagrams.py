@@ -1350,6 +1350,41 @@ BUILDERS = {
 }
 
 
+# y (in the builder's own coordinates) where each figure's real content starts.
+# Everything above it is the in-figure title/subtitle: journals expect the
+# caption to carry that, so it is removed and the content shifted up.
+CONTENT_TOP = {
+    "fig_traces_comparison.svg": 50,
+    "fig_trace_multistage.svg": 50,
+    "fig_architecture.svg": 54,
+    "fig_corpus_composition.svg": 50,
+    "fig_datasets.svg": 58,
+    "fig_grounding_cv.svg": 50,
+    "fig_input_geometry.svg": 50,
+    "fig_pipeline.svg": 36,
+    "fig_perturbation_mechanism.svg": 34,
+}
+
+
+def strip_title(svg_text: str, content_top: float) -> str:
+    """Drop <text> above content_top and shift the figure up (margin 8 units)."""
+    import re
+
+    shift = content_top - 8
+    out = re.sub(
+        r'<text x="[-\d.]+" y="([-\d.]+)"[^>]*>[^<]*</text>',
+        lambda m: "" if float(m.group(1)) < content_top - 2 else m.group(0),
+        svg_text,
+    )
+    m = re.match(r'(<svg [^>]*?)width="([\d.]+)" height="([\d.]+)" viewBox="0 0 ([\d.]+) ([\d.]+)">(<rect [^>]*/>)', out)
+    w, h = float(m.group(2)), float(m.group(3))
+    head = f'{m.group(1)}width="{w:g}" height="{h - shift:g}" viewBox="0 0 {w:g} {h - shift:g}">'
+    bg = f'<rect width="{w:g}" height="{h - shift:g}" fill="#FFFFFF"/>'
+    rest = out[m.end():]
+    assert rest.endswith("</svg>")
+    return head + bg + f'<g transform="translate(0,{-shift:g})">' + rest[: -len("</svg>")] + "</g></svg>"
+
+
 def main() -> None:
     force = "--force" in sys.argv
     a = load_assets(force=force)
@@ -1357,7 +1392,10 @@ def main() -> None:
     SVG_DIR.mkdir(parents=True, exist_ok=True)
     for name, builder in BUILDERS.items():
         out = SVG_DIR / name
-        out.write_text(builder(a), encoding="utf-8")
+        text = builder(a)
+        if name in CONTENT_TOP:
+            text = strip_title(text, CONTENT_TOP[name])
+        out.write_text(text, encoding="utf-8")
         print(f"  wrote {out.name} ({out.stat().st_size / 1024:.0f} KB)")
 
     from generate_paper_assets import convert_diagrams
