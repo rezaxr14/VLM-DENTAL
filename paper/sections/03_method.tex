@@ -187,7 +187,8 @@ what the demonstrator \emph{sees}. During trace generation, \texttt{locate\_toot
 ground-truth-grounding mode: for an annotated tooth it returns the expert-verified box
 (guaranteeing the demonstration remains solvable), while for exploratory calls on unannotated
 teeth it falls back to real detector inference. Then, independently of how the box was obtained,
-a \emph{perturbation roll} decides what is displayed:
+a \emph{perturbation roll} decides what is displayed (exact configuration in
+\cref{app:perturbation}):
 
 \begin{itemize}[leftmargin=*,itemsep=1pt,topsep=2pt]
   \item \textbf{none} (45\%): the box is shown as computed --- a clean accept-and-proceed demonstration;
@@ -237,7 +238,8 @@ its own reasoning and tool calls turn by turn under real tool feedback. Generati
 ground-truth-directed by design: blind exploration by an untuned model would tank the yield of
 correctly-labeled demonstrations. Every trace then passes an independent, cross-family
 \emph{verifier} conditioned on the image and the expert labels, which rejects reasoning not
-supported by what the model was actually shown. Verification is staged rather than monolithic
+supported by what the model was actually shown (verifier prompt and gating rules in
+\cref{app:verifier}). Verification is staged rather than monolithic
 (\cref{fig:multistage}): a strict pass checks diagnostic correctness, FDI validity, and whether
 every claim is supported by what the model was actually shown --- treating valid
 \texttt{nudge\_crop} correction loops as evidence of diligence rather than as errors --- and

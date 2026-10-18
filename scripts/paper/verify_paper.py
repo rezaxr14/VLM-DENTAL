@@ -92,11 +92,13 @@ for shown, actual in expected.items():
     elif f'{actual}' != f'{shown}':
         errors.append(f'number mismatch: text says {shown}, assets say {actual}')
 
-# corpus totals
+# corpus totals (numbers may be written as 1{,}847 or 1,847 in the tex, so
+# compare against a comma-normalized copy of the text)
 tot = s['corpus_totals']
-if str(tot['total_traces']) not in all_text:
+all_text_nc = all_text.replace('{,}', '').replace(',', '')
+if str(tot['total_traces']) not in all_text_nc:
     warnings.append('total_traces not mentioned')
-if str(tot['total_findings']) not in all_text:
+if str(tot['total_findings']) not in all_text_nc:
     warnings.append('total_findings not mentioned')
 
 # 5. iou before/after in appendix table
