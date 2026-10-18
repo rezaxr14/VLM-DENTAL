@@ -58,7 +58,7 @@ evaluation layer (\cref{sec:eval}) whose probes feed model selection on a fixed 
 
 \begin{figure}[tbp]
   \centering
-  \includegraphics[width=\linewidth]{fig_architecture}
+  \includegraphics[width=0.97\linewidth]{fig_architecture}
   \caption{The \sys{} architecture. One agent loop, one shared tool dispatcher, and one
   canonical vision geometry are shared by trace generation, RL rollouts, and evaluation; the
   trace synthesis stack produces the verified corpus consumed by SFT and GRPO; evaluation
@@ -337,15 +337,15 @@ structured final answer, which matches the expert label.
 
 \begin{figure}[tbp]
   \centering
-  \includegraphics[width=0.88\linewidth]{fig_traces_comparison}
+  \includegraphics[width=0.95\linewidth]{fig_traces_comparison}
   \caption{Two training traces for the same image (DENTEX, carious FDI 34) and the same expert
-  label. Left: the real radiograph with the with-tools evidence trail --- the returned grounding
+  label. Top: the real radiograph with the with-tools evidence trail --- the returned grounding
   box (blue), the three corrective \texttt{nudge\_crop} boxes (orange, light to dark, magnified
   in the inset; the arrow marks the upward walk from the returned box to the corrected one),
   and the expert box (green dashed); all coordinates are the
-  values actually returned by the tools, and the right panel shows the crop the teacher finally
-  saw. Middle: the single-turn no-tools trace --- fluent, correct, and unverifiable. Right: the
-  with-tools trace (23 turns, 22 real tool calls), in which the grounding box is inspected,
+  values actually returned by the tools, and the narrow right-hand panel shows the crop the
+  teacher finally saw. Bottom left: the single-turn no-tools trace --- fluent, correct, and
+  unverifiable. Bottom right: the with-tools trace (23 turns, 22 real tool calls), in which the grounding box is inspected,
   judged wrong, corrected three times, and re-inspected before the answer; quotes are abridged
   from the released traces. The two arms exist in exact per-cohort 1:1 parity, so the evaluation
   can vary only the tool interface.}

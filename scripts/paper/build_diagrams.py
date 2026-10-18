@@ -90,31 +90,34 @@ def L(x1, y1, x2, y2, **kw):
 
 
 def build_traces_comparison(a):
-    p = []
-    W, H = a["native_w"], a["native_h"]
+    """Traces comparison on a 760-unit canvas.
+
+    Top: the real radiograph + evidence trail (zoom inset, final crop).
+    Bottom: no-tools trace (left) and with-tools trace (right). The old
+    1060x850 three-panel layout printed at ~3.3 pt; this one prints at
+    ~5.3-7 pt (the densest figure in the paper: ~110 text lines).
+    """
+    from reportlab.pdfbase.pdfmetrics import stringWidth
+
+    W0, H0 = a["native_w"], a["native_h"]
     gt, loc = BOXES_624["gt"], BOXES_624["loc"]
     n1, n2, n3 = BOXES_624["n1"], BOXES_624["n2"], BOXES_624["n3"]
+    W = 760
+    warn: list[str] = []
+    t = _checked(warn)
+    p = []
+    p.append(TC(W / 2, 22, "Same image, same ground truth: two training traces", size=13, weight="bold"))
+    p.append(t(W / 2, 38, "DENTEX image 624 (train_318.png) · FDI 34 · Caries · quotes abridged from the released trace", size=9.0, fill=C_SUB, maxw=700))
 
-    # header
-    p.append(T(530, 26, "Same image, same ground truth: two training traces", size=14.5, weight="bold"))
-    p.append(
-        T(
-            530,
-            44,
-            "DENTEX image 624 (train_318.png) · FDI 34 · Caries · quotes abridged from the released trace",
-            size=9.5,
-            fill=C_SUB,
-        )
-    )
+    # ---------------- top panel: image + evidence trail ----------------
+    ay, ah = 50, 290
+    p.append(R(10, ay, 740, ah, fill="#F7F9FC", stroke=C_BLUE, sw=1.4))
+    p.append(t(24, ay + 20, "The image and the evidence trail", size=11.5, weight="bold", fill=C_BLUE_D, anchor="start"))
+    p.append(t(236, ay + 20, "real radiograph + real returned boxes", size=8.8, fill=C_SUB, anchor="start"))
 
-    # ---------------- left panel: image + evidence trail ----------------
-    p.append(R(16, 58, 320, 598, fill="#F7F9FC", stroke=C_BLUE, sw=1.4))
-    p.append(T(176, 80, "The image and the evidence trail", size=11.5, weight="bold", fill=C_BLUE_D))
-    p.append(T(176, 95, "real radiograph + real returned boxes", size=8.2, fill=C_SUB))
-
-    # full OPG with trajectory boxes (small) at (32,104) 288x135
-    p.append(IMG(32, 104, 288, 135, a["opg"]))
-    p.append(R(32, 104, 288, 135, rx=2, stroke="#666666", sw=1.1, fill="none"))
+    ox, oy, ow, oh = 24, ay + 34, 380, 178
+    p.append(IMG(ox, oy, ow, oh, a["opg"]))
+    p.append(R(ox, oy, ow, oh, rx=2, stroke="#666666", sw=1.1, fill="none"))
     for box, color, sw, dash in (
         (gt, "#2ca02c", 1.6, "4,2.5"),
         (loc, C_BLUE, 1.6, None),
@@ -122,17 +125,25 @@ def build_traces_comparison(a):
         (n2, "#FF9A4D", 1.1, None),
         (n3, C_ORANGE, 1.6, None),
     ):
-        bx, by, bw, bh = scaled_box(box, (0, 0, W, H), 32, 104, 288, 135)
+        bx, by, bw, bh = scaled_box(box, (0, 0, W0, H0), ox, oy, ow, oh)
         p.append(R(bx, by, bw, bh, rx=0, fill="none", stroke=color, sw=sw, dash=dash))
 
-    # leader lines to the magnifier inset
-    p.append(L(200, 246, 72, 266, color="#C9C9C9", sw=0.9, dash="2.5,2.5"))
-    p.append(L(210, 246, 164, 266, color="#C9C9C9", sw=0.9, dash="2.5,2.5"))
-
-    # magnifier inset at (40,268) 130x306 (region aspect-matched)
-    p.append(T(40, 262, "4.5× zoom", size=8.4, fill="#555555", anchor="start"))
-    p.append(IMG(40, 268, 130, 306, a["inset"]))
-    p.append(R(40, 268, 130, 306, rx=4, stroke="#666666", sw=1.2, fill="none"))
+    # magnifier inset + final crop (region aspect-matched)
+    ih = 230
+    iw, cw = 98, 68
+    ix, iy = 470, ay + 38
+    cx = 640
+    ssx, ssy = ow / W0, oh / H0  # INSET_REGION is (x0, y0, x1, y1) in native pixels
+    rx_ = ox + INSET_REGION[0] * ssx
+    ry_ = oy + INSET_REGION[1] * ssy
+    rw_ = (INSET_REGION[2] - INSET_REGION[0]) * ssx
+    rh_ = (INSET_REGION[3] - INSET_REGION[1]) * ssy
+    p.append(R(rx_, ry_, rw_, rh_, rx=0, fill="none", stroke="#9A9A9A", sw=0.8, dash="2.5,2"))
+    p.append(L(rx_ + rw_, ry_, ix, iy, color="#C9C9C9", sw=0.9, dash="2.5,2.5"))
+    p.append(L(rx_ + rw_, ry_ + rh_, ix, iy + ih, color="#C9C9C9", sw=0.9, dash="2.5,2.5"))
+    p.append(t(ix, iy - 5, "4.5× zoom", size=8.8, fill="#555555", anchor="start"))
+    p.append(IMG(ix, iy, iw, ih, a["inset"]))
+    p.append(R(ix, iy, iw, ih, rx=4, stroke="#666666", sw=1.2, fill="none"))
     for box, color, sw, dash in (
         (gt, "#2ca02c", 1.8, "5,3"),
         (loc, C_BLUE, 1.8, None),
@@ -140,82 +151,76 @@ def build_traces_comparison(a):
         (n2, "#FF9A4D", 1.3, None),
         (n3, C_ORANGE, 2.0, None),
     ):
-        bx, by, bw, bh = scaled_box(box, INSET_REGION, 40, 268, 130, 306)
+        bx, by, bw, bh = scaled_box(box, INSET_REGION, ix, iy, iw, ih)
         p.append(R(bx, by, bw, bh, rx=0, fill="none", stroke=color, sw=sw, dash=dash))
-    # the walk arrow: loc, n1, n2 and n3 all share center x ~= 110 in inset
-    # coordinates, so one vertical arrow threads through the nested stack and
-    # shows the upward correction walk without any stray segments
-    p.append(arrow([(110, 556), (110, 318)], color=C_ORANGE, sw=1.5))
+    # walk arrow (loc, n1, n2, n3 share centre x ~ 0.538 of the inset width)
+    wx = ix + 0.538 * iw
+    p.append(arrow([(wx, iy + 0.941 * ih), (wx, iy + 0.163 * ih)], color=C_ORANGE, sw=1.5))
+    p.append(t(cx, iy - 5, "final crop · turn 10", size=8.8, fill="#555555", anchor="start", maxw=110))
+    p.append(IMG(cx, iy, cw, ih, a["crop_final"]))
+    p.append(R(cx, iy, cw, ih, rx=4, stroke="#666666", sw=1.2, fill="none"))
 
-    # final crop panel at (212,268) 90x304
-    p.append(T(257, 260, "final crop · turn 10", size=8.4, fill="#555555"))
-    p.append(IMG(212, 268, 90, 304, a["crop_final"]))
-    p.append(R(212, 268, 90, 304, rx=4, stroke="#666666", sw=1.2, fill="none"))
+    # legend + real coordinates under the radiograph
+    ly = oy + oh + 18
+    p.append(L(24, ly - 3, 48, ly - 3, color=C_BLUE, sw=2.4))
+    p.append(t(54, ly, "locate_tooth(34) box", size=8.8, anchor="start", maxw=150))
+    p.append(L(220, ly - 3, 228, ly - 3, color="#FFC287", sw=2.4))
+    p.append(L(228, ly - 3, 236, ly - 3, color="#FF9A4D", sw=2.4))
+    p.append(L(236, ly - 3, 244, ly - 3, color=C_ORANGE, sw=2.4))
+    p.append(t(250, ly, "nudges 1-3, light to dark", size=8.8, anchor="start", maxw=150))
+    p.append(L(24, ly + 13, 48, ly + 13, color="#2ca02c", sw=2.4, dash="4,2.5"))
+    p.append(t(54, ly + 16, "ground-truth box", size=8.8, anchor="start", maxw=150))
+    p.append(t(250, ly + 16, "coords as returned", size=8.8, fill=C_SUB, anchor="start", maxw=150))
+    p.append(t(24, ly + 34, "[1668,917,84,322] - [1685,885,50,193]", size=8.2, fill=C_SUB, anchor="start", font=MONO, maxw=380))
+    p.append(t(24, ly + 46, "- [1693,818,35,135] - [1696,750,28,108]", size=8.2, fill=C_SUB, anchor="start", font=MONO, maxw=380))
 
-    # legend + real coords
-    p.append(L(36, 592, 60, 592, color=C_BLUE, sw=2.4))
-    p.append(T(66, 595, "locate_tooth(34) box", size=8.2, anchor="start"))
-    p.append(L(186, 592, 194, 592, color="#FFC287", sw=2.4))
-    p.append(L(194, 592, 202, 592, color="#FF9A4D", sw=2.4))
-    p.append(L(202, 592, 210, 592, color=C_ORANGE, sw=2.4))
-    p.append(T(216, 595, "nudges 1-3, light to dark", size=8.2, anchor="start"))
-    p.append(L(36, 608, 60, 608, color="#2ca02c", sw=2.4, dash="4,2.5"))
-    p.append(T(66, 611, "ground-truth box", size=8.2, anchor="start"))
-    p.append(T(216, 611, "coords as returned", size=8.2, fill=C_MUT, anchor="start"))
-    p.append(T(36, 630, "[1668,917,84,322] - [1685,885,50,193]", size=7.2, fill=C_SUB, anchor="start", font=MONO))
-    p.append(T(36, 642, "- [1693,818,35,135] - [1696,750,28,108]", size=7.2, fill=C_SUB, anchor="start", font=MONO))
-
-    # ---------------- middle panel: no-tools trace ----------------
-    p.append(R(352, 58, 272, 598, fill="#FBFBFB", stroke="#BBBBBB", sw=1.2))
-    p.append(T(488, 80, "No-tools trace (baseline)", size=11.5, weight="bold", fill="#555555"))
-    p.append(T(488, 95, "1 turn · 0 tool calls · hindsight description", size=8.2, fill=C_SUB))
-
-    p.append(R(368, 108, 240, 42, fill="#E8EEF7", stroke=C_BLUE, sw=1.1))
-    p.append(T(488, 124, "user: panoramic X-ray, tool-free prompt", size=8.8, weight="bold", fill=C_BLUE_D))
-    p.append(T(488, 139, "“identify any abnormal teeth and diagnose”", size=8.0, fill="#555555"))
-    p.append(arrow([(488, 150), (488, 164)], color="#999999", sw=1.3))
-
-    p.append(R(368, 166, 240, 300, fill="#FFFFFF", stroke="#CCCCCC", sw=1.1))
-    p.append(T(488, 186, "thought (single turn)", size=9.5, weight="bold"))
-    no_tools_lines = [
-        "“On systematic review of this panoramic",
-        "radiograph, I begin by orienting to the",
-        "patient’s right and left sides as marked.",
-        "The image shows a mixed dentition with",
-        "multiple developing permanent teeth ...",
-        "",
-        "Focusing on the lower-left quadrant (Q3),",
-        "I examine the posterior region ... I can",
-        "see a radiolucent area involving the",
-        "occlusal/cervical portion of the tooth,",
-        "with loss of normal enamel contour and",
-        "a darker zone consistent with a carious",
-        "lesion ...”",
+    # ---------------- bottom-left: no-tools trace ----------------
+    by0 = ay + ah + 10
+    bh = 424
+    bx0, bw = 10, 300
+    bcx = bx0 + bw / 2
+    p.append(R(bx0, by0, bw, bh, fill="#FBFBFB", stroke="#BBBBBB", sw=1.2))
+    p.append(t(bcx, by0 + 22, "No-tools trace (baseline)", size=11.5, weight="bold", fill="#555555"))
+    p.append(t(bcx, by0 + 36, "1 turn · 0 tool calls · hindsight description", size=8.8, fill=C_SUB, maxw=280))
+    p.append(R(bx0 + 14, by0 + 46, bw - 28, 40, fill="#E8EEF7", stroke=C_BLUE, sw=1.1))
+    p.append(t(bcx, by0 + 62, "user: panoramic X-ray, tool-free prompt", size=9.2, weight="bold", fill=C_BLUE_D, maxw=260))
+    p.append(t(bcx, by0 + 77, "“identify any abnormal teeth and diagnose”", size=8.6, fill="#555555", maxw=260))
+    p.append(arrow([(bcx, by0 + 86), (bcx, by0 + 98)], color="#999999", sw=1.3))
+    tb_y, tb_h = by0 + 100, 182
+    p.append(R(bx0 + 14, tb_y, bw - 28, tb_h, fill="#FFFFFF", stroke="#CCCCCC", sw=1.1))
+    p.append(t(bcx, tb_y + 19, "thought (single turn)", size=9.8, weight="bold"))
+    paras = [
+        "“On systematic review of this panoramic radiograph, I begin by orienting to the patient’s right and left sides as marked. The image shows a mixed dentition with multiple developing permanent teeth ...",
+        "Focusing on the lower-left quadrant (Q3), I examine the posterior region ... I can see a radiolucent area involving the occlusal/cervical portion of the tooth, with loss of normal enamel contour and a darker zone consistent with a carious lesion ...”",
     ]
-    y = 206
-    for ln in no_tools_lines:
-        if ln:
-            p.append(T(380, y, ln, size=8.4, fill="#444444", anchor="start"))
-        y += 13.5
-    p.append(T(380, y + 12, "One-shot description from the full image:", size=8.0, fill="#777777", anchor="start", style="italic"))
-    p.append(T(380, y + 25, "no crop, no second look, nothing checkable", size=8.0, fill="#777777", anchor="start", style="italic"))
-    p.append(T(380, y + 38, "against the pixels it actually saw.", size=8.0, fill="#777777", anchor="start", style="italic"))
-    p.append(arrow([(488, 466), (488, 480)], color="#999999", sw=1.3))
+    yy = tb_y + 36
+    for i, para in enumerate(paras):
+        for ln in _wrap(para, 8.6, bw - 52):
+            p.append(t(bx0 + 26, yy, ln, size=8.6, fill="#444444", anchor="start", maxw=bw - 50))
+            yy += 11.8
+        yy += 5
+    yy += 4
+    for ln in ("One-shot description from the full image:", "no crop, no second look, nothing checkable", "against the pixels it actually saw."):
+        p.append(t(bx0 + 26, yy, ln, size=8.4, fill="#777777", anchor="start", style="italic", maxw=bw - 50))
+        yy += 11.8
+    fy = tb_y + tb_h + 12
+    p.append(arrow([(bcx, tb_y + tb_h), (bcx, fy)], color="#999999", sw=1.3))
+    p.append(R(bx0 + 14, fy + 2, bw - 28, 42, fill="#F2F8F2", stroke=C_GREEN, sw=1.3))
+    p.append(t(bcx, fy + 19, "final answer", size=9.8, weight="bold", fill=C_GREEN_D))
+    p.append(t(bcx, fy + 35, "Q3T4 · Caries · confidence 0.82", size=9.0, fill="#444444"))
+    ty_ = fy + 54
+    p.append(R(bx0 + 14, ty_, bw - 28, bx0 + by0 + bh - ty_ - 12 - bx0, fill="#FBF6F0", stroke="#DD8452", sw=1.1))
+    p.append(t(bcx, ty_ + 16, "What this arm can teach", size=9.8, weight="bold", fill="#8A5A2E"))
+    p.append(t(bx0 + 26, ty_ + 31, "- output format + clinical vocabulary", size=8.8, fill="#555555", anchor="start", maxw=bw - 50))
+    p.append(t(bx0 + 26, ty_ + 43, "- quadrant-survey habit", size=8.8, fill="#555555", anchor="start", maxw=bw - 50))
+    p.append(t(bcx, ty_ + 60, "No evidence trail to verify or correct.", size=9.0, weight="bold", fill=C_RED, maxw=bw - 50))
 
-    p.append(R(368, 482, 240, 46, fill="#F2F8F2", stroke=C_GREEN, sw=1.3))
-    p.append(T(488, 502, "final answer", size=9.5, weight="bold", fill=C_GREEN_D))
-    p.append(T(488, 518, "Q3T4 · Caries · confidence 0.82", size=8.8, fill="#444444"))
-    p.append(R(368, 540, 240, 100, fill="#FBF6F0", stroke="#DD8452", sw=1.1))
-    p.append(T(488, 560, "What this arm can teach", size=9.5, weight="bold", fill="#8A5A2E"))
-    p.append(T(488, 578, "- output format + clinical vocabulary", size=8.4, fill="#555555"))
-    p.append(T(488, 592, "- quadrant-survey habit", size=8.4, fill="#555555"))
-    p.append(T(488, 622, "No evidence trail to verify or correct.", size=8.8, weight="bold", fill=C_RED))
-
-    # ---------------- right panel: with-tools trace ----------------
-    p.append(R(640, 58, 404, 598, fill="#FCFCFD", stroke=C_BLUE, sw=1.4))
-    p.append(T(842, 80, "With-tools trace (main policy)", size=11.5, weight="bold", fill=C_BLUE_D))
-    p.append(T(842, 95, "23 turns · 22 real tool calls · 3 corrective nudges", size=8.2, fill=C_SUB))
-
+    # ---------------- bottom-right: with-tools trace ----------------
+    cx0, cw0 = 320, 430
+    ccx = cx0 + cw0 / 2
+    p.append(R(cx0, by0, cw0, bh, fill="#FCFCFD", stroke=C_BLUE, sw=1.4))
+    p.append(t(ccx, by0 + 22, "With-tools trace (main policy)", size=11.5, weight="bold", fill=C_BLUE_D))
+    p.append(t(ccx, by0 + 36, "23 turns · 22 real tool calls · 3 corrective nudges", size=8.8, fill=C_SUB, maxw=410))
     rows = [
         ("T0", "window_level", "survey the full field at high contrast", 0),
         ("T1", "fdi_label", "orient to FDI notation first", 0),
@@ -227,44 +232,45 @@ def build_traces_comparison(a):
         ("T9-10", "zoom + denoise", "“Excellent! Now I can clearly see tooth 34”", 0),
         ("T14+", "compare + enhance", "contralateral check, contrast pass, re-verify", 0),
     ]
-    y = 108
+    ry = by0 + 46
     for turn, name, sub, hot in rows:
         fill = C_ORANGE_L if hot else "#FFFFFF"
         stroke = "#F0B27A" if hot else "#DDDDDD"
-        p.append(R(656, y, 372, 42, rx=5, fill=fill, stroke=stroke, sw=1.0))
-        p.append(R(656, y, 4, 42, rx=2, fill=C_ORANGE if hot else C_BLUE, stroke="none", sw=0))
+        p.append(R(cx0 + 12, ry, cw0 - 24, 25, rx=5, fill=fill, stroke=stroke, sw=1.0))
+        p.append(R(cx0 + 12, ry, 4, 25, rx=2, fill=C_ORANGE if hot else C_BLUE, stroke="none", sw=0))
         tcol = "#B45A04" if hot else C_BLUE_D
-        p.append(T(670, y + 17, turn, size=8.6, weight="bold", fill=tcol, anchor="start"))
-        p.append(T(706, y + 17, name, size=9.4, weight="bold", fill=C_TXT, anchor="start"))
-        p.append(T(706, y + 33, sub, size=8.0, fill=C_SUB, anchor="start"))
-        y += 46
-
-    p.append(R(656, 530, 372, 52, rx=6, fill="#F2F8F2", stroke=C_GREEN, sw=1.4))
-    p.append(T(842, 550, "final answer (turn 22) · Q3T4 · Caries · conf 0.82", size=9.4, weight="bold", fill=C_GREEN_D))
-    p.append(T(842, 568, "matches ground truth - passed strict verification", size=8.2, fill=C_SUB))
-    p.append(R(656, 592, 372, 48, rx=6, fill="#F7F9FC", stroke="#C9D4E4", sw=1.0))
-    p.append(T(842, 612, "22 real tool calls · 3 corrective · every observation", size=8.2, fill=C_BLUE_D))
-    p.append(T(842, 626, "executed against the actual radiograph", size=8.2, fill=C_BLUE_D))
+        p.append(t(cx0 + 24, ry + 17, turn, size=8.8, weight="bold", fill=tcol, anchor="start"))
+        p.append(t(cx0 + 64, ry + 17, name, size=9.4, weight="bold", fill=C_TXT, anchor="start"))
+        nx = cx0 + 64 + stringWidth(name, "Helvetica-Bold", 9.4) + 10
+        p.append(t(nx, ry + 17, sub, size=8.6, fill=C_SUB, anchor="start", maxw=cx0 + cw0 - 20 - nx))
+        ry += 30
+    fa = ry + 2
+    p.append(R(cx0 + 12, fa, cw0 - 24, 44, rx=6, fill="#F2F8F2", stroke=C_GREEN, sw=1.4))
+    p.append(t(ccx, fa + 19, "final answer (turn 22) · Q3T4 · Caries · conf 0.82", size=9.6, weight="bold", fill=C_GREEN_D, maxw=400))
+    p.append(t(ccx, fa + 35, "matches ground truth - passed strict verification", size=8.8, fill=C_SUB, maxw=400))
+    sm = fa + 52
+    p.append(R(cx0 + 12, sm, cw0 - 24, by0 + bh - sm - 12, rx=6, fill="#F7F9FC", stroke="#C9D4E4", sw=1.0))
+    p.append(t(ccx, sm + 20, "22 real tool calls · 3 corrective · every observation", size=8.8, fill=C_BLUE_D, maxw=400))
+    p.append(t(ccx, sm + 33, "executed against the actual radiograph", size=8.8, fill=C_BLUE_D, maxw=400))
 
     # ---------------- bottom band ----------------
-    p.append(R(16, 672, 1028, 162, fill="#F7F8FA", stroke="#DDDDDD", sw=1.1))
-    p.append(T(530, 696, "What the exact 1:1 pairing isolates", size=12, weight="bold"))
-    bullets = [
-        (40, 724, "same image · same prompt template · same ground truth -"),
-        (40, 738, "only the tool channel differs"),
-        (530, 724, "any SFT delta is attributable to demonstrated tool use,"),
-        (530, 738, "not to data volume or prompt wording"),
-        (40, 766, "with-tools traces carry 44,350 executed tool calls;"),
-        (40, 780, "the no-tools arm carries zero"),
-        (530, 766, "per-cohort counts match exactly (678/27/660/202/280"),
-        (530, 780, "on each side) - parity by construction"),
+    dy = by0 + bh + 10
+    p.append(R(10, dy, 740, 96, fill="#F7F8FA", stroke="#DDDDDD", sw=1.1))
+    p.append(t(24, dy + 22, "What the exact 1:1 pairing isolates", size=12, weight="bold", anchor="start"))
+    p.append(R(380, dy + 8, 358, 22, rx=11, fill="#EEF2FA", stroke=C_BLUE, sw=1.1))
+    p.append(t(559, dy + 23, "5 cohorts × 2 arms · 1,847 + 1,847 · 3,694 verified traces", size=8.8, weight="bold", fill=C_BLUE_D, maxw=346))
+    cols = [
+        (24, dy + 48, ["same image · same prompt template · same ground truth -", "only the tool channel differs"]),
+        (390, dy + 48, ["any SFT delta is attributable to demonstrated tool use,", "not to data volume or prompt wording"]),
+        (24, dy + 76, ["with-tools traces carry 44,350 executed tool calls;", "the no-tools arm carries zero"]),
+        (390, dy + 76, ["per-cohort counts match exactly (678/27/660/202/280", "on each side) - parity by construction"]),
     ]
-    for bx, by, txt in bullets:
-        p.append(T(bx, by, txt, size=9.0, fill="#444444", anchor="start"))
-    p.append(R(330, 796, 400, 26, rx=13, fill="#EEF2FA", stroke=C_BLUE, sw=1.1))
-    p.append(T(530, 813, "5 cohorts × 2 arms · 1,847 + 1,847 · 3,694 verified traces", size=8.6, weight="bold", fill=C_BLUE_D))
-
-    return svg(1060, 850, "".join(p))
+    for bx, by_, lines in cols:
+        for i, ln in enumerate(lines):
+            p.append(t(bx, by_ + i * 12 - (6 if i == 0 and False else 0), ln, size=9.0, fill="#444444", anchor="start", maxw=340))
+    if warn:
+        print("  traces_comparison text-fit warnings:\n   " + "\n   ".join(warn))
+    return svg(W, dy + 108, "".join(p))
 
 
 # ---------------------------------------------------------------------------
@@ -707,13 +713,31 @@ def _checked(warn):
     """Return a T() wrapper that records labels wider than their box (maxw)."""
     from reportlab.pdfbase.pdfmetrics import stringWidth
 
-    def t(x, y, s_, size=9.0, fill=C_TXT, anchor="middle", weight=None, maxw=None, font=None):
+    def t(x, y, s_, size=9.0, fill=C_TXT, anchor="middle", weight=None, maxw=None, font=None, style=None):
         face = "Courier" if font else ("Helvetica-Bold" if weight == "bold" else "Helvetica")
         if maxw is not None and stringWidth(s_, face, size) > maxw:
             warn.append(f"overflow {stringWidth(s_, face, size):.0f}>{maxw}: {s_!r}")
-        return TC(x, y, s_, size=size, fill=fill, anchor=anchor, weight=weight, font=font)
+        return TC(x, y, s_, size=size, fill=fill, anchor=anchor, weight=weight, font=font, style=style)
 
     return t
+
+
+def _wrap(text, size, maxw, weight=None):
+    """Greedy word-wrap using Helvetica metrics (matches the SVG font stack)."""
+    from reportlab.pdfbase.pdfmetrics import stringWidth
+
+    face = "Helvetica-Bold" if weight == "bold" else "Helvetica"
+    lines, cur = [], ""
+    for word in text.split():
+        trial = f"{cur} {word}".strip()
+        if cur and stringWidth(trial, face, size) > maxw:
+            lines.append(cur)
+            cur = word
+        else:
+            cur = trial
+    if cur:
+        lines.append(cur)
+    return lines
 
 
 def build_corpus_composition(a):
