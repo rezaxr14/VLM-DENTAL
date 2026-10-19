@@ -1226,6 +1226,99 @@ def build_pipeline(a):
 # ---------------------------------------------------------------------------
 
 
+def build_concept(a):
+    """Teaser: grounding taken as an answer vs grounding as a hypothesis.
+
+    Real pixels and real numbers from DENTEX image 624 (FDI 34): the returned
+    box sits 0.69 box-heights below the expert box; the with-tools trace
+    nudges it three times (dy -0.3 / -0.5 / -0.6) and the final crop shows
+    the crown.
+    """
+    W0, H0 = a["native_w"], a["native_h"]
+    gt, loc, n3 = BOXES_624["gt"], BOXES_624["loc"], BOXES_624["n3"]
+    offset = (loc[1] - gt[1]) / gt[3]  # measured, in box heights
+    W = 640
+    warn: list[str] = []
+    t = _checked(warn)
+    p = []
+    G = "#777777"
+
+    def opg(x, y, w, h, with_final):
+        p.append(IMG(x, y, w, h, a["opg"]))
+        p.append(R(x, y, w, h, rx=2, stroke="#666666", sw=1.1, fill="none"))
+        boxes = [(gt, "#2ca02c", "3,2"), (loc, C_BLUE, None)]
+        if with_final:
+            boxes.append((n3, C_ORANGE, None))
+        for box, color, dash in boxes:
+            bx, by, bw, bh = scaled_box(box, (0, 0, W0, H0), x, y, w, h)
+            p.append(R(bx, by, bw, bh, rx=0, fill="none", stroke=color, sw=1.6, dash=dash))
+
+    # ---------------- (a) grounding taken as an answer ----------------
+    ya, ha = 10, 182
+    p.append(R(10, ya, 620, ha, rx=8, fill="#F8F8F8", stroke="#BBBBBB", sw=1.2))
+    p.append(R(10, ya, 232, 22, rx=6, fill=PILL_GREY, stroke="none", sw=0))
+    p.append(t(126, ya + 15, "(a) Grounding taken as an answer", size=9.0, weight="bold", fill="#FFFFFF", maxw=220))
+    iy = ya + 38
+    opg(22, iy, 200, 94, False)
+    p.append(t(22, iy + 110, "returned box (blue) vs expert box (green)", size=8.4, fill=C_SUB, anchor="start", maxw=200))
+    p.append(arrow([(228, iy + 47), (252, iy + 47)], color=G, sw=1.5))
+    cw_l = 110 * a["crop_located_w"] / a["crop_located_h"]
+    p.append(IMG(258, iy, cw_l, 110, a["crop_located"]))
+    p.append(R(258, iy, cw_l, 110, rx=2, stroke="#666666", sw=1.1, fill="none"))
+    p.append(t(258, iy + 126, "crop of the returned box", size=8.4, fill=C_SUB, anchor="start", maxw=120))
+    p.append(arrow([(258 + cw_l + 8, iy + 55), (258 + cw_l + 30, iy + 55)], color=G, sw=1.5))
+    bx0 = 258 + cw_l + 36
+    p.append(R(bx0, iy + 6, 618 - bx0, 100, rx=6, fill="#FFFFFF", stroke="#CCCCCC", sw=1.1))
+    tw = 618 - bx0 - 20
+    p.append(t(bx0 + 12, iy + 28, "The crop looks authoritative.", size=9.6, weight="bold", anchor="start", maxw=tw))
+    p.append(t(bx0 + 12, iy + 46, "Every later observation is built on", size=8.8, anchor="start", maxw=tw))
+    p.append(t(bx0 + 12, iy + 59, "a box that is wrong - here it sits", size=8.8, anchor="start", maxw=tw))
+    p.append(t(bx0 + 12, iy + 72, f"{offset:.2f} box-heights below the expert box.", size=8.8, anchor="start", maxw=tw))
+    p.append(t(bx0 + 12, iy + 92, "Nothing in the loop questions the box.", size=8.6, fill=C_RED, weight="bold", anchor="start", maxw=tw))
+
+    # ---------------- (b) grounding as a hypothesis (ours) ----------------
+    yb, hb = ya + ha + 14, 196
+    p.append(R(10, yb, 620, hb, rx=8, fill=C_BLUE_FILL, stroke=C_BLUE, sw=1.4))
+    p.append(R(10, yb, 262, 22, rx=6, fill=C_BLUE, stroke="none", sw=0))
+    p.append(t(141, yb + 15, "(b) Grounding as a hypothesis (ours)", size=9.0, weight="bold", fill="#FFFFFF", maxw=250))
+    iy = yb + 38
+    opg(22, iy, 200, 94, True)
+    p.append(t(22, iy + 110, "same image; the box is corrected (orange)", size=8.4, fill=C_SUB, anchor="start", maxw=200))
+    p.append(arrow([(228, iy + 47), (252, iy + 47)], color=G, sw=1.5))
+    p.append(IMG(258, iy, cw_l, 110, a["crop_located"]))
+    p.append(R(258, iy, cw_l, 110, rx=2, stroke="#666666", sw=1.1, fill="none"))
+    p.append(t(258, iy + 126, "inspect: “... too low”", size=8.4, fill=C_SUB, anchor="start", maxw=120))
+    ax0 = 258 + cw_l + 8
+    cwf = 110 * a["crop_final_w"] / a["crop_final_h"]
+    fx = 420
+    p.append(arrow([(ax0, iy + 55), (fx - 8, iy + 55)], color=C_ORANGE, sw=2.0))
+    p.append(t((ax0 + fx - 8) / 2, iy + 42, "nudge_crop × 3", size=9.4, weight="bold", fill=C_ORANGE_D, maxw=fx - 8 - ax0))
+    p.append(t((ax0 + fx - 8) / 2, iy + 74, "dy -0.3 · -0.5 · -0.6", size=8.4, fill=C_ORANGE_D, maxw=fx - 8 - ax0))
+    p.append(IMG(fx, iy, cwf, 110, a["crop_final"]))
+    p.append(R(fx, iy, cwf, 110, rx=2, stroke="#666666", sw=1.1, fill="none"))
+    p.append(t(fx - 10, iy + 126, "re-inspect: crown confirmed", size=8.4, fill=C_SUB, anchor="start", maxw=150))
+    p.append(arrow([(fx + cwf + 8, iy + 55), (fx + cwf + 28, iy + 55)], color=G, sw=1.5))
+    qx = fx + cwf + 34
+    p.append(R(qx, iy + 12, 618 - qx, 88, rx=6, fill="#F2F8F2", stroke=C_GREEN, sw=1.3))
+    qw = 618 - qx - 16
+    p.append(t(qx + 10, iy + 32, "final answer", size=9.4, weight="bold", fill=C_GREEN_D, anchor="start", maxw=qw))
+    p.append(t(qx + 10, iy + 48, "Q3T4 · Caries", size=9.0, anchor="start", maxw=qw))
+    p.append(t(qx + 10, iy + 61, "confidence 0.82", size=8.6, anchor="start", maxw=qw))
+    p.append(t(qx + 10, iy + 82, "matches expert label", size=8.6, weight="bold", fill=C_GREEN_D, anchor="start", maxw=qw))
+
+    # legend
+    ly = yb + hb + 20
+    p.append(L(12, ly - 3, 36, ly - 3, color=C_BLUE, sw=2.4))
+    p.append(t(42, ly, "box returned by the grounding tool", size=8.6, anchor="start", maxw=190))
+    p.append(L(250, ly - 3, 274, ly - 3, color="#2ca02c", sw=2.4, dash="3,2"))
+    p.append(t(280, ly, "expert box", size=8.6, anchor="start", maxw=90))
+    p.append(L(380, ly - 3, 404, ly - 3, color=C_ORANGE, sw=2.4))
+    p.append(t(410, ly, "box after nudge_crop", size=8.6, anchor="start", maxw=160))
+    if warn:
+        print("  concept text-fit warnings:\n   " + "\n   ".join(warn))
+    return svg(W, ly + 12, "".join(p))
+
+
 def build_perturbation_mechanism(a):
     """Tiered-perturbation mechanism + nudge_crop loop (was a hand-authored SVG).
 
@@ -1333,6 +1426,7 @@ BUILDERS = {
     "fig_datasets.svg": build_dataset_catalog,
     "fig_grounding_cv.svg": build_grounding_cv,
     "fig_input_geometry.svg": build_input_geometry,
+    "fig_concept.svg": build_concept,
     "fig_pipeline.svg": build_pipeline,
     "fig_perturbation_mechanism.svg": build_perturbation_mechanism,
 }

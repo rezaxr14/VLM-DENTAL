@@ -30,8 +30,21 @@ because the crop looks authoritative.
 
 This paper develops and evaluates \sys{}, an agentic VLM for OPG diagnosis built around a
 different contract between the policy and its tools: \emph{grounding is a hypothesis, not an
-answer}. \cref{fig:architecture,fig:training} give the complete system architecture (agent loop and offline
+answer} (\cref{fig:concept}). \cref{fig:architecture,fig:training} give the complete system architecture (agent loop and offline
 training stack), and \cref{fig:evidence,fig:traces} contrast the two trace arms on one image. Our contributions are:
+
+\begin{figure}[tbp]
+  \centering
+  \includegraphics[width=\linewidth]{fig_concept}
+  \caption{The central idea. (a) When a grounding box is taken as an answer, the crop of that
+  box looks authoritative and every later observation inherits its error --- here the returned
+  box (blue) sits 0.69 box-heights below the expert box (green). (b) \sys{} treats the box as a
+  hypothesis: the policy inspects the crop, judges it wrong, corrects it with box-relative
+  \texttt{nudge\_crop} shifts, re-inspects, and answers from the corrected view (orange). Real
+  pixels and coordinates from DENTEX image 624 (a carious FDI tooth 34); the full with-tools
+  trace is dissected in \cref{fig:evidence,fig:traces}.}
+  \label{fig:concept}
+\end{figure}
 
 \begin{enumerate}[leftmargin=*,itemsep=2pt,topsep=3pt]
 \item \textbf{A self-correcting grounding tool (\texttt{nudge\_crop}, \cref{sec:nudge}).}
