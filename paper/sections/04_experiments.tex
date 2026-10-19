@@ -33,7 +33,20 @@ Every condition is a checkpoint (base, SFT, GRPO) with or without tool access, e
 the input geometry used in training (original images for native-trained checkpoints; the
 canonical views of \cref{fig:inputgeom} for canonically trained ones; tools always operate on
 the native image) and additionally at original size. The no-tools arms use the \emph{same} SFT and GRPO recipe on the
-1{,}847 single-turn traces, so tool contribution is not confounded with training recipe.
+1{,}847 single-turn traces, so tool contribution is not confounded with training recipe. \cref{fig:design} summarizes the
+design.
+
+\begin{figure}[tbp]
+  \centering
+  \includegraphics[width=\linewidth]{fig_design}
+  \caption{Experimental design. The four conditions form a $2\times2$ (SFT vs.\ SFT$+$GRPO, with
+  vs.\ without tools) trained with one recipe, so H1 (tools help) compares rows within a column
+  and H2 (RL helps) compares columns within a row; H3 positions the full system against a
+  supervised specialist, next to the zero-shot references of \cref{tab:zeroshot}. Result cells
+  are pending the first hardware run, as in \cref{tab:main}; the protocol is frozen
+  (\cref{sec:eval}).}
+  \label{fig:design}
+\end{figure}
 
 \subsection{Zero-shot baselines: the case for looking again}
 \label{sec:baselines}

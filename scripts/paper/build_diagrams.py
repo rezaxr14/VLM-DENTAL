@@ -1319,6 +1319,92 @@ def build_concept(a):
     return svg(W, ly + 12, "".join(p))
 
 
+def build_design(a):
+    """Experimental design: the 2x2 of conditions, hypotheses H1-H3, frozen protocol, probes.
+
+    Every statement is taken from the Experiments section (conditions,
+    hypotheses, protocol, probes) and from the zero-shot table; result cells
+    stay "pending" exactly like the main-results table.
+    """
+    W = 640
+    warn: list[str] = []
+    t = _checked(warn)
+    p = []
+    G = "#777777"
+    PEND = C_RED
+
+    def cell(x, y, w, h, title, sub, line3, hero=False):
+        p.append(R(x, y, w, h, rx=8, fill=C_GREEN_FILL if hero else C_BLUE_FILL, stroke=C_GREEN if hero else C_BLUE, sw=1.8 if hero else 1.3))
+        p.append(t(x + w / 2, y + 22, title, size=10.4, weight="bold", fill=C_GREEN_D if hero else C_BLUE_D, maxw=w - 14))
+        p.append(t(x + w / 2, y + 38, sub, size=8.8, fill=C_SUB, maxw=w - 14))
+        p.append(t(x + w / 2, y + 52, line3, size=8.6, fill=C_SUB, maxw=w - 14))
+        p.append(t(x + w / 2, y + 72, "F1 / invented: pending", size=8.8, weight="bold", fill=PEND, maxw=w - 14))
+
+    # column + row headers
+    c1x, c2x, cw, ch = 96, 306, 140, 86
+    r1y, r2y = 42, 174
+    p.append(t(c1x + cw / 2, 28, "SFT", size=10.4, weight="bold", maxw=cw))
+    p.append(t(c2x + cw / 2, 28, "SFT + GRPO", size=10.4, weight="bold", maxw=cw))
+    p.append(t(12, r1y + 44, "no tools", size=10.0, weight="bold", anchor="start", maxw=76))
+    p.append(t(12, r2y + 44, "with tools", size=10.0, weight="bold", anchor="start", maxw=76))
+    cell(c1x, r1y, cw, ch, "SFT only", "no tools", "1,847 single-turn traces")
+    cell(c2x, r1y, cw, ch, "SFT + GRPO", "no tools", "same recipe, single-turn")
+    cell(c1x, r2y, cw, ch, "SFT + tools", "1,847 with-tools traces", "real tool execution")
+    cell(c2x, r2y, cw, ch, "VLM-DENTAL", "SFT + GRPO + tools", "live tool rollouts", hero=True)
+    # H2 (RL) horizontal arrows, H1 (tools) vertical arrows
+    for ry in (r1y, r2y):
+        ymid = ry + ch / 2
+        p.append(arrow([(c1x + cw, ymid), (c2x - 2, ymid)], color=C_ORANGE, sw=1.8))
+        p.append(t((c1x + cw + c2x) / 2, ymid - 7, "H2: RL", size=8.8, weight="bold", fill=C_ORANGE_D, maxw=62))
+    for cx in (c1x, c2x):
+        xm = cx + cw / 2
+        p.append(arrow([(xm, r1y + ch), (xm, r2y - 2)], color=C_BLUE, sw=1.8))
+        p.append(t(xm + 8, (r1y + ch + r2y) / 2 + 4, "H1: tools", size=8.8, weight="bold", fill=C_BLUE_D, anchor="start", maxw=70))
+
+    # references (right)
+    rx_, rw_ = 478, 152
+    p.append(R(rx_, r1y, rw_, ch, rx=8, fill="#F7F8FA", stroke="#BBBBBB", sw=1.2))
+    p.append(t(rx_ + rw_ / 2, r1y + 20, "zero-shot references", size=9.6, weight="bold", maxw=rw_ - 12))
+    p.append(t(rx_ + 12, r1y + 38, "best frontier VLM", size=8.6, fill=C_SUB, anchor="start", maxw=100))
+    p.append(t(rx_ + rw_ - 12, r1y + 38, "0.222", size=8.8, weight="bold", anchor="end"))
+    p.append(t(rx_ + 12, r1y + 52, "Qwen3.5-9B", size=8.6, fill=C_SUB, anchor="start", maxw=100))
+    p.append(t(rx_ + rw_ - 12, r1y + 52, "0.112", size=8.8, weight="bold", anchor="end"))
+    p.append(t(rx_ + 12, r1y + 66, "majority floor", size=8.6, fill=C_SUB, anchor="start", maxw=100))
+    p.append(t(rx_ + rw_ - 12, r1y + 66, "0.038", size=8.8, weight="bold", anchor="end"))
+    p.append(t(rx_ + rw_ / 2, r1y + ch + 12, "exact F1 (zero-shot table)", size=8.2, fill=C_SUB, maxw=rw_))
+    p.append(R(rx_, r2y, rw_, ch, rx=8, fill="#FDF3EA", stroke="#DD8452", sw=1.2))
+    p.append(t(rx_ + rw_ / 2, r2y + 20, "supervised specialist", size=9.6, weight="bold", maxw=rw_ - 12))
+    p.append(t(rx_ + rw_ / 2, r2y + 36, "HierarchicalDet on DENTEX", size=8.6, fill=C_SUB, maxw=rw_ - 12))
+    p.append(t(rx_ + rw_ / 2, r2y + 50, "AP 0.372 · AP50 0.601", size=8.8, maxw=rw_ - 12))
+    p.append(t(rx_ + rw_ / 2, r2y + 63, "AR 0.653", size=8.8, maxw=rw_ - 12))
+    p.append(t(rx_ + rw_ / 2, r2y + 78, "a fair test, not a sure win", size=8.2, fill=C_ORANGE_D, weight="bold", maxw=rw_ - 12))
+    p.append(arrow([(c2x + cw, r2y + ch / 2), (rx_ - 2, r2y + ch / 2)], color=G, sw=1.5))
+    p.append(t((c2x + cw + rx_) / 2, r2y + ch / 2 - 7, "H3", size=8.8, weight="bold", fill=C_SUB, maxw=34))
+
+    # protocol band
+    py0 = r2y + ch + 24
+    ph = 120
+    p.append(R(10, py0, 620, ph, rx=8, fill="#F7F8FA", stroke="#CCCCCC", sw=1.2))
+    p.append(R(10, py0, 196, 22, rx=6, fill=PILL_GREY, stroke="none", sw=0))
+    p.append(t(108, py0 + 15, "evaluation protocol (frozen)", size=8.8, weight="bold", fill="#FFFFFF", maxw=184))
+    items = [
+        ("test", "DENTEX official validation: 50 images (46 pathological, 182 target teeth; 4 healthy), used once"),
+        ("dev", "all choices on a fixed dev split of ~70 training images, drawn once with a fixed seed"),
+        ("metrics", "set-matched pooled F1 (exact, tooth-only) · invented findings on healthy images · no-answer rate · ECE"),
+        ("uncertainty", "bootstrap over images; paired comparisons on the images conditions share"),
+    ]
+    yy = py0 + 40
+    for k, v in items:
+        p.append(t(22, yy, k, size=8.8, weight="bold", fill=C_BLUE_D, anchor="start", maxw=70))
+        p.append(t(96, yy, v, size=8.6, anchor="start", maxw=526))
+        yy += 15
+    p.append(t(22, yy + 2, "probes on the trained checkpoint (nothing retrained):", size=8.8, weight="bold", fill=C_ORANGE_D, anchor="start", maxw=300))
+    p.append(t(22, yy + 15, "tool removal · grounding perturbation · group-size sweep K ∈ {1, 2, 4, 8, 16} on dev", size=8.6, anchor="start", maxw=596))
+    if warn:
+        print("  design text-fit warnings:\n   " + "\n   ".join(warn))
+    return svg(W, py0 + ph + 10, "".join(p))
+
+
 def build_perturbation_mechanism(a):
     """Tiered-perturbation mechanism + nudge_crop loop (was a hand-authored SVG).
 
@@ -1427,6 +1513,7 @@ BUILDERS = {
     "fig_grounding_cv.svg": build_grounding_cv,
     "fig_input_geometry.svg": build_input_geometry,
     "fig_concept.svg": build_concept,
+    "fig_design.svg": build_design,
     "fig_pipeline.svg": build_pipeline,
     "fig_perturbation_mechanism.svg": build_perturbation_mechanism,
 }
