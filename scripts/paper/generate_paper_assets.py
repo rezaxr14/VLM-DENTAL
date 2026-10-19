@@ -609,8 +609,23 @@ def write_nudge_table(out_dir: Path, agg: dict):
 # --------------------------------------------------------------------------
 
 
+def _style() -> None:
+    """One look for every matplotlib figure: Helvetica-metric sans (matches the
+    builder diagrams), text as paths, no top/right spines handled per axis."""
+    plt.rcParams.update(
+        {
+            "svg.fonttype": "path",
+            "font.size": 9,
+            "font.family": "sans-serif",
+            "font.sans-serif": ["Arial", "Liberation Sans", "Helvetica", "Nimbus Sans", "DejaVu Sans"],
+            "axes.titlesize": 9,
+            "axes.labelsize": 9,
+        }
+    )
+
+
 def plot_tool_usage(out_dir: Path, tool_totals: Counter):
-    plt.rcParams.update({"svg.fonttype": "path", "font.size": 9})
+    _style()
     items = [(t, tool_totals.get(t, 0)) for t in TOOL_ORDER]
     items.sort(key=lambda kv: kv[1])
     names = [t for t, _ in items]
@@ -620,6 +635,7 @@ def plot_tool_usage(out_dir: Path, tool_totals: Counter):
     for b, v in zip(bars, vals):
         ax.text(b.get_width() + max(vals) * 0.01, b.get_y() + b.get_height() / 2, f"{v:,}", va="center", fontsize=8)
     ax.set_xlabel("Tool calls in the verified with-tools corpus")
+    ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{int(v):,}"))
     ax.spines[["top", "right"]].set_visible(False)
     ax.margins(x=0.12)
     fig.tight_layout()
@@ -629,7 +645,7 @@ def plot_tool_usage(out_dir: Path, tool_totals: Counter):
 
 
 def plot_nudge_tier(out_dir: Path, agg: dict):
-    plt.rcParams.update({"svg.fonttype": "path", "font.size": 9})
+    _style()
     tiers = TIER_ORDER
     rates = [100.0 * agg["overall"][t]["corrected_rate"] for t in tiers]
     before = [agg["gt_anchored"][t]["iou_before_mean"] for t in tiers]
@@ -641,9 +657,9 @@ def plot_nudge_tier(out_dir: Path, agg: dict):
     for b, r, n in zip(bars, rates, ns):
         ax1.text(b.get_x() + b.get_width() / 2, r + 1.5, f"{r:.0f}%\n(n={n:,})", ha="center", fontsize=8)
     ax1.set_xticks(list(x), tiers)
-    ax1.set_ylabel("P(corrective nudge_crop)")
+    ax1.set_ylabel("P(corrective nudge_crop) (%)")
     ax1.set_ylim(0, max(rates) * 1.35 + 2)
-    ax1.set_title("Correction behavior by perturbation tier", fontsize=9)
+    ax1.set_title("(a) Correction behavior by perturbation tier", fontsize=9)
     ax1.spines[["top", "right"]].set_visible(False)
 
     w = 0.36
@@ -652,7 +668,7 @@ def plot_nudge_tier(out_dir: Path, agg: dict):
     ax2.set_xticks(list(x), tiers)
     ax2.set_ylabel("IoU with ground-truth box")
     ax2.set_ylim(0, 1.05)
-    ax2.set_title("Box quality before / after correction", fontsize=9)
+    ax2.set_title("(b) Box quality before / after correction", fontsize=9)
     ax2.legend(fontsize=8, loc="upper right")
     ax2.spines[["top", "right"]].set_visible(False)
     fig.tight_layout()
@@ -700,12 +716,13 @@ def render_perturbation_example(out_dir: Path, per_cohort: dict, args):
     def sx(b):
         return [b[0] * scale, b[1] * scale, b[2] * scale, b[3] * scale]
 
+    _style()
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(7.0, 2.6), gridspec_kw={"width_ratios": [2.1, 1.0]})
     ax1.imshow(img_small, cmap="gray")
     draw_box(ax1, sx(rec["true"]), "#2ca02c", "-", "ground-truth box")
     draw_box(ax1, sx(rec["shown_box"]), "#d62728", "--", "shown to teacher (perturbed)")
     draw_box(ax1, sx(rec["final_box"]), "#ff7f0e", (0, (1, 1.3)), "after nudge_crop", lw=3.0)
-    ax1.set_title("DENTEX image with tiered perturbation", fontsize=9)
+    ax1.set_title("(a) DENTEX image with tiered perturbation", fontsize=9)
     ax1.axis("off")
 
     # zoom around the union of the three boxes with padding
@@ -724,7 +741,7 @@ def render_perturbation_example(out_dir: Path, per_cohort: dict, args):
     draw_box(ax2, cz(rec["true"]), "#2ca02c", "-", None)
     draw_box(ax2, cz(rec["shown_box"]), "#d62728", "--", None)
     draw_box(ax2, cz(rec["final_box"]), "#ff7f0e", (0, (1, 1.3)), None, lw=3.0)
-    ax2.set_title(f"zoom (IoU {rec['iou_before']:.2f} $\\to$ {rec['iou_after']:.2f})", fontsize=9)
+    ax2.set_title(f"(b) zoom (IoU {rec['iou_before']:.2f} $\\to$ {rec['iou_after']:.2f})", fontsize=9)
     ax2.axis("off")
 
     handles = [
