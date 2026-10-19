@@ -145,8 +145,8 @@ def build_traces_evidence(a):
     p.append(L(10, ly + 15, 34, ly + 15, color="#2ca02c", sw=2.6, dash="4,2.5"))
     p.append(t(40, ly + 18, "ground-truth box", size=9.2, anchor="start", maxw=150))
     p.append(t(236, ly + 18, "coords as returned:", size=9.2, fill=C_SUB, anchor="start", maxw=146))
-    p.append(t(10, ly + 38, "[1668,917,84,322] - [1685,885,50,193]", size=8.6, fill="#555555", anchor="start", font=MONO, maxw=372))
-    p.append(t(10, ly + 51, "- [1693,818,35,135] - [1696,750,28,108]", size=8.6, fill="#555555", anchor="start", font=MONO, maxw=372))
+    p.append(t(10, ly + 38, f"{_fmt_box(loc, False)} - {_fmt_box(n1, False)}", size=8.6, fill="#555555", anchor="start", font=MONO, maxw=372))
+    p.append(t(10, ly + 51, f"- {_fmt_box(n2, False)} - {_fmt_box(n3, False)}", size=8.6, fill="#555555", anchor="start", font=MONO, maxw=372))
     if warn:
         print("  traces_evidence text-fit warnings:\n   " + "\n   ".join(warn))
     return svg(W, max(iy + ih, ly + 51) + 12, "".join(p))
@@ -210,11 +210,11 @@ def build_traces_comparison(a):
     rows = [
         ("T0", "window_level", "survey the full field at high contrast", 0),
         ("T1", "fdi_label", "orient to FDI notation first", 0),
-        ("T2", "locate_tooth(34)", "box [1668, 917, 84, 322] (GT-grounded detector)", 0),
+        ("T2", "locate_tooth(34)", f"box {_fmt_box(BOXES_624['loc'])} (GT-grounded detector)", 0),
         ("T3", "zoom_crop", "“shows only bone and root area ... too low”", 0),
-        ("T4", "nudge_crop #1", "dy -0.3 · scale 0.6 -> [1685, 885, 50, 193]", 1),
-        ("T6", "nudge_crop #2", "dy -0.5 · scale 0.7 -> [1693, 818, 35, 135]", 1),
-        ("T8", "nudge_crop #3", "dy -0.6 · scale 0.8 -> [1696, 750, 28, 108]", 1),
+        ("T4", "nudge_crop #1", f"dy -0.3 · scale 0.6 -> {_fmt_box(BOXES_624['n1'])}", 1),
+        ("T6", "nudge_crop #2", f"dy -0.5 · scale 0.7 -> {_fmt_box(BOXES_624['n2'])}", 1),
+        ("T8", "nudge_crop #3", f"dy -0.6 · scale 0.8 -> {_fmt_box(BOXES_624['n3'])}", 1),
         ("T9-10", "zoom + denoise", "“Excellent! Now I can clearly see tooth 34”", 0),
         ("T14+", "compare + enhance", "contralateral check, contrast pass, re-verify", 0),
     ]
@@ -346,7 +346,7 @@ def build_trace_generation(a):
     p.append(R(20, uy, 600, uh))
     _card_title(p, t, 20, uy, 600, icon_doc(32, uy + 10), "Unverified trace pool")
     p.append(R(32, uy + 34, 300, 52, rx=4, fill="#F7F8FA", stroke="#E3E3E3", sw=1.0))
-    snip = ['T4 thought "crop shows only bone and', '         root area ... too low"', "T4 call    nudge_crop(dy=-0.30, s=0.60)", "T5 obs     bbox -> [1685, 885, 50, 193]"]
+    snip = ['T4 thought "crop shows only bone and', '         root area ... too low"', "T4 call    nudge_crop(dy=-0.30, s=0.60)", f"T5 obs     bbox -> {_fmt_box(BOXES_624['n1'])}"]
     yy = uy + 46
     for ln in snip:
         p.append(t(40, yy, ln, size=7.8, fill="#333333", anchor="start", font=MONO, maxw=284))
@@ -714,6 +714,12 @@ def build_architecture_training(a):
 # ---------------------------------------------------------------------------
 # Figure 4: corpus composition (per-cohort, measured)
 # ---------------------------------------------------------------------------
+
+
+def _fmt_box(b, spaces=True):
+    """[x, y, w, h] rounded to ints, as the tools return them in the traces."""
+    sep = ", " if spaces else ","
+    return "[" + sep.join(str(int(round(v))) for v in b) + "]"
 
 
 def _checked(warn):
