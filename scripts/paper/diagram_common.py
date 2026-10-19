@@ -37,12 +37,16 @@ C_GREEN_FILL = "#F4FBF6"
 C_ORANGE = "#ff7f0e"
 C_ORANGE_L = "#FFF4E8"
 C_ORANGE_D = "#8A4B06"
-C_RED = "#C44E52"
+C_RED = "#B5383C"
 C_SAND_FILL = "#FDFBF2"
 C_SAND_D = "#8A6D1F"
 C_TXT = "#444444"
-C_SUB = "#777777"
+C_SUB = "#666666"
 C_MUT = "#999999"
+# fills for pills that carry white bold text (>= 4.5:1 contrast)
+PILL_GREEN = "#2F7D45"
+PILL_ORANGE = "#B8561F"
+PILL_GREY = "#5F6B7A"
 
 
 _AMP = chr(38)

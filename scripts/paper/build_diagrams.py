@@ -56,6 +56,9 @@ from diagram_common import (  # noqa: E402
     load_assets,
     scaled_box,
     svg,
+    PILL_GREEN,
+    PILL_GREY,
+    PILL_ORANGE,
 )
 from diagram_common import R as RC
 from diagram_common import T as TC
@@ -311,7 +314,7 @@ def build_trace_generation(a):
     p.append(arrow([(lx + 71, py + 11), (lx + 81, py + 11)], color=G, sw=1.1))
     p.append(arrow([(lx + 151, py + 11), (lx + 161, py + 11)], color=G, sw=1.1))
     p.append(arrow([(lx + 203, py + 22), (lx + 203, py + 42), (lx + 41, py + 42), (lx + 41, py + 23)], color="#B9C6DC", sw=1.2))
-    p.append(t(lx + 122, py + 37, "repeat every turn", size=8.4, fill="#6F86AD", maxw=140))
+    p.append(t(lx + 122, py + 37, "repeat every turn", size=8.4, fill="#4F6690", maxw=140))
     # zoom monitor (right of the pills)
     mx, my, mw, mh = lx + 268, ca + 30, 160, 92
     p.append(R(mx, my, mw, mh, rx=4, fill="#FAFBFD", stroke="#DDDDDD", sw=1.0))
@@ -369,7 +372,7 @@ def build_trace_verification(a):
     cb = yb + 46
     chb = 200
     hb = 46 + chb + 12
-    _band(p, t, yb, hb, C_GREEN_FILL, "#BFDCC6", C_GREEN, "STAGE 2 · VERIFICATION", 176, "provider family B - never the generator pool", C_GREEN_D)
+    _band(p, t, yb, hb, C_GREEN_FILL, "#BFDCC6", PILL_GREEN, "STAGE 2 · VERIFICATION", 176, "provider family B - never the generator pool", C_GREEN_D)
 
     vx, vw = 20, 186
     p.append(R(vx, cb, vw, chb))
@@ -431,7 +434,7 @@ def build_trace_verification(a):
     cc_ = yc + 34
     chc = 176
     hc = 34 + chc + 12
-    _band(p, t, yc, hc, C_SAND_FILL, "#E5D9B8", "#DD8452", "STAGE 3 · DECONTAMINATION + RELEASE", 188, "only clean traces enter the corpus", C_SAND_D)
+    _band(p, t, yc, hc, C_SAND_FILL, "#E5D9B8", PILL_ORANGE, "STAGE 3 · DECONTAMINATION + RELEASE", 188, "only clean traces enter the corpus", C_SAND_D)
     p.append(arrow([(202, cb + chb), (202, cc_ - 1)], color=C_GREEN, sw=1.8))
     p.append(t(212, yc + 15, "PASS · 97.5% first-pass", size=8.2, fill=C_GREEN_D, anchor="start", maxw=96))
     gx, gw = 20, 190
@@ -552,7 +555,7 @@ def build_architecture(a):
     p.append(arrow([(gx0, c0 + 60), (gx1, c0 + 60)], color=C_BLUE, sw=1.6))
     p.append(t((gx0 + gx1) / 2, c0 + 52, "call", size=8.6, fill=C_BLUE_D, maxw=36))
     p.append(arrow([(gx1, c0 + 112), (gx0, c0 + 112)], color="#8DA2C4", sw=1.6))
-    p.append(t((gx0 + gx1) / 2, c0 + 104, "obs", size=8.6, fill="#6F86AD", maxw=36))
+    p.append(t((gx0 + gx1) / 2, c0 + 104, "obs", size=8.6, fill="#4F6690", maxw=36))
 
     # ---- row 3: final answer ----
     a0 = c0 + ch + 34
@@ -836,7 +839,7 @@ def build_dataset_catalog(a):
     # ---- in use ----
     y0 = 60
     p.append(R(10, y0, 620, 232, fill=C_GREEN_FILL, stroke=C_GREEN, sw=1.4))
-    p.append(R(22, y0 + 10, 62, 18, rx=9, fill=C_GREEN, stroke="none", sw=0))
+    p.append(R(22, y0 + 10, 62, 18, rx=9, fill=PILL_GREEN, stroke="none", sw=0))
     p.append(t(53, y0 + 23, "IN USE", size=8.8, weight="bold", fill="#FFFFFF"))
     p.append(t(618, y0 + 23, "feeds the released corpus", size=8.8, fill=C_GREEN_D, anchor="end"))
 
@@ -876,7 +879,7 @@ def build_dataset_catalog(a):
     c0 = y0 + 232 + 12
     ch = 38 + 4 * 66 + 44
     p.append(R(10, c0, 620, ch, fill="#FBFBFC", stroke="#CCCCCC", sw=1.2))
-    p.append(R(22, c0 + 10, 124, 18, rx=9, fill="#9AA5B1", stroke="none", sw=0))
+    p.append(R(22, c0 + 10, 124, 18, rx=9, fill=PILL_GREY, stroke="none", sw=0))
     p.append(t(84, c0 + 23, "CANDIDATE POOL", size=8.8, weight="bold", fill="#FFFFFF"))
     p.append(t(618, c0 + 23, "pending - not used in this work", size=8.8, fill=C_SUB, anchor="end"))
 
@@ -1071,7 +1074,7 @@ def build_input_geometry(a):
     # GPU panel
     gy0, gh = ty0 + th + 12, 108
     p.append(R(16, gy0, 614, gh, fill="#F7F8FA", stroke="#BBBBBB", sw=1.2))
-    p.append(R(28, gy0 + 10, 56, 20, rx=10, fill="#777777", stroke="none", sw=0))
+    p.append(R(28, gy0 + 10, 56, 20, rx=10, fill=PILL_GREY, stroke="none", sw=0))
     p.append(t(56, gy0 + 24, "GPU", size=9.0, weight="bold", fill="#FFFFFF"))
     p.append(t(618, gy0 + 24, "runs so far: original images, dynamic shapes", size=8.6, fill="#555555", anchor="end", maxw=470))
     p.append(t(28, gy0 + 48, "GPU runs so far feed native images with dynamic padding; a --canonical-resize flag", size=8.8, anchor="start", maxw=590))
