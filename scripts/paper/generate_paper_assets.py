@@ -504,6 +504,8 @@ def _agg_subset(records: list[dict]) -> dict:
         recov = [r for r in rs if r["shown_recovered"]]
         before = [r["iou_before"] for r in recov]
         after = [r["iou_after"] for r in corrected]
+        # paired companion: IoU of the *same* corrected episodes before their nudges
+        before_corrected = [r["iou_before"] for r in corrected]
         out[tier] = {
             "n": len(rs),
             "n_shown_recovered": len(recov),
@@ -514,6 +516,9 @@ def _agg_subset(records: list[dict]) -> dict:
             "iou_before_sd": _sd(before),
             "iou_after_mean": sum(after) / len(after) if after else None,
             "iou_after_sd": _sd(after),
+            "iou_before_corrected_mean": sum(before_corrected) / len(before_corrected) if before_corrected else None,
+            "iou_before_corrected_sd": _sd(before_corrected),
+            "n_corrected": len(corrected),
             "delta_mean": (sum(after) / len(after) - sum(before) / len(before)) if after else None,
             "n_nudges_total": sum(r["n_nudges"] for r in rs),
             "n_corrective_total": sum(r["n_corrective"] for r in rs),
@@ -644,32 +649,66 @@ def plot_tool_usage(out_dir: Path, tool_totals: Counter):
     plt.close(fig)
 
 
+def _wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
+    """Wilson score interval for a binomial proportion (returns lo, hi in [0, 1])."""
+    if n == 0:
+        return 0.0, 0.0
+    p = k / n
+    den = 1 + z * z / n
+    centre = (p + z * z / (2 * n)) / den
+    half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / den
+    return max(0.0, centre - half), min(1.0, centre + half)
+
+
 def plot_nudge_tier(out_dir: Path, agg: dict):
+    """(a) corrective-nudge rate per tier on the ground-truth-anchored subset (the
+    numbers of the table and the text; Wilson 95% CIs) with the all-locates rate as a
+    diamond; (b) IoU as shown vs after correction with 95% CIs of the mean.
+
+    Note the two bars of (b) average different sets (all locates with a recovered
+    shown box vs corrected locates only), so their difference is not a paired gain;
+    the legend says so.
+    """
     _style()
     tiers = TIER_ORDER
-    rates = [100.0 * agg["overall"][t]["corrected_rate"] for t in tiers]
-    before = [agg["gt_anchored"][t]["iou_before_mean"] for t in tiers]
-    after = [agg["gt_anchored"][t]["iou_after_mean"] or 0.0 for t in tiers]
-    ns = [agg["overall"][t]["n"] for t in tiers]
-    x = range(len(tiers))
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(6.4, 2.6))
-    bars = ax1.bar(x, rates, color=["#999999", "#DD8452", "#C44E52"])
-    for b, r, n in zip(bars, rates, ns):
-        ax1.text(b.get_x() + b.get_width() / 2, r + 1.5, f"{r:.0f}%\n(n={n:,})", ha="center", fontsize=8)
-    ax1.set_xticks(list(x), tiers)
+    gt, allr = agg["gt_anchored"], agg["overall"]
+    n_gt = [gt[t]["n"] for t in tiers]
+    k_gt = [round(gt[t]["corrected_rate"] * gt[t]["n"]) for t in tiers]
+    rates = [100.0 * gt[t]["corrected_rate"] for t in tiers]
+    cis = [_wilson(k, n) for k, n in zip(k_gt, n_gt)]
+    err = [[r - 100 * lo for r, (lo, _) in zip(rates, cis)], [100 * hi - r for r, (_, hi) in zip(rates, cis)]]
+    overall = [100.0 * allr[t]["corrected_rate"] for t in tiers]
+    x = list(range(len(tiers)))
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(6.6, 2.8))
+    colors = ["#999999", "#DD8452", "#C44E52"]
+    ax1.bar(x, rates, color=colors, yerr=err, error_kw={"ecolor": "#333333", "elinewidth": 1.0, "capsize": 3})
+    for xi, r, hi, n in zip(x, rates, [100 * h for _, h in cis], n_gt):
+        ax1.text(xi, hi + 1.2, f"{r:.1f}%\n(n={n:,})", ha="center", fontsize=8)
+    ax1.plot(x, overall, linestyle="none", marker="D", markersize=5, markerfacecolor="white", markeredgecolor="#222222", markeredgewidth=1.1, label="all locates", zorder=5)
+    ax1.set_xticks(x, tiers)
     ax1.set_ylabel("P(corrective nudge_crop) (%)")
-    ax1.set_ylim(0, max(rates) * 1.35 + 2)
+    ax1.set_ylim(0, max(100 * h for _, h in cis) * 1.32 + 2)
     ax1.set_title("(a) Correction behavior by perturbation tier", fontsize=9)
+    ax1.legend(fontsize=8, loc="upper left", frameon=False, handletextpad=0.3)
     ax1.spines[["top", "right"]].set_visible(False)
 
+    def ci_mean(sd, n):
+        return 1.96 * sd / math.sqrt(n) if n and n > 1 else 0.0
+
+    before = [gt[t]["iou_before_mean"] for t in tiers]
+    e_before = [ci_mean(gt[t]["iou_before_sd"], gt[t]["n_shown_recovered"]) for t in tiers]
+    after = [gt[t]["iou_after_mean"] or 0.0 for t in tiers]
+    e_after = [ci_mean(gt[t]["iou_after_sd"], k) for t, k in zip(tiers, k_gt)]
     w = 0.36
-    ax2.bar([i - w / 2 for i in x], before, w, label="box as shown", color="#999999")
-    ax2.bar([i + w / 2 for i in x], after, w, label="after correction", color="#55A868")
-    ax2.set_xticks(list(x), tiers)
-    ax2.set_ylabel("IoU with ground-truth box")
-    ax2.set_ylim(0, 1.05)
+    kw = {"ecolor": "#333333", "elinewidth": 1.0, "capsize": 3}
+    ax2.bar([i - w / 2 for i in x], before, w, yerr=e_before, error_kw=kw, color="#999999", label="as shown (all locates)")
+    ax2.bar([i + w / 2 for i in x], after, w, yerr=e_after, error_kw=kw, color="#55A868", label="after correction (corrected locates only)")
+    ax2.set_xticks(x, tiers)
+    ax2.set_ylabel("IoU with reference box")
+    ax2.set_ylim(0, 1.32)
+    ax2.set_yticks([0, 0.25, 0.5, 0.75, 1.0])
     ax2.set_title("(b) Box quality before / after correction", fontsize=9)
-    ax2.legend(fontsize=8, loc="upper right")
+    ax2.legend(fontsize=7.5, loc="upper right", frameon=False, handlelength=1.2)
     ax2.spines[["top", "right"]].set_visible(False)
     fig.tight_layout()
     for ext in ("svg", "pdf"):

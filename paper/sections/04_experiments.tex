@@ -143,10 +143,13 @@ reference center (cosine $>0.3$), \emph{away} if against it, \emph{rescaling} ot
   \centering
   \includegraphics[width=\linewidth]{fig_nudge_tier}
   \caption{(a) Corrective \texttt{nudge\_crop} usage rises monotonically with perturbation
-  severity (overall corpus, all cohorts). (b) Mean IoU with the reference box before and
-  after correction, on the ground-truth-anchored subset. The ``none'' after-bar reflects the few
-  corrective nudges on clean boxes (1.1\% of that tier), which are mostly reframing rescales
-  rather than corrections.}
+  severity on the ground-truth-anchored subset (bars, with Wilson 95\% intervals; the rates of
+  \cref{tab:nudgetier}); diamonds give the same rate over all locate returns, including
+  detector-anchored ones. (b) Mean IoU with the reference box as shown (over all locates with a
+  recovered shown box) and after correction (over corrected locates only), with 95\% intervals
+  of the mean; the two bars average different sets of locates, so their difference is not a
+  paired gain. The ``none'' after-bar reflects the few corrective nudges on clean boxes
+  (1.1\% of that tier), which are mostly reframing rescales rather than corrections.}
   \label{fig:nudgetier}
 \end{figure}
 
