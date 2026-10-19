@@ -826,6 +826,41 @@ def build_corpus_composition(a):
 # ---------------------------------------------------------------------------
 
 
+def _check_dataset_catalog(in_use: dict[str, int], candidates: list[tuple[str, str]]) -> None:
+    """Fail the build if the figure's dataset sizes / diagnosis flags drift from
+    dental_agent/data/dataset_catalog.py (the single source of truth)."""
+    import importlib.util
+
+    path = Path(__file__).resolve().parents[2] / "dental_agent" / "data" / "dataset_catalog.py"
+    spec = importlib.util.spec_from_file_location("_dscat", path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["_dscat"] = mod  # dataclasses need the module registered
+    spec.loader.exec_module(mod)
+    cat = {d.name: d for d in mod.PANORAMIC_DATASETS}
+    alias = {  # figure label -> catalog name
+        "DENTEX": "DENTEX",
+        "Tufts Dental Database": "Tufts Panoramic Dataset",
+        "Dental Radiography": "Dental Radiography",
+        "DNS (UFBA-UESC)": "DNS (Detection, Numbering, and Segmentation)",
+        "Segmented Mandibles": "Panoramic Dental X-rays With Segmented Mandibles",
+        "TL-pano": "TL-pano",
+        "TK Tooth Number Code": "TK_Tooth_Number_Code",
+        "Tunisia Panoramic": "Panoramic Dental Xray Dataset",
+        "Panoramic-Paraguay": "Panoramic-Paraguay",
+        "Panoramic-Caries-Seg": "Panoramic-Caries-Segmentation",
+    }
+    problems = []
+    for label, n in list(in_use.items()) + [(c[0], int(c[1].replace(",", ""))) for c in candidates]:
+        entry = cat.get(alias[label])
+        if entry is None or entry.n_images != n:
+            problems.append(f"{label}: figure says {n}, catalog says {getattr(entry, 'n_images', 'missing')}")
+    n_diag = sum(cat[alias[c[0]]].has_diagnosis_labels for c in candidates)
+    if n_diag != 1:
+        problems.append(f"figure claims 1 of 8 candidates is diagnosis-labeled; catalog has {n_diag}")
+    if problems:
+        raise ValueError("fig_datasets drifted from dataset_catalog.py:\n  " + "\n  ".join(problems))
+
+
 def build_dataset_catalog(a):
     """Dataset catalog on a 640-unit canvas: in-use cards side by side, 2x4 candidates."""
     W = 640
@@ -893,6 +928,7 @@ def build_dataset_catalog(a):
         ("Panoramic-Paraguay", "135", "thin documentation in the review", "systematic review"),
         ("Panoramic-Caries-Seg", "75", "binary caries masks (pixel level)", "systematic review"),
     ]
+    _check_dataset_catalog({"DENTEX": 2332, "Tufts Dental Database": 1000}, [(c[0], c[1]) for c in candidates])
     for i, (name, n, reason, source) in enumerate(candidates):
         col, row = i % 2, i // 2
         cx = 22 + col * 304
