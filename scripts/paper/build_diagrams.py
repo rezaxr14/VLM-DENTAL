@@ -15,6 +15,7 @@ the local DENTEX copy (image 624 = train_318.png). No downloads (Rule 16).
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -764,14 +765,27 @@ def build_corpus_composition(a):
     p.append(t(522, hy, "healthy", size=8.8, fill=C_SUB, anchor="start"))
     p.append(t(574, hy, "avg calls", size=8.8, fill=C_SUB, anchor="start", maxw=52))
 
-    scale = 205.0 / 678
-    rows = [
-        ("dentex · pathology", 678, "3,529", "0", 25.2, C_BLUE),
-        ("dentex · healthy", 27, "-", "27", 29.9, C_GREEN),
-        ("tufts · periapical overlap", 202, "631", "0", 18.0, C_BLUE),
-        ("tufts · healthy", 660, "-", "660", 27.0, C_GREEN),
-        ("tufts · all diseases", 280, "984", "0", 17.8, C_BLUE),
+    summ = json.loads((PAPER_DIR / "assets_summary.json").read_text(encoding="utf-8"))
+    corpus, totals = summ["corpus"], summ["corpus_totals"]
+    cohort_rows = [
+        ("dentex · pathology", "dentex_pathology", C_BLUE),
+        ("dentex · healthy", "dentex_healthy", C_GREEN),
+        ("tufts · periapical overlap", "tufts_overlap", C_BLUE),
+        ("tufts · healthy", "tufts_healthy", C_GREEN),
+        ("tufts · all diseases", "tufts_all_diseases", C_BLUE),
     ]
+    rows = []
+    for label, key, color in cohort_rows:
+        c = corpus[key]
+        rows.append((label, c["traces"], f"{c['findings']:,}" if c["findings"] else "-", str(c["healthy_traces"]), c["avg_tool_calls"], color))
+    # the stated totals must follow from the measured cohorts
+    assert sum(c["traces"] for c in corpus.values()) == totals["total_traces"] == totals["total_no_tools"]
+    assert sum(c["findings"] for c in corpus.values()) == totals["total_findings"]
+    assert sum(c["healthy_traces"] for c in corpus.values()) == totals["total_healthy"]
+    n_calls = round(sum(c["avg_tool_calls"] * c["traces"] for c in corpus.values()))
+    turns = [c["avg_turns"] for c in corpus.values()]
+    calls_pt = [c["avg_tool_calls"] for c in corpus.values()]
+    scale = 205.0 / max(c["traces"] for c in corpus.values())
     y = 84
     for name, n, findings, healthy, calls, color in rows:
         bw = n * scale
@@ -783,12 +797,14 @@ def build_corpus_composition(a):
         p.append(t(574, y + 17, f"{calls:.1f}", size=9.2, anchor="start"))
         y += 32
 
+    classes = [("caries", 2189), ("deep caries", 578), ("impacted teeth", 604), ("periapical lesions", 789), ("further Tufts classes", 353)]
+    n_unique = sum(n for _, n in classes)
     ty = 246
     p.append(R(22, ty - 8, 596, 52, rx=6, fill="#F7F8FA", stroke="#E3E3E3", sw=1.0))
     p.append(t(34, ty + 8, "totals", size=9.6, weight="bold", anchor="start"))
-    p.append(t(84, ty + 8, "1,847 with-tools + 1,847 no-tools · exact parity · 44,350 executed tool calls", size=9.0, anchor="start", maxw=526))
-    p.append(t(84, ty + 21, "5,144 findings (4,513 unique) · 687 healthy images", size=9.0, anchor="start", maxw=526))
-    p.append(t(84, ty + 34, "with-tools arm: 12-13 turns and 18-30 real tool calls per trace", size=8.6, fill=C_SUB, anchor="start", maxw=526))
+    p.append(t(84, ty + 8, f"{totals['total_traces']:,} with-tools + {totals['total_no_tools']:,} no-tools · exact parity · {n_calls:,} executed tool calls", size=9.0, anchor="start", maxw=526))
+    p.append(t(84, ty + 21, f"{totals['total_findings']:,} findings ({n_unique:,} unique) · {totals['total_healthy']:,} healthy images", size=9.0, anchor="start", maxw=526))
+    p.append(t(84, ty + 34, f"with-tools arm: {round(min(turns))}-{round(max(turns))} turns and {round(min(calls_pt))}-{round(max(calls_pt))} real tool calls per trace", size=8.6, fill=C_SUB, anchor="start", maxw=526))
 
     ly = 304
     p.append(L(24, ly - 3, 46, ly - 3, color=C_BLUE, sw=3))
@@ -800,22 +816,15 @@ def build_corpus_composition(a):
     py0 = 326
     p.append(R(10, py0, 620, 154, fill="#FCFCFD", stroke="#DDDDDD", sw=1.2))
     p.append(t(24, py0 + 22, "unique findings by class", size=10, weight="bold", anchor="start"))
-    classes = [
-        ("caries", 2189),
-        ("deep caries", 578),
-        ("impacted teeth", 604),
-        ("periapical lesions", 789),
-        ("further Tufts classes", 353),
-    ]
     cy = py0 + 44
     for name, n in classes:
-        bw = 300.0 * n / 2189
+        bw = 300.0 * n / max(c for _, c in classes)
         p.append(t(24, cy, name, size=8.8, anchor="start", maxw=104))
         p.append(R(134, cy - 8, bw, 10, rx=2, fill=C_BLUE, stroke="none", sw=0))
         p.append(t(134 + bw + 6, cy, f"{n:,}", size=8.8, weight="bold", anchor="start"))
         cy += 17
-    p.append(t(24, py0 + 134, "4,513 unique findings; 5,144 annotations total (the 202-image Tufts overlap cohort", size=8.6, fill=C_SUB, anchor="start", maxw=596))
-    p.append(t(24, py0 + 146, "is contained in the 280-image all-diseases cohort)", size=8.6, fill=C_SUB, anchor="start", maxw=596))
+    p.append(t(24, py0 + 134, f"{n_unique:,} unique findings; {totals['total_findings']:,} annotations total (the {corpus['tufts_overlap']['traces']}-image Tufts overlap cohort", size=8.6, fill=C_SUB, anchor="start", maxw=596))
+    p.append(t(24, py0 + 146, f"is contained in the {corpus['tufts_all_diseases']['traces']}-image all-diseases cohort)", size=8.6, fill=C_SUB, anchor="start", maxw=596))
     if warn:
         print("  corpus_composition text-fit warnings:\n   " + "\n   ".join(warn))
     return svg(W, py0 + 162, "".join(p))
