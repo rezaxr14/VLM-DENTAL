@@ -42,8 +42,10 @@ training stack), and \cref{fig:evidence,fig:traces} contrast the two trace arms 
   sits 0.92 box-sizes from the expert box (green; IoU 0.07). (b) \sys{} treats the box as a
   hypothesis: the policy sees a crop dominated by an upper molar, judges the box ``about one arch
   too high'', corrects it with one box-relative \texttt{nudge\_crop} (orange; IoU 0.94), and
-  answers from the corrected view. Further episodes are in \cref{fig:gallery}; the full
-  with-tools trace of another image is dissected in \cref{fig:evidence,fig:traces}.}
+  answers from the corrected view. Crops are native-resolution views of the box with 30\% padding, illustrative of what the zoom
+  tool returns rather than the canonical-view geometry of \cref{fig:inputgeom}. Further episodes
+  are in \cref{fig:gallery}; the full with-tools trace of another image is dissected in
+  \cref{fig:evidence,fig:traces}.}
   \label{fig:concept}
 \end{figure}
 
