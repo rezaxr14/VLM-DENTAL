@@ -175,7 +175,7 @@ call: nudges there are frequent (23.1\%) but only sometimes corrective (13.6\%),
 the zoom margin often absorbing a small offset. On corrected large offsets, mean IoU against the
 expert box improves from 0.095 to 0.243 per correction episode --- partial on average, because a
 single nudge rarely lands perfectly --- with individual recoveries as large as IoU 0.066
-$\to$ 0.938 on a DENTEX training image (\cref{fig:example}). The residual gap is not silently
+$\to$ 0.938 on a DENTEX training image (\cref{fig:concept}; further episodes in \cref{fig:gallery}). The residual gap is not silently
 absorbed: uncorrected spatial drifts are exactly what the verifier's third rejection category
 (11 traces) caught and repaired during corpus construction.
 
@@ -190,15 +190,21 @@ nudge \emph{rescales} skew small (scale $<1$): the dominant corrective pattern i
 tighten-after-shift, matching radiologist behavior of zooming into a suspected lesion after
 centering it.
 
-\begin{figure}[tbp]
+\begin{figure}[!tb]
   \centering
-  \includegraphics[width=\linewidth]{fig_perturbation_example}
-  \caption{A large-offset perturbation drawn from the training corpus (DENTEX image
-  \texttt{train\_263}, ground-truth-anchored). The teacher was shown the red box, one tooth
-  away from the expert box (green); it issued \texttt{nudge\_crop} with a box-relative shift and
-  re-inspected, recovering IoU 0.066 $\to$ 0.938 (orange, dotted). This is the demonstrated behavior the
-  student policy is trained to imitate and then reinforce.}
-  \label{fig:example}
+  \includegraphics[width=\linewidth]{fig_gallery}
+  \caption{Six verified with-tools episodes from the released corpus (five pathology, one healthy
+  negative control), from two institutions. Each pathology panel shows the episode in context
+  (expert box green, box returned by \texttt{locate\_tooth} blue, box after the
+  \texttt{nudge\_crop} chain orange) and the crops the policy inspected before and after
+  correcting; the header gives the offset tier, the number of nudges, and the IoU with the
+  full-tooth expert box. (a) A three-nudge inspect--correct--re-inspect loop; (b) one nudge among
+  15 findings and 42 tool calls; (c) a deep-caries tooth with a three-step chain; (d) a Tufts
+  periapical lesion; (e) a small-offset judgment call; (f) a healthy scan cleared without a
+  hallucinated finding. Tiers are recovered geometrically from the returned box (the
+  perturbation metadata is stripped at release), and a policy that also rescales to focus can show a
+  lower IoU than the displacement it recovered.}
+  \label{fig:gallery}
 \end{figure}
 
 \subsection{Ablations and robustness checks}

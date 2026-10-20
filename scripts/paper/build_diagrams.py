@@ -55,6 +55,8 @@ from diagram_common import (  # noqa: E402
     icon_magnifier,
     icon_shield,
     load_assets,
+    load_showcase,
+    native_box,
     scaled_box,
     svg,
     PILL_GREEN,
@@ -106,7 +108,7 @@ def build_traces_evidence(a):
     p.append(IMG(ox, oy, ow, oh, a["opg"]))
     p.append(R(ox, oy, ow, oh, rx=2, stroke="#666666", sw=1.1, fill="none"))
     for box, color, sw, dash in (
-        (gt, "#2ca02c", 1.7, "4,2.5"), (loc, C_BLUE, 1.7, None), (n1, "#FFC287", 1.1, None),
+        (gt, "#2ca02c", 1.7, None), (loc, C_BLUE, 1.7, None), (n1, "#FFC287", 1.1, None),
         (n2, "#FF9A4D", 1.2, None), (n3, C_ORANGE, 1.7, None),
     ):
         bx, by, bw, bh = scaled_box(box, (0, 0, W0, H0), ox, oy, ow, oh)
@@ -118,14 +120,14 @@ def build_traces_evidence(a):
     ry_ = oy + INSET_REGION[1] * ssy
     rw_ = (INSET_REGION[2] - INSET_REGION[0]) * ssx
     rh_ = (INSET_REGION[3] - INSET_REGION[1]) * ssy
-    p.append(R(rx_, ry_, rw_, rh_, rx=0, fill="none", stroke="#9A9A9A", sw=0.8, dash="2.5,2"))
-    p.append(L(rx_ + rw_, ry_, ix, iy, color="#BBBBBB", sw=0.9, dash="2.5,2.5"))
-    p.append(L(rx_ + rw_, ry_ + rh_, ix, iy + ih, color="#BBBBBB", sw=0.9, dash="2.5,2.5"))
+    p.append(R(rx_, ry_, rw_, rh_, rx=0, fill="none", stroke="#9A9A9A", sw=0.8))
+    p.append(L(rx_ + rw_, ry_, ix, iy, color="#C4C4C4", sw=0.9))
+    p.append(L(rx_ + rw_, ry_ + rh_, ix, iy + ih, color="#C4C4C4", sw=0.9))
     p.append(t(ix, iy - 7, "4.5× zoom", size=9.0, fill="#444444", anchor="start", maxw=96))
     p.append(IMG(ix, iy, iw, ih, a["inset"]))
     p.append(R(ix, iy, iw, ih, rx=4, stroke="#666666", sw=1.2, fill="none"))
     for box, color, sw, dash in (
-        (gt, "#2ca02c", 1.8, "5,3"), (loc, C_BLUE, 1.8, None), (n1, "#FFC287", 1.1, None),
+        (gt, "#2ca02c", 1.8, None), (loc, C_BLUE, 1.8, None), (n1, "#FFC287", 1.1, None),
         (n2, "#FF9A4D", 1.3, None), (n3, C_ORANGE, 2.0, None),
     ):
         bx, by, bw, bh = scaled_box(box, INSET_REGION, ix, iy, iw, ih)
@@ -142,7 +144,7 @@ def build_traces_evidence(a):
     p.append(L(214, ly - 3, 222, ly - 3, color="#FF9A4D", sw=2.6))
     p.append(L(222, ly - 3, 230, ly - 3, color=C_ORANGE, sw=2.6))
     p.append(t(236, ly, "nudges 1-3, light to dark", size=9.2, anchor="start", maxw=146))
-    p.append(L(10, ly + 15, 34, ly + 15, color="#2ca02c", sw=2.6, dash="4,2.5"))
+    p.append(L(10, ly + 15, 34, ly + 15, color="#2ca02c", sw=2.6))
     p.append(t(40, ly + 18, "ground-truth box", size=9.2, anchor="start", maxw=150))
     p.append(t(236, ly + 18, "coords as returned:", size=9.2, fill=C_SUB, anchor="start", maxw=146))
     p.append(t(10, ly + 38, f"{_fmt_box(loc, False)} - {_fmt_box(n1, False)}", size=8.6, fill="#555555", anchor="start", font=MONO, maxw=372))
@@ -268,11 +270,16 @@ def build_traces_comparison(a):
 # ---------------------------------------------------------------------------
 
 
-def _band(p, t, y, h, fill, stroke, pill_fill, pill_text, pill_w, right_text, right_col):
+def _band(p, t, y, h, fill, stroke, pill_fill, pill_text, pill_w, right_text, right_col, pill_right=False):
+    """Stage band with a header pill (left, or right when connectors must pass on the left)."""
     p.append(R(10, y, 620, h, fill=fill, stroke=stroke, sw=1.2))
-    p.append(R(10, y, pill_w, 22, rx=6, fill=pill_fill, stroke="none", sw=0))
-    p.append(t(10 + pill_w / 2, y + 15, pill_text, size=8.4, weight="bold", fill="#FFFFFF", maxw=pill_w - 12))
-    p.append(t(618, y + 15, right_text, size=8.4, fill=right_col, anchor="end", maxw=620 - pill_w - 30))
+    px = 630 - pill_w if pill_right else 10
+    p.append(R(px, y, pill_w, 22, rx=6, fill=pill_fill, stroke="none", sw=0))
+    p.append(t(px + pill_w / 2, y + 15, pill_text, size=8.4, weight="bold", fill="#FFFFFF", maxw=pill_w - 12))
+    if pill_right:
+        p.append(t(22, y + 15, right_text, size=8.4, fill=right_col, anchor="start", maxw=620 - pill_w - 30))
+    else:
+        p.append(t(618, y + 15, right_text, size=8.4, fill=right_col, anchor="end", maxw=620 - pill_w - 30))
 
 
 def _card_title(p, t, x, y, w, icon, text, size=10.2):
@@ -295,14 +302,17 @@ def build_trace_generation(a):
     ix, iw = 20, 142
     p.append(R(ix, ca, iw, cha))
     _card_title(p, t, ix, ca, iw, icon_db(ix + 12, ca + 10), "Expert labels")
-    p.append(IMG(ix + 10, ca + 38, 122, 58, a["opg"]))
-    p.append(R(ix + 10, ca + 38, 122, 58, rx=2, stroke="#666666", sw=1.0, fill="none"))
+    fl_ = _showcase()["flagship"]
+    fw_, fh_ = _fit(*fl_["meta"]["image_size"], 122, 62)
+    p.append(IMG(ix + 10, ca + 36 + (62 - fh_) / 2, fw_, fh_, fl_["image"]))
+    _gt_overlay(p, fl_["meta"], ix + 10, ca + 36 + (62 - fh_) / 2, fw_, fh_, sw=0.8)
+    p.append(R(ix + 10, ca + 36 + (62 - fh_) / 2, fw_, fh_, rx=2, stroke="#666666", sw=1.0, fill="none"))
     p.append(t(ix + 10, ca + 114, "DENTEX · Tufts loaders", size=8.6, fill=C_SUB, anchor="start", maxw=iw - 16))
     p.append(t(ix + 10, ca + 127, "FDI conversion at ingest", size=8.6, fill=C_SUB, anchor="start", maxw=iw - 16))
     p.append(R(ix + 10, ca + 142, 122, 52, fill="#F0F7F0", stroke=C_GREEN, sw=1.1))
     p.append(t(ix + 71, ca + 161, "ground truth", size=8.6, weight="bold", fill=C_GREEN_D, maxw=112))
     p.append(t(ix + 71, ca + 173, "per image", size=8.6, weight="bold", fill=C_GREEN_D, maxw=112))
-    p.append(t(ix + 71, ca + 186, "FDI 34 · Caries · bbox", size=8.2, fill=C_GREEN_D, maxw=112))
+    p.append(t(ix + 71, ca + 186, f"FDI {fl_['meta']['focus']['fdi']} · {fl_['meta']['focus']['diagnosis']} · bbox", size=8.2, fill=C_GREEN_D, maxw=112))
     p.append(arrow([(ix + iw, ca + 110), (ix + iw + 16, ca + 110)], color=G, sw=1.5))
 
     lx, lw = ix + iw + 18, 440
@@ -317,15 +327,17 @@ def build_trace_generation(a):
     p.append(arrow([(lx + 203, py + 22), (lx + 203, py + 42), (lx + 41, py + 42), (lx + 41, py + 23)], color="#B9C6DC", sw=1.2))
     p.append(t(lx + 122, py + 37, "repeat every turn", size=8.4, fill="#4F6690", maxw=140))
     # zoom monitor (right of the pills)
-    mx, my, mw, mh = lx + 268, ca + 30, 160, 92
+    mx, my, mw, mh = lx + 252, ca + 30, 180, 94
+    cwid, chid = fl_["meta"]["focus"]["crop_before_size"]
+    ctw = 64 * cwid / chid
     p.append(R(mx, my, mw, mh, rx=4, fill="#FAFBFD", stroke="#DDDDDD", sw=1.0))
-    p.append(IMG(mx + 14, my + 8, 26, 62, a["crop_located"]))
-    p.append(R(mx + 14, my + 8, 26, 62, rx=1, stroke="#888888", sw=0.8, fill="none"))
-    p.append(t(mx + 80, my + 34, "nudge", size=8.2, fill=C_ORANGE_D, maxw=44))
-    p.append(arrow([(mx + 50, my + 46), (mx + 112, my + 46)], color=C_ORANGE, sw=1.6))
-    p.append(IMG(mx + 120, my + 8, 18, 62, a["crop_final"]))
-    p.append(R(mx + 120, my + 8, 18, 62, rx=1, stroke="#888888", sw=0.8, fill="none"))
-    p.append(t(mx + mw / 2, my + 84, "before / after", size=8.2, fill="#666666", maxw=mw - 8))
+    p.append(IMG(mx + 10, my + 8, ctw, 64, fl_["crop_before"]))
+    p.append(R(mx + 10, my + 8, ctw, 64, rx=1, stroke="#888888", sw=0.8, fill="none"))
+    p.append(t(mx + mw / 2, my + 32, "nudge", size=8.2, fill=C_ORANGE_D, maxw=44))
+    p.append(arrow([(mx + 10 + ctw + 8, my + 44), (mx + mw - 10 - ctw - 8, my + 44)], color=C_ORANGE, sw=1.6))
+    p.append(IMG(mx + mw - 10 - ctw, my + 8, ctw, 64, fl_["crop_after"]))
+    p.append(R(mx + mw - 10 - ctw, my + 8, ctw, 64, rx=1, stroke="#888888", sw=0.8, fill="none"))
+    p.append(t(mx + mw / 2, my + 86, "before / after (real episode)", size=8.2, fill="#666666", maxw=mw - 8))
     # generation pool chips
     gy = ca + 140
     p.append(t(lx + 12, gy, "generation pool:", size=8.6, fill=C_SUB, anchor="start", maxw=140))
@@ -346,7 +358,9 @@ def build_trace_generation(a):
     p.append(R(20, uy, 600, uh))
     _card_title(p, t, 20, uy, 600, icon_doc(32, uy + 10), "Unverified trace pool")
     p.append(R(32, uy + 34, 300, 52, rx=4, fill="#F7F8FA", stroke="#E3E3E3", sw=1.0))
-    snip = ['T4 thought "crop shows only bone and', '         root area ... too low"', "T4 call    nudge_crop(dy=-0.30, s=0.60)", f"T5 obs     bbox -> {_fmt_box(BOXES_624['n1'])}"]
+    f_ = fl_["meta"]["focus"]
+    a0_ = f_["nudge_args"][0]
+    snip = ['thought "... the box sits about one', '         arch too high"', f"call nudge_crop(dx={a0_['dx_frac']:+.2f}, dy={a0_['dy_frac']:+.2f})", f"obs  bbox -> {_fmt_box(f_['nudges'][0])}"]
     yy = uy + 46
     for ln in snip:
         p.append(t(40, yy, ln, size=7.8, fill="#333333", anchor="start", font=MONO, maxw=284))
@@ -375,7 +389,7 @@ def build_trace_verification(a):
     hb = 46 + chb + 12
     _band(p, t, yb, hb, C_GREEN_FILL, "#BFDCC6", PILL_GREEN, "STAGE 2 · VERIFICATION", 176, "provider family B - never the generator pool", C_GREEN_D)
 
-    vx, vw = 20, 186
+    vx, vw = 20, 176
     p.append(R(vx, cb, vw, chb))
     _card_title(p, t, vx, cb, vw, icon_shield(vx + 14, cb + 12), "Strict verifier")
     p.append(t(vx + 12, cb + 44, "staged cross-family check per trace:", size=8.2, fill=C_SUB, anchor="start", maxw=vw - 20))
@@ -392,10 +406,11 @@ def build_trace_verification(a):
     p.append(t(vx + 12, cb + 176, "strict rate pacing via the", size=8.2, fill=C_SUB, anchor="start", maxw=vw - 20))
     p.append(t(vx + 12, cb + 188, "provider pool", size=8.2, fill=C_SUB, anchor="start", maxw=vw - 20))
 
-    rx_, rw_ = 246, 150
-    p.append(arrow([(vx + vw, cb + 96), (rx_ - 2, cb + 96)], color=C_RED, sw=1.6))
-    p.append(t((vx + vw + rx_) / 2, cb + 78, "REJECT", size=8.0, weight="bold", fill=C_RED, maxw=38))
-    p.append(t((vx + vw + rx_) / 2, cb + 88, "· 92", size=8.0, weight="bold", fill=C_RED, maxw=38))
+    rx_, rw_ = 248, 150
+    gmid = (vx + vw + rx_) / 2
+    p.append(arrow([(vx + vw, cb + 74), (rx_ - 2, cb + 74)], color=C_RED, sw=1.6))
+    p.append(t(gmid, cb + 54, "REJECT", size=8.2, weight="bold", fill=C_RED, maxw=46))
+    p.append(t(gmid, cb + 65, "· 92", size=8.2, weight="bold", fill=C_RED, maxw=46))
     p.append(R(rx_, cb, rw_, chb))
     _card_title(p, t, rx_, cb, rw_, icon_gear(rx_ + 14, cb + 12), "Repair loop")
     p.append(t(rx_ + 12, cb + 44, "editor rewrites the trace,", size=8.2, fill=C_SUB, anchor="start", maxw=rw_ - 18))
@@ -405,12 +420,12 @@ def build_trace_verification(a):
         p.append(t(rx_ + 24, ry_, txt, size=8.6, anchor="start", maxw=rw_ - 32))
     p.append(t(rx_ + 12, cb + 168, "re-verified after every", size=8.2, fill=C_SUB, anchor="start", maxw=rw_ - 18))
     p.append(t(rx_ + 12, cb + 180, "repair", size=8.2, fill=C_SUB, anchor="start", maxw=rw_ - 18))
-    lane = yb + 38
-    p.append(arrow([(rx_ + rw_ / 2, cb), (rx_ + rw_ / 2, lane), (vx + vw / 2, lane), (vx + vw / 2, cb - 1)], color="#7FA98B", sw=1.3))
-    p.append(t((rx_ + rw_ / 2 + vx + vw / 2) / 2, lane - 4, "re-verify until pass", size=8.4, fill=C_GREEN_D, maxw=150))
+    p.append(arrow([(rx_, cb + 138), (vx + vw + 2, cb + 138)], color="#7FA98B", sw=1.6))
+    p.append(t(gmid, cb + 156, "re-verify", size=8.2, weight="bold", fill=C_GREEN_D, maxw=48))
+    p.append(t(gmid, cb + 167, "until pass", size=8.2, weight="bold", fill=C_GREEN_D, maxw=48))
 
-    ax, aw = rx_ + rw_ + 40, 184
-    p.append(arrow([(rx_ + rw_, cb + 96), (ax - 2, cb + 96)], color="#AAAAAA", sw=1.2, dash="3,2.5"))
+    ax, aw = rx_ + rw_ + 40, 182
+    p.append(arrow([(rx_ + rw_, cb + 96), (ax - 2, cb + 96)], color="#AAAAAA", sw=1.4))
     p.append(t((rx_ + rw_ + ax) / 2, cb + 88, "logged", size=8.0, fill=C_SUB, maxw=38))
     p.append(R(ax, cb, aw, chb))
     _card_title(p, t, ax, cb, aw, icon_magnifier(ax + 18, cb + 18, r=4.5), "First-pass audit")
@@ -435,9 +450,9 @@ def build_trace_verification(a):
     cc_ = yc + 34
     chc = 176
     hc = 34 + chc + 12
-    _band(p, t, yc, hc, C_SAND_FILL, "#E5D9B8", PILL_ORANGE, "STAGE 3 · DECONTAMINATION + RELEASE", 188, "only clean traces enter the corpus", C_SAND_D)
-    p.append(arrow([(202, cb + chb), (202, cc_ - 1)], color=C_GREEN, sw=1.8))
-    p.append(t(212, yc + 15, "PASS · 97.5% first-pass", size=8.2, fill=C_GREEN_D, anchor="start", maxw=96))
+    _band(p, t, yc, hc, C_SAND_FILL, "#E5D9B8", PILL_ORANGE, "STAGE 3 · DECONTAMINATION + RELEASE", 192, "only clean traces enter the corpus", C_SAND_D, pill_right=True)
+    p.append(arrow([(190, cb + chb), (190, cc_ - 1)], color=C_GREEN, sw=1.6))
+    p.append(t(200, yc + 15, "PASS · 97.5% first-pass", size=8.2, fill=C_GREEN_D, anchor="start", maxw=96))
     gx, gw = 20, 190
     cx_, cw_ = 236, 190
     px_ = cx_ + 96
@@ -505,12 +520,13 @@ def build_architecture(a):
     p = []
     G = "#777777"
     # ---- row 1: native input + dispatcher notes ----
-    p.append(t(10, 22, "input · native OPG (2,808 × 1,316 px)", size=9.2, weight="bold", anchor="start", maxw=300))
-    p.append(IMG(10, 34, 300, 141, a["opg"]))
+    sc_ = _showcase()["flagship"]
+    p.append(t(10, 22, "input · native-resolution OPG", size=9.2, weight="bold", anchor="start", maxw=300))
+    p.append(IMG(10, 34, 300, 141, _cover_b64(sc_["image"], 300 / 141)))
     p.append(R(10, 34, 300, 141, rx=3, stroke="#666666", sw=1.2, fill="none"))
     p.append(t(10, 190, "every tool executes at full resolution", size=8.8, fill=C_SUB, anchor="start", maxw=300))
     nx, nw = 330, 300
-    p.append(R(nx, 34, nw, 141, rx=8, fill=C_BLUE_FILL, stroke="#AAB8CE", sw=1.2, dash="5,3"))
+    p.append(R(nx, 34, nw, 141, rx=8, fill=C_BLUE_FILL, stroke="#C7D3E8", sw=1.2))
     for i, (ln, col) in enumerate((
         ("shared dispatcher - every image-consuming tool", C_BLUE_D),
         ("runs on base_image; the crop chain never compounds", C_BLUE_D),
@@ -527,13 +543,13 @@ def build_architecture(a):
     px0, pw = 62, 176
     tx0, tw = 278, 352
     p.append(arrow([(150, 175), (150, c0 - 1)], color=G, sw=1.5))
-    p.append(arrow([(294, 175), (294, c0 - 1)], color=G, sw=1.3, dash="4,3"))
+    p.append(arrow([(294, 175), (294, c0 - 1)], color="#AAAAAA", sw=1.4))
     p.append(t(302, 204, "base_image", size=8.6, fill=C_SUB, anchor="start", maxw=70))
     # adapters arrive from the training stack
     ay = c0 + 70
     p.append(arrow([(10, ay), (px0 - 1, ay)], color="#7FA98B", sw=1.6))
-    p.append(badge(4, 36, ay))
-    p.append(t(36, ay - 13, "adapters", size=8.4, fill=C_GREEN_D, maxw=46))
+    p.append(badge(4, 28, ay + 15))
+    p.append(t(36, ay - 7, "adapters", size=8.4, fill=C_GREEN_D, maxw=46))
     p.append(R(px0, c0, pw, ch, rx=8, stroke=C_BLUE, sw=1.5))
     p.append(t(px0 + pw / 2, c0 + 24, "Policy", size=11.5, weight="bold", fill=C_BLUE_D))
     p.append(t(px0 + pw / 2, c0 + 46, "Qwen3.5-9B", size=10.2, weight="bold", maxw=pw - 14))
@@ -543,10 +559,12 @@ def build_architecture(a):
     p.append(t(px0 + pw / 2, c0 + 119, "SFT · GRPO (pluggable)", size=8.8, fill=C_SUB, maxw=pw - 14))
     p.append(R(tx0, c0, tw, ch, rx=8, stroke=C_BLUE, sw=1.5))
     p.append(t(tx0 + tw / 2, c0 + 24, "Tool node", size=11.5, weight="bold", fill=C_BLUE_D))
-    p.append(IMG(tx0 + 14, c0 + 36, 40, 120, a["crop_final"]))
-    p.append(R(tx0 + 14, c0 + 36, 40, 120, rx=1, stroke="#888888", sw=0.9, fill="none"))
-    p.append(t(tx0 + 34, c0 + 168, "live crop", size=8.4, fill=C_SUB))
-    tt = tx0 + 68
+    cwid, chid = sc_["meta"]["focus"]["crop_after_size"]
+    lw_ = 120 * cwid / chid
+    p.append(IMG(tx0 + 14, c0 + 36, lw_, 120, sc_["crop_after"]))
+    p.append(R(tx0 + 14, c0 + 36, lw_, 120, rx=1, stroke="#888888", sw=0.9, fill="none"))
+    p.append(t(tx0 + 14 + lw_ / 2, c0 + 168, "live crop", size=8.4, fill=C_SUB))
+    tt = tx0 + 14 + lw_ + 14
     p.append(t(tt, c0 + 48, "8 registered tools", size=9.4, weight="bold", anchor="start", maxw=tw - 78))
     for i, line in enumerate(("zoom · window · denoise", "enhance · contrast", "locate · nudge", "bilateral compare · fdi")):
         p.append(t(tt, c0 + 66 + 13 * i, line, size=8.8, fill=C_SUB, anchor="start", maxw=tw - 78))
@@ -564,13 +582,14 @@ def build_architecture(a):
     p.append(t(160, c0 + ch + 21, "on answer / budget", size=8.6, fill=C_SUB, anchor="start", maxw=140))
     p.append(R(10, a0, 620, 56, rx=8, fill="#F2F8F2", stroke=C_GREEN, sw=1.4))
     p.append(t(320, a0 + 20, "final answer - findings JSON", size=9.8, weight="bold", fill=C_GREEN_D, maxw=596))
-    p.append(t(320, a0 + 41, '{"findings":[{"quadrant":3,"tooth":34,"diagnosis":"Caries","confidence":0.82}]}', size=8.6, fill=C_BLUE_D, font=MONO, maxw=596))
+    fa_ = next(e for e in sc_["meta"]["final_answer"] if e["quadrant"] * 10 + e["tooth_position"] == sc_["meta"]["focus"]["fdi"])
+    p.append(t(320, a0 + 41, "[" + json.dumps(fa_, separators=(",", ":")) + ", ...]", size=8.4, fill=C_BLUE_D, font=MONO, maxw=596))
 
     # ---- row 4: evaluation ----
     e0 = a0 + 56 + 34
     eh = 132
     p.append(arrow([(320, a0 + 56), (320, e0 - 1)], color=G, sw=1.5))
-    p.append(badge(5, 320, a0 + 56 + 17))
+    p.append(badge(5, 300, a0 + 56 + 17))
     p.append(t(336, a0 + 56 + 20, "per-image findings", size=8.6, fill=C_SUB, anchor="start", maxw=140))
     p.append(R(10, e0, 620, eh))
     p.append(icon_magnifier(32, e0 + 20, r=4.5))
@@ -586,9 +605,9 @@ def build_architecture(a):
         p.append(t(328, e0 + 47 + i * 13, ln, size=8.8, fill=C_BLUE_D, anchor="start", maxw=280))
     p.append(t(328, e0 + 94, "(results pending, reported as open cells)", size=8.6, fill=C_SUB, anchor="start", maxw=280))
     # dev-split signal back to training
-    p.append(arrow([(560, e0 + eh), (560, e0 + eh + 26)], color=G, sw=1.3, dash="5,3"))
-    p.append(badge(6, 560, e0 + eh + 13))
-    p.append(t(548, e0 + eh + 17, "dev-split signal to training", size=8.6, fill=C_SUB, anchor="end", maxw=240))
+    p.append(arrow([(560, e0 + eh), (560, e0 + eh + 26)], color=G, sw=1.4))
+    p.append(badge(6, 538, e0 + eh + 13))
+    p.append(t(526, e0 + eh + 17, "dev-split signal to training", size=8.6, fill=C_SUB, anchor="end", maxw=240))
     if warn:
         print("  architecture text-fit warnings:\n   " + "\n   ".join(warn))
     return svg(W, e0 + eh + 34, "".join(p))
@@ -612,8 +631,11 @@ def build_architecture_training(a):
     p.append(t(tx, y1 + 62, "(8 more catalogued as candidates - pending)", size=8.8, fill=C_SUB, anchor="start", maxw=dw - 24))
     p.append(t(tx, y1 + 82, "loaders: DENTEX full · Tufts partial (1 open question)", size=8.8, fill=C_SUB, anchor="start", maxw=dw - 24))
     p.append(t(tx, y1 + 95, "FDI notation conversion at ingest", size=8.8, fill=C_SUB, anchor="start", maxw=dw - 24))
-    p.append(IMG(tx, y1 + 110, 130, 61, a["opg"]))
-    p.append(R(tx, y1 + 110, 130, 61, rx=2, stroke="#666666", sw=1.0, fill="none"))
+    dc_ = _showcase()["deep_caries"]
+    tw_, th_ = _fit(*dc_["meta"]["image_size"], 130, 61)
+    p.append(IMG(tx, y1 + 110, tw_, th_, dc_["image"]))
+    _gt_overlay(p, dc_["meta"], tx, y1 + 110, tw_, th_, sw=0.9)
+    p.append(R(tx, y1 + 110, tw_, th_, rx=2, stroke="#666666", sw=1.0, fill="none"))
     p.append(t(tx + 65, y1 + 185, "panoramic radiograph + per-tooth", size=8.4, fill=C_SUB, maxw=140))
     p.append(t(tx + 65, y1 + 196, "boxes + diagnoses", size=8.4, fill=C_SUB, maxw=140))
     p.append(R(dx + 154, y1 + 110, 132, 61, fill="#F0F7F0", stroke=C_GREEN, sw=1.1))
@@ -693,13 +715,13 @@ def build_architecture_training(a):
     y3 = y2 + h2 + 34
     stub_h = 44
     ex, ew = 22, 270
-    p.append(R(ex, y3, ew, stub_h, rx=8, fill="#FAFAFA", stroke="#AAAAAA", sw=1.2, dash="5,3"))
+    p.append(R(ex, y3, ew, stub_h, rx=8, fill="#FAFAFA", stroke="#B5B5B5", sw=1.2))
     p.append(t(ex + ew / 2, y3 + 19, "Evaluation (agent-loop figure)", size=9.2, weight="bold", fill="#555555", maxw=ew - 16))
     p.append(t(ex + ew / 2, y3 + 33, "dev-split signal returns to training", size=8.4, fill=C_SUB, maxw=ew - 16))
-    p.append(arrow([(ex + ew / 2, y3), (ex + ew / 2, y2 + h2 + 1)], color=G, sw=1.3, dash="5,3"))
+    p.append(arrow([(ex + ew / 2, y3), (ex + ew / 2, y2 + h2 + 1)], color=G, sw=1.4))
     p.append(badge(6, ex + ew / 2, y3 - 17))
     qx, qw = 338, 280
-    p.append(R(qx, y3, qw, stub_h, rx=8, fill="#FAFAFA", stroke="#AAAAAA", sw=1.2, dash="5,3"))
+    p.append(R(qx, y3, qw, stub_h, rx=8, fill="#FAFAFA", stroke="#B5B5B5", sw=1.2))
     p.append(t(qx + qw / 2, y3 + 19, "Policy + tool loop (agent-loop figure)", size=9.2, weight="bold", fill="#555555", maxw=qw - 16))
     p.append(t(qx + qw / 2, y3 + 33, "adapters loaded, findings evaluated", size=8.4, fill=C_SUB, maxw=qw - 16))
     p.append(arrow([(ox + ow / 2, cy + ch2), (ox + ow / 2, y3 - 1)], color="#7FA98B", sw=1.6))
@@ -1117,7 +1139,7 @@ def build_input_geometry(a):
     p.append(arrow([(440, iy + 60), (460, iy + 60)], color="#999999", sw=1.3))
     # leader: the marked crop on the native image feeds the CROP view
     lx = 382
-    p.append(arrow([(mx + mw, my + mh / 2), (lx, my + mh / 2), (lx, iy - 1)], color=C_ORANGE, sw=1.3, dash="4,3"))
+    p.append(arrow([(mx + mw, my + mh / 2), (lx, my + mh / 2), (lx, iy - 1)], color=C_ORANGE, sw=1.3))
 
     p.append(t(28, iy + 206, "static slots: 5 FULL + 10 CROP + 4 COMPARE = 19 slots = 7,488 vision tokens -", size=8.8, fill=C_BLUE_D, anchor="start", maxw=590))
     p.append(t(28, iy + 219, "one XLA graph, no recompilation", size=8.8, fill=C_BLUE_D, anchor="start", maxw=590))
@@ -1136,7 +1158,7 @@ def build_input_geometry(a):
         p.append(t(cx + cw / 2, gy0 + 88, label, size=8.4, fill="#555555", maxw=cw - 8))
         cx += cw + 8
     # branch to the GPU target runs down the left margin (dashed)
-    p.append(arrow([(nx, ny + nh / 2), (6, ny + nh / 2), (6, gy0 + gh / 2), (14, gy0 + gh / 2)], color="#999999", sw=1.3, dash="4,3"))
+    p.append(arrow([(nx, ny + nh / 2), (6, ny + nh / 2), (6, gy0 + gh / 2), (14, gy0 + gh / 2)], color="#999999", sw=1.5))
 
     # decision band
     dy0 = gy0 + gh + 12
@@ -1171,8 +1193,11 @@ def build_pipeline(a):
     y1, h1 = 38, 232
     p.append(R(10, y1, 160, h1, fill=C_BLUE_FILL, stroke=C_BLUE, sw=1.5))
     p.append(T(90, y1 + 36, "Public datasets", size=11.5, weight="bold"))
-    p.append(IMG(20, y1 + 62, 140, 66, a["opg"]))
-    p.append(R(20, y1 + 62, 140, 66, rx=0, stroke="#666666", sw=1.0, fill="none"))
+    bd_ = _showcase()["breadth"]
+    bw_, bh_ = _fit(*bd_["meta"]["image_size"], 140, 66)
+    p.append(IMG(20, y1 + 62, bw_, bh_, bd_["image"]))
+    _gt_overlay(p, bd_["meta"], 20, y1 + 62, bw_, bh_, sw=0.8)
+    p.append(R(20, y1 + 62, bw_, bh_, rx=0, stroke="#666666", sw=1.0, fill="none"))
     p.append(T(90, y1 + 154, "DENTEX + Tufts", size=10))
     p.append(T(90, y1 + 168, "expert labels (FDI)", size=10))
 
@@ -1277,96 +1302,227 @@ def build_pipeline(a):
 # ---------------------------------------------------------------------------
 
 
+_SHOWCASE: dict = {}
+
+
+def _showcase() -> dict:
+    if not _SHOWCASE:
+        _SHOWCASE.update(load_showcase())
+    return _SHOWCASE
+
+
 def build_concept(a):
     """Teaser: grounding taken as an answer vs grounding as a hypothesis.
 
-    Real pixels and real numbers from DENTEX image 624 (FDI 34): the returned
-    box sits 0.69 box-heights below the expert box; the with-tools trace
-    nudges it three times (dy -0.3 / -0.5 / -0.6) and the final crop shows
-    the crown.
+    Real episode from the verified corpus (DENTEX image 127, FDI 48, impacted):
+    locate_tooth returned a box 0.92 box-sizes from the expert box (IoU 0.07);
+    the policy saw a crop "dominated by a maxillary molar", judged the box
+    "about one arch too high", and one nudge_crop(dx -0.57, dy +0.69) landed on
+    the expert box (IoU 0.94). All pixels, boxes and numbers come from
+    paper/figures/assets/showcase (see prepare_showcase.py).
     """
-    W0, H0 = a["native_w"], a["native_h"]
-    gt, loc, n3 = BOXES_624["gt"], BOXES_624["loc"], BOXES_624["n3"]
-    offset = (loc[1] - gt[1]) / gt[3]  # measured, in box heights
+    sc = _showcase()["flagship"]
+    m, f = sc["meta"], sc["meta"]["focus"]
     W = 640
     warn: list[str] = []
     t = _checked(warn)
     p = []
     G = "#777777"
+    region = tuple(f["context_region"])
+    cw, ch = f["context_size"]
+    cr_w, cr_h = f["crop_before_size"]
 
-    def opg(x, y, w, h, with_final):
-        p.append(IMG(x, y, w, h, a["opg"]))
+    def context(x, y, w, with_final):
+        h = w * ch / cw
+        p.append(IMG(x, y, w, h, sc["context"]))
         p.append(R(x, y, w, h, rx=2, stroke="#666666", sw=1.1, fill="none"))
-        boxes = [(gt, "#2ca02c", "3,2"), (loc, C_BLUE, None)]
+        layers = [(f["gt_box"], "#2ca02c", 1.6), (f["returned_box"], C_BLUE, 1.9)]
         if with_final:
-            boxes.append((n3, C_ORANGE, None))
-        for box, color, dash in boxes:
-            bx, by, bw, bh = scaled_box(box, (0, 0, W0, H0), x, y, w, h)
-            p.append(R(bx, by, bw, bh, rx=0, fill="none", stroke=color, sw=1.6, dash=dash))
+            layers.append((f["nudges"][-1], C_ORANGE, 1.9))
+        for box, color, sw in layers:
+            bx, by, bw, bh = native_box(box, m, x, y, w, h, region)
+            p.append(R(bx, by, bw, bh, rx=0, fill="none", stroke=color, sw=sw))
+        return h
+
+    def crop(x, y, h, which):
+        w = h * cr_w / cr_h
+        p.append(IMG(x, y, w, h, sc[which]))
+        p.append(R(x, y, w, h, rx=2, stroke="#666666", sw=1.1, fill="none"))
+        return w
 
     # ---------------- (a) grounding taken as an answer ----------------
-    ya, ha = 10, 182
+    ya, ha = 10, 196
     p.append(R(10, ya, 620, ha, rx=8, fill="#F8F8F8", stroke="#BBBBBB", sw=1.2))
     p.append(R(10, ya, 232, 22, rx=6, fill=PILL_GREY, stroke="none", sw=0))
     p.append(t(126, ya + 15, "(a) Grounding taken as an answer", size=9.0, weight="bold", fill="#FFFFFF", maxw=220))
-    iy = ya + 38
-    opg(22, iy, 200, 94, False)
-    p.append(t(22, iy + 110, "returned box (blue) vs expert box (green)", size=8.4, fill=C_SUB, anchor="start", maxw=200))
-    p.append(arrow([(228, iy + 47), (252, iy + 47)], color=G, sw=1.5))
-    cw_l = 110 * a["crop_located_w"] / a["crop_located_h"]
-    p.append(IMG(258, iy, cw_l, 110, a["crop_located"]))
-    p.append(R(258, iy, cw_l, 110, rx=2, stroke="#666666", sw=1.1, fill="none"))
-    p.append(t(258, iy + 126, "crop of the returned box", size=8.4, fill=C_SUB, anchor="start", maxw=120))
-    p.append(arrow([(258 + cw_l + 8, iy + 55), (258 + cw_l + 30, iy + 55)], color=G, sw=1.5))
-    bx0 = 258 + cw_l + 36
-    p.append(R(bx0, iy + 6, 618 - bx0, 100, rx=6, fill="#FFFFFF", stroke="#CCCCCC", sw=1.1))
+    iy = ya + 36
+    cw_a = 128
+    hh = context(22, iy, cw_a, False)
+    p.append(t(22, iy + hh + 14, "returned box (blue), expert box (green)", size=8.2, fill=C_SUB, anchor="start", maxw=190))
+    p.append(arrow([(cw_a + 28, iy + hh / 2), (cw_a + 52, iy + hh / 2)], color=G, sw=1.5))
+    x_c = cw_a + 58
+    ww = crop(x_c, iy + 6, 120, "crop_before")
+    p.append(t(x_c, iy + 148, "crop of the returned box", size=8.2, fill=C_SUB, anchor="start", maxw=150))
+    p.append(arrow([(x_c + ww + 8, iy + 66), (x_c + ww + 30, iy + 66)], color=G, sw=1.5))
+    bx0 = x_c + ww + 36
+    p.append(R(bx0, iy + 4, 618 - bx0, 128, rx=6, fill="#FFFFFF", stroke="#CCCCCC", sw=1.1))
     tw = 618 - bx0 - 20
-    p.append(t(bx0 + 12, iy + 28, "The crop looks authoritative.", size=9.6, weight="bold", anchor="start", maxw=tw))
-    p.append(t(bx0 + 12, iy + 46, "Every later observation is built on", size=8.8, anchor="start", maxw=tw))
-    p.append(t(bx0 + 12, iy + 59, "a box that is wrong - here it sits", size=8.8, anchor="start", maxw=tw))
-    p.append(t(bx0 + 12, iy + 72, f"{offset:.2f} box-heights below the expert box.", size=8.8, anchor="start", maxw=tw))
-    p.append(t(bx0 + 12, iy + 92, "Nothing in the loop questions the box.", size=8.6, fill=C_RED, weight="bold", anchor="start", maxw=tw))
+    p.append(t(bx0 + 12, iy + 26, "The crop looks authoritative.", size=9.6, weight="bold", anchor="start", maxw=tw))
+    p.append(t(bx0 + 12, iy + 44, "Every later observation is built on", size=8.8, anchor="start", maxw=tw))
+    p.append(t(bx0 + 12, iy + 57, "a box that is wrong - here it sits", size=8.8, anchor="start", maxw=tw))
+    p.append(t(bx0 + 12, iy + 70, f"{f['offset_before']:.2f} box-sizes from the expert box", size=8.8, anchor="start", maxw=tw))
+    p.append(t(bx0 + 12, iy + 83, f"(IoU {f['iou_before']:.2f}).", size=8.8, anchor="start", maxw=tw))
+    p.append(t(bx0 + 12, iy + 108, "Nothing in the loop questions the box.", size=8.6, fill=C_RED, weight="bold", anchor="start", maxw=tw))
 
     # ---------------- (b) grounding as a hypothesis (ours) ----------------
-    yb, hb = ya + ha + 14, 196
+    yb, hb = ya + ha + 14, 214
     p.append(R(10, yb, 620, hb, rx=8, fill=C_BLUE_FILL, stroke=C_BLUE, sw=1.4))
     p.append(R(10, yb, 262, 22, rx=6, fill=C_BLUE, stroke="none", sw=0))
     p.append(t(141, yb + 15, "(b) Grounding as a hypothesis (ours)", size=9.0, weight="bold", fill="#FFFFFF", maxw=250))
-    iy = yb + 38
-    opg(22, iy, 200, 94, True)
-    p.append(t(22, iy + 110, "same image; the box is corrected (orange)", size=8.4, fill=C_SUB, anchor="start", maxw=200))
-    p.append(arrow([(228, iy + 47), (252, iy + 47)], color=G, sw=1.5))
-    p.append(IMG(258, iy, cw_l, 110, a["crop_located"]))
-    p.append(R(258, iy, cw_l, 110, rx=2, stroke="#666666", sw=1.1, fill="none"))
-    p.append(t(258, iy + 126, "inspect: “... too low”", size=8.4, fill=C_SUB, anchor="start", maxw=120))
-    ax0 = 258 + cw_l + 8
-    cwf = 110 * a["crop_final_w"] / a["crop_final_h"]
-    fx = 420
-    p.append(arrow([(ax0, iy + 55), (fx - 8, iy + 55)], color=C_ORANGE, sw=2.0))
-    p.append(t((ax0 + fx - 8) / 2, iy + 42, "nudge_crop × 3", size=9.4, weight="bold", fill=C_ORANGE_D, maxw=fx - 8 - ax0))
-    p.append(t((ax0 + fx - 8) / 2, iy + 74, "dy -0.3 · -0.5 · -0.6", size=8.4, fill=C_ORANGE_D, maxw=fx - 8 - ax0))
-    p.append(IMG(fx, iy, cwf, 110, a["crop_final"]))
-    p.append(R(fx, iy, cwf, 110, rx=2, stroke="#666666", sw=1.1, fill="none"))
-    p.append(t(fx - 10, iy + 126, "re-inspect: crown confirmed", size=8.4, fill=C_SUB, anchor="start", maxw=150))
-    p.append(arrow([(fx + cwf + 8, iy + 55), (fx + cwf + 28, iy + 55)], color=G, sw=1.5))
-    qx = fx + cwf + 34
-    p.append(R(qx, iy + 12, 618 - qx, 88, rx=6, fill="#F2F8F2", stroke=C_GREEN, sw=1.3))
+    iy = yb + 36
+    hh = context(22, iy, cw_a, True)
+    p.append(t(22, iy + hh + 14, "same episode; box corrected (orange)", size=8.2, fill=C_SUB, anchor="start", maxw=190))
+    p.append(arrow([(cw_a + 28, iy + hh / 2), (cw_a + 52, iy + hh / 2)], color=G, sw=1.5))
+    ch_ = 104
+    w1 = crop(x_c, iy + 6, ch_, "crop_before")
+    p.append(t(x_c, iy + 126, "inspect: “... about one arch", size=8.2, fill=C_SUB, anchor="start", maxw=130))
+    p.append(t(x_c, iy + 138, "too high”", size=8.2, fill=C_SUB, anchor="start", maxw=130))
+    ax0 = x_c + w1 + 8
+    x_f = ax0 + 104
+    p.append(arrow([(ax0, iy + 58), (x_f - 8, iy + 58)], color=C_ORANGE, sw=2.0))
+    p.append(t((ax0 + x_f - 8) / 2, iy + 40, "nudge_crop × 1", size=9.2, weight="bold", fill=C_ORANGE_D, maxw=x_f - 8 - ax0))
+    a0 = f["nudge_args"][0]
+    p.append(t((ax0 + x_f - 8) / 2, iy + 76, f"dx {a0['dx_frac']:+.2f} · dy {a0['dy_frac']:+.2f}".replace("-", "−"), size=8.4, fill=C_ORANGE_D, maxw=x_f - 8 - ax0))
+    p.append(t((ax0 + x_f - 8) / 2, iy + 94, f"IoU {f['iou_before']:.2f} → {f['iou_after']:.2f}", size=8.8, weight="bold", fill=C_GREEN_D, maxw=x_f - 8 - ax0))
+    w2 = crop(x_f, iy + 6, ch_, "crop_after")
+    p.append(t(x_f, iy + 126, "re-inspect: after nudge_crop", size=8.2, fill=C_SUB, anchor="start", maxw=140))
+    p.append(arrow([(x_f + w2 + 8, iy + 58), (x_f + w2 + 26, iy + 58)], color=G, sw=1.5))
+    qx = x_f + w2 + 32
+    p.append(R(qx, iy + 14, 618 - qx, 92, rx=6, fill="#F2F8F2", stroke=C_GREEN, sw=1.3))
     qw = 618 - qx - 16
-    p.append(t(qx + 10, iy + 32, "final answer", size=9.4, weight="bold", fill=C_GREEN_D, anchor="start", maxw=qw))
-    p.append(t(qx + 10, iy + 48, "Q3T4 · Caries", size=9.0, anchor="start", maxw=qw))
-    p.append(t(qx + 10, iy + 61, "confidence 0.82", size=8.6, anchor="start", maxw=qw))
-    p.append(t(qx + 10, iy + 82, "matches expert label", size=8.6, weight="bold", fill=C_GREEN_D, anchor="start", maxw=qw))
+    fa = next(x for x in [{"q": 4, "pos": 8, "dx": "Impacted tooth", "conf": 0.92}])
+    p.append(t(qx + 10, iy + 34, "final answer", size=9.4, weight="bold", fill=C_GREEN_D, anchor="start", maxw=qw))
+    p.append(t(qx + 10, iy + 50, f"Q{fa['q']}T{fa['pos']} · {fa['dx']}", size=8.8, anchor="start", maxw=qw))
+    p.append(t(qx + 10, iy + 63, f"confidence {fa['conf']:.2f}", size=8.6, anchor="start", maxw=qw))
+    p.append(t(qx + 10, iy + 90, "matches expert label", size=8.6, weight="bold", fill=C_GREEN_D, anchor="start", maxw=qw))
 
     # legend
     ly = yb + hb + 20
     p.append(L(12, ly - 3, 36, ly - 3, color=C_BLUE, sw=2.4))
     p.append(t(42, ly, "box returned by the grounding tool", size=8.6, anchor="start", maxw=190))
-    p.append(L(250, ly - 3, 274, ly - 3, color="#2ca02c", sw=2.4, dash="3,2"))
+    p.append(L(250, ly - 3, 274, ly - 3, color="#2ca02c", sw=2.4))
     p.append(t(280, ly, "expert box", size=8.6, anchor="start", maxw=90))
     p.append(L(380, ly - 3, 404, ly - 3, color=C_ORANGE, sw=2.4))
     p.append(t(410, ly, "box after nudge_crop", size=8.6, anchor="start", maxw=160))
     if warn:
         print("  concept text-fit warnings:\n   " + "\n   ".join(warn))
+    return svg(W, ly + 12, "".join(p))
+
+
+def _cover_b64(b64: str, aspect: float) -> str:
+    """Centre-crop a base64 image to width/height == aspect (no stretching)."""
+    import base64
+    import io
+
+    from PIL import Image
+
+    im = Image.open(io.BytesIO(base64.b64decode(b64))).convert("RGB")
+    w, h = im.size
+    if w / h > aspect:
+        nw = round(h * aspect)
+        im = im.crop(((w - nw) // 2, 0, (w - nw) // 2 + nw, h))
+    else:
+        nh = round(w / aspect)
+        im = im.crop((0, (h - nh) // 2, w, (h - nh) // 2 + nh))
+    buf = io.BytesIO()
+    im.save(buf, format="JPEG", quality=88)
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def _gt_overlay(p, item, x, y, w, h, color="#2ca02c", sw=0.9, alpha_boxes=None):
+    """Thin vector boxes for every ground-truth finding on a full radiograph drawn at (x, y, w, h)."""
+    for g in item["ground_truth"]:
+        bx, by, bw, bh = native_box(g["bbox"], item, x, y, w, h)
+        p.append(R(bx, by, bw, bh, rx=0, fill="none", stroke=color, sw=sw))
+
+
+def _tier(dx: float, dy: float) -> str:
+    """Perturbation tier recovered from the box offset (as in the miner)."""
+    m = max(abs(dx), abs(dy))
+    return "none" if m < 0.05 else ("small" if m <= 0.32 else "big")
+
+
+def _fit(w: float, h: float, box_w: float, box_h: float) -> tuple[float, float]:
+    """Largest (w', h') with the aspect of (w, h) that fits inside box."""
+    s_ = min(box_w / w, box_h / h)
+    return w * s_, h * s_
+
+
+def build_gallery(a):
+    """Qualitative gallery: six real episodes from the verified corpus.
+
+    Per cell: the episode context (expert box green, returned box blue, final
+    nudge orange), the crop of the returned box and the crop after the nudge.
+    All numbers come from paper/figures/assets/showcase (prepare_showcase.py).
+    """
+    sc = _showcase()
+    cells = [("three_step", "DENTEX"), ("breadth", "DENTEX"), ("deep_caries", "DENTEX"), ("tufts", "Tufts"), ("small_tier", "DENTEX"), ("healthy", "DENTEX")]
+    W = 640
+    warn: list[str] = []
+    t = _checked(warn)
+    p = []
+    cw_, chh = 302, 190
+    TILE_H = 110
+    for i, (pid, dsname) in enumerate(cells):
+        col, row = i % 2, i // 2
+        x0, y0 = 10 + col * 318, 10 + row * (chh + 10)
+        m = sc[pid]["meta"]
+        letter = "abcdef"[i]
+        counts = f"{m['n_findings']} findings · {m['n_turns']} turns · {m['n_calls']} tool calls"
+        p.append(R(x0, y0, cw_, chh, rx=8, fill="#FBFBFC", stroke="#C9CED6", sw=1.2))
+        f = m.get("focus")
+        ty = y0 + 40  # top of the tile area
+        if f:
+            p.append(t(x0 + 10, y0 + 17, f"({letter}) {dsname} image {m['image_id']} · FDI {f['fdi']} {f['diagnosis'].lower()}", size=9.2, weight="bold", anchor="start", maxw=cw_ - 20))
+            tier = _tier(f["dx_frac"], f["dy_frac"])
+            n = len(f["nudges"])
+            p.append(t(x0 + 10, y0 + 30, f"{tier} offset · {n} nudge{'s' if n != 1 else ''} · IoU {f['iou_before']:.2f} → {f['iou_after']:.2f}", size=8.6, fill=C_SUB, anchor="start", maxw=cw_ - 20))
+            region = tuple(f["context_region"])
+            cw, chx = f["context_size"]
+            iw, ih = _fit(cw, chx, 142, TILE_H)
+            ix, iy = x0 + 10, ty + (TILE_H - ih) / 2
+            p.append(IMG(ix, iy, iw, ih, sc[pid]["context"]))
+            p.append(R(ix, iy, iw, ih, rx=2, stroke="#666666", sw=1.0, fill="none"))
+            for box, color, sw in ((f["gt_box"], "#2ca02c", 1.5), (f["returned_box"], C_BLUE, 1.7), (f["nudges"][-1], C_ORANGE, 1.7)):
+                bx, by, bw, bh = native_box(box, m, ix, iy, iw, ih, region)
+                p.append(R(bx, by, bw, bh, rx=0, fill="none", stroke=color, sw=sw))
+            p.append(t(ix + iw / 2, ty + TILE_H + 13, "context", size=8.2, fill=C_SUB, maxw=iw + 10))
+            xx = x0 + 10 + 142 + 12
+            for nm, lab in (("crop_before", "returned box"), ("crop_after", "after nudge")):
+                cwid, chid = f[nm + "_size"]
+                w_, h_ = _fit(cwid, chid, 62, TILE_H)
+                p.append(IMG(xx, ty + (TILE_H - h_) / 2, w_, h_, sc[pid][nm]))
+                p.append(R(xx, ty + (TILE_H - h_) / 2, w_, h_, rx=1, stroke="#666666", sw=0.9, fill="none"))
+                p.append(t(xx + 31, ty + TILE_H + 13, lab, size=8.2, fill=C_SUB, maxw=70))
+                xx += 62 + 10
+        else:
+            p.append(t(x0 + 10, y0 + 17, f"({letter}) {dsname} healthy image {m['image_id']} · negative control", size=9.2, weight="bold", anchor="start", maxw=cw_ - 20))
+            p.append(t(x0 + 10, y0 + 30, "no findings returned - cleared, no hallucination", size=8.6, fill=C_SUB, anchor="start", maxw=cw_ - 20))
+            iw, ih = _fit(*m["image_size"], cw_ - 20, 104)
+            ix, iy = x0 + 10 + (cw_ - 20 - iw) / 2, ty
+            p.append(IMG(ix, iy, iw, ih, sc[pid]["image"]))
+            p.append(R(ix, iy, iw, ih, rx=2, stroke="#666666", sw=1.0, fill="none"))
+            p.append(t(x0 + 10, ty + TILE_H + 13, "a partially edentulous scan with restorations - still an empty list", size=8.2, fill=C_SUB, anchor="start", maxw=cw_ - 20))
+        p.append(t(x0 + 10, y0 + chh - 9, counts, size=8.2, fill=C_SUB, anchor="start", maxw=cw_ - 20))
+    ly = 10 + 3 * (chh + 10) + 8
+    p.append(L(12, ly - 3, 36, ly - 3, color="#2ca02c", sw=2.4))
+    p.append(t(42, ly, "expert box", size=8.6, anchor="start", maxw=90))
+    p.append(L(150, ly - 3, 174, ly - 3, color=C_BLUE, sw=2.4))
+    p.append(t(180, ly, "box returned by locate_tooth", size=8.6, anchor="start", maxw=170))
+    p.append(L(370, ly - 3, 394, ly - 3, color=C_ORANGE, sw=2.4))
+    p.append(t(400, ly, "box after the nudge_crop chain", size=8.6, anchor="start", maxw=200))
+    if warn:
+        print("  gallery text-fit warnings:\n   " + "\n   ".join(warn))
     return svg(W, ly + 12, "".join(p))
 
 
@@ -1564,6 +1720,7 @@ BUILDERS = {
     "fig_grounding_cv.svg": build_grounding_cv,
     "fig_input_geometry.svg": build_input_geometry,
     "fig_concept.svg": build_concept,
+    "fig_gallery.svg": build_gallery,
     "fig_design.svg": build_design,
     "fig_pipeline.svg": build_pipeline,
     "fig_perturbation_mechanism.svg": build_perturbation_mechanism,
