@@ -146,7 +146,8 @@ reference center (cosine $>0.3$), \emph{away} if against it, \emph{rescaling} ot
   \caption{Correction behavior by perturbation tier, over the ground-truth-anchored subset of
   locate returns (reference box $=$ expert box; pathology cohorts). P(nudge) counts any
   attributed \texttt{nudge\_crop}; P(corrective) counts locates with at least one
-  corrective-direction nudge; IoU after is over corrected locates. The clean tier is a control:
+  corrective-direction nudge; IoU before and after are paired, both over the corrected locates (the
+  same episodes before and after their nudges). The clean tier is a control:
   with a correct box, corrective nudges are rare.}
   \label{tab:nudgetier}
   \input{generated/table_nudge_tier}
@@ -158,11 +159,10 @@ reference center (cosine $>0.3$), \emph{away} if against it, \emph{rescaling} ot
   \caption{(a) Corrective \texttt{nudge\_crop} usage rises monotonically with perturbation
   severity on the ground-truth-anchored subset (bars, with Wilson 95\% intervals; the rates of
   \cref{tab:nudgetier}); diamonds give the same rate over all locate returns, including
-  detector-anchored ones. (b) Mean IoU with the reference box as shown (over all locates with a
-  recovered shown box) and after correction (over corrected locates only), with 95\% intervals
-  of the mean; the two bars average different sets of locates, so their difference is not a
-  paired gain. The ``none'' after-bar reflects the few corrective nudges on clean boxes
-  (1.1\% of that tier), which are mostly reframing rescales rather than corrections.}
+  detector-anchored ones. (b) Paired mean IoU with the reference box before and after correction, over the
+  corrected locates (the same episodes), with 95\% intervals of the mean. The ``none'' bars
+  reflect the few corrective nudges on clean boxes (1.1\% of that tier), which are mostly
+  reframing rescales rather than corrections.}
   \label{fig:nudgetier}
 \end{figure}
 
@@ -172,8 +172,9 @@ clean boxes. The clean-tier control matters: the teacher does not nudge reflexiv
 correct box it proceeds 98.9\% of the time, so the gradient is driven by the \emph{observed}
 displacement, not a scripted habit. The small tier behaves exactly as designed as a judgment
 call: nudges there are frequent (23.1\%) but only sometimes corrective (13.6\%), consistent with
-the zoom margin often absorbing a small offset. On corrected large offsets, mean IoU against the
-expert box improves from 0.095 to 0.243 per correction episode --- partial on average, because a
+the zoom margin often absorbing a small offset (the paired mean IoU of those episodes is unchanged,
+0.45 $\to$ 0.45). On corrected large offsets, mean IoU against the expert box improves from
+0.088 to 0.243 on the same 573 episodes --- partial on average, because a
 single nudge rarely lands perfectly --- with individual recoveries as large as IoU 0.066
 $\to$ 0.938 on a DENTEX training image (\cref{fig:concept}; further episodes in \cref{fig:gallery}). The residual gap is not silently
 absorbed: uncorrected spatial drifts are exactly what the verifier's third rejection category

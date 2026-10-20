@@ -589,8 +589,9 @@ def write_tool_table(out_dir: Path, tool_totals: Counter):
 
 
 def write_nudge_table(out_dir: Path, agg: dict):
-    """Table over the GT-anchored subset (reference box = ground-truth box),
-    which is the reading in which ``IoU`` is literal."""
+    """Table over the GT-anchored subset (reference box = ground-truth box), the reading
+    in which ``IoU`` is literal. IoU before/after are *paired*: both are means over the
+    corrected locates (the same episodes), so Delta IoU is a within-episode gain."""
     lines = [
         "\\begin{tabular}{lrrrrrr}",
         "\\toprule",
@@ -599,14 +600,19 @@ def write_nudge_table(out_dir: Path, agg: dict):
     ]
     for tier in TIER_ORDER:
         a = agg["gt_anchored"][tier]
-        after = f"{a['iou_after_mean']:.2f} $\\pm$ {a['iou_after_sd']:.2f}" if a["iou_after_mean"] is not None else "--"
-        delta = f"{a['delta_mean']:+.2f}" if a["delta_mean"] is not None else "--"
+        before = a.get("iou_before_corrected_mean")
+        if a["iou_after_mean"] is not None and before is not None:
+            after_s = f"{a['iou_after_mean']:.2f} $\\pm$ {a['iou_after_sd']:.2f}"
+            before_s = f"{before:.2f}"
+            delta = f"{a['iou_after_mean'] - before:+.2f}"
+        else:
+            after_s, before_s, delta = "--", "--", "--"
         lines.append(
             f"{tier} & {a['n']:,} & {100.0 * a['nudge_rate']:.1f}\\% & {100.0 * a['corrected_rate']:.1f}\\% & "
-            f"{a['iou_before_mean']:.2f} & {after} & {delta} \\\\"
+            f"{before_s} & {after_s} & {delta} \\\\"
         )
     lines += ["\\bottomrule", "\\end{tabular}"]
-    (out_dir / "generated" / "table_nudge_tier.tex").write_text("\n".join(lines), encoding="utf-8")
+    (out_dir / "generated" / "table_nudge_tier.tex").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 # --------------------------------------------------------------------------
@@ -663,11 +669,10 @@ def _wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
 def plot_nudge_tier(out_dir: Path, agg: dict):
     """(a) corrective-nudge rate per tier on the ground-truth-anchored subset (the
     numbers of the table and the text; Wilson 95% CIs) with the all-locates rate as a
-    diamond; (b) IoU as shown vs after correction with 95% CIs of the mean.
+    diamond; (b) paired IoU before vs after correction with 95% CIs of the mean.
 
-    Note the two bars of (b) average different sets (all locates with a recovered
-    shown box vs corrected locates only), so their difference is not a paired gain;
-    the legend says so.
+    Both bars of (b) are over the corrected locates (paired: the same episodes before
+    and after their nudges).
     """
     _style()
     tiers = TIER_ORDER
@@ -695,14 +700,14 @@ def plot_nudge_tier(out_dir: Path, agg: dict):
     def ci_mean(sd, n):
         return 1.96 * sd / math.sqrt(n) if n and n > 1 else 0.0
 
-    before = [gt[t]["iou_before_mean"] for t in tiers]
-    e_before = [ci_mean(gt[t]["iou_before_sd"], gt[t]["n_shown_recovered"]) for t in tiers]
+    before = [gt[t]["iou_before_corrected_mean"] or 0.0 for t in tiers]
+    e_before = [ci_mean(gt[t]["iou_before_corrected_sd"], k) for t, k in zip(tiers, k_gt)]
     after = [gt[t]["iou_after_mean"] or 0.0 for t in tiers]
     e_after = [ci_mean(gt[t]["iou_after_sd"], k) for t, k in zip(tiers, k_gt)]
     w = 0.36
     kw = {"ecolor": "#333333", "elinewidth": 1.0, "capsize": 3}
-    ax2.bar([i - w / 2 for i in x], before, w, yerr=e_before, error_kw=kw, color="#999999", label="as shown (all locates)")
-    ax2.bar([i + w / 2 for i in x], after, w, yerr=e_after, error_kw=kw, color="#55A868", label="after correction (corrected locates only)")
+    ax2.bar([i - w / 2 for i in x], before, w, yerr=e_before, error_kw=kw, color="#999999", label="before (corrected episodes)")
+    ax2.bar([i + w / 2 for i in x], after, w, yerr=e_after, error_kw=kw, color="#55A868", label="after correction (same episodes)")
     ax2.set_xticks(x, tiers)
     ax2.set_ylabel("IoU with reference box")
     ax2.set_ylim(0, 1.32)
