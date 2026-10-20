@@ -1,0 +1,1257 @@
+{
+ "flagship": {
+  "folder": "01_flagship_big_offset",
+  "cohort": "dentex",
+  "image_id": 127,
+  "scale": 0.6275,
+  "native_w": 2869,
+  "native_h": 1504,
+  "n_findings": 9,
+  "n_turns": 15,
+  "n_calls": 28,
+  "ground_truth": [
+   {
+    "fdi": 18,
+    "diagnosis": "Impacted",
+    "bbox": [
+     768.0,
+     490.0,
+     190.0,
+     234.0
+    ]
+   },
+   {
+    "fdi": 48,
+    "diagnosis": "Impacted",
+    "bbox": [
+     669.0,
+     793.0,
+     230.0,
+     276.0
+    ]
+   },
+   {
+    "fdi": 28,
+    "diagnosis": "Impacted",
+    "bbox": [
+     1981.0,
+     491.0,
+     194.0,
+     255.0
+    ]
+   },
+   {
+    "fdi": 38,
+    "diagnosis": "Impacted",
+    "bbox": [
+     2092.0,
+     792.0,
+     210.0,
+     285.0
+    ]
+   },
+   {
+    "fdi": 17,
+    "diagnosis": "Deep Caries",
+    "bbox": [
+     853.0,
+     543.0,
+     163.0,
+     299.0
+    ]
+   },
+   {
+    "fdi": 46,
+    "diagnosis": "Caries",
+    "bbox": [
+     946.0,
+     869.0,
+     248.0,
+     318.0
+    ]
+   },
+   {
+    "fdi": 45,
+    "diagnosis": "Caries",
+    "bbox": [
+     1157.0,
+     890.0,
+     135.0,
+     338.0
+    ]
+   },
+   {
+    "fdi": 35,
+    "diagnosis": "Caries",
+    "bbox": [
+     1701.0,
+     880.0,
+     123.0,
+     316.0
+    ]
+   },
+   {
+    "fdi": 36,
+    "diagnosis": "Caries",
+    "bbox": [
+     1788.0,
+     863.0,
+     226.0,
+     313.0
+    ]
+   }
+  ],
+  "final_answer": [
+   {
+    "quadrant": 1,
+    "tooth_position": 8,
+    "diagnosis": "Impacted Tooth",
+    "confidence": 0.93
+   },
+   {
+    "quadrant": 4,
+    "tooth_position": 8,
+    "diagnosis": "Impacted Tooth",
+    "confidence": 0.92
+   },
+   {
+    "quadrant": 2,
+    "tooth_position": 8,
+    "diagnosis": "Impacted Tooth",
+    "confidence": 0.93
+   },
+   {
+    "quadrant": 3,
+    "tooth_position": 8,
+    "diagnosis": "Impacted Tooth",
+    "confidence": 0.94
+   },
+   {
+    "quadrant": 1,
+    "tooth_position": 7,
+    "diagnosis": "Deep Caries",
+    "confidence": 0.9
+   },
+   {
+    "quadrant": 4,
+    "tooth_position": 6,
+    "diagnosis": "Caries",
+    "confidence": 0.88
+   },
+   {
+    "quadrant": 4,
+    "tooth_position": 5,
+    "diagnosis": "Caries",
+    "confidence": 0.84
+   },
+   {
+    "quadrant": 3,
+    "tooth_position": 5,
+    "diagnosis": "Caries",
+    "confidence": 0.85
+   },
+   {
+    "quadrant": 3,
+    "tooth_position": 6,
+    "diagnosis": "Caries",
+    "confidence": 0.89
+   }
+  ],
+  "image_size": [
+   1100,
+   577
+  ],
+  "focus": {
+   "fdi": 48,
+   "diagnosis": "Impacted",
+   "gt_box": [
+    669.0,
+    793.0,
+    230.0,
+    276.0
+   ],
+   "returned_box": [
+    807.3,
+    602.3,
+    230.0,
+    276.0
+   ],
+   "nudges": [
+    [
+     676.2,
+     792.7,
+     230.0,
+     276.0
+    ]
+   ],
+   "nudge_args": [
+    {
+     "dx_frac": -0.57,
+     "dy_frac": 0.69
+    }
+   ],
+   "iou_before": 0.066,
+   "iou_after": 0.937,
+   "offset_before": 0.916,
+   "offset_after": 0.031,
+   "dx_frac": 0.601,
+   "dy_frac": -0.691,
+   "context_region": [
+    503.3,
+    462.3,
+    1203.0,
+    1209.0
+   ],
+   "context_size": [
+    439,
+    469
+   ],
+   "crop_before_size": [
+    300,
+    360
+   ],
+   "crop_after_size": [
+    300,
+    360
+   ]
+  }
+ },
+ "three_step": {
+  "folder": "02_three_step_reinspect",
+  "cohort": "dentex",
+  "image_id": 62,
+  "scale": 0.6245,
+  "native_w": 2882,
+  "native_h": 1316,
+  "n_findings": 2,
+  "n_turns": 12,
+  "n_calls": 19,
+  "ground_truth": [
+   {
+    "fdi": 16,
+    "diagnosis": "Caries",
+    "bbox": [
+     932.0,
+     494.0,
+     184.0,
+     314.0
+    ]
+   },
+   {
+    "fdi": 17,
+    "diagnosis": "Caries",
+    "bbox": [
+     796.0,
+     478.0,
+     174.0,
+     300.0
+    ]
+   }
+  ],
+  "final_answer": [
+   {
+    "quadrant": 1,
+    "tooth_position": 6,
+    "diagnosis": "Caries",
+    "confidence": 0.87
+   },
+   {
+    "quadrant": 1,
+    "tooth_position": 7,
+    "diagnosis": "Caries",
+    "confidence": 0.91
+   }
+  ],
+  "image_size": [
+   1100,
+   502
+  ],
+  "focus": {
+   "fdi": 16,
+   "diagnosis": "Caries",
+   "gt_box": [
+    932.0,
+    494.0,
+    184.0,
+    314.0
+   ],
+   "returned_box": [
+    1042.7,
+    658.9,
+    184.0,
+    314.0
+   ],
+   "nudges": [
+    [
+     858.7,
+     476.8,
+     202.4,
+     345.4
+    ],
+    [
+     980.1,
+     528.6,
+     161.9,
+     276.3
+    ],
+    [
+     940.7,
+     526.9,
+     151.8,
+     259.0
+    ]
+   ],
+   "nudge_args": [
+    {
+     "dx_frac": -0.95,
+     "dy_frac": -0.53,
+     "scale": 1.1
+    },
+    {
+     "dx_frac": 0.5,
+     "dy_frac": 0.05,
+     "scale": 0.8
+    },
+    {
+     "dx_frac": 0.28,
+     "dy_frac": 0.02,
+     "scale": 0.75
+    }
+   ],
+   "iou_before": 0.104,
+   "iou_after": 0.68,
+   "offset_before": 0.799,
+   "offset_after": 0.044,
+   "dx_frac": 0.602,
+   "dy_frac": 0.525,
+   "context_region": [
+    693.1,
+    328.0,
+    1392.3,
+    1121.7
+   ],
+   "context_size": [
+    436,
+    496
+   ],
+   "crop_before_size": [
+    210,
+    360
+   ],
+   "crop_after_size": [
+    211,
+    360
+   ]
+  }
+ },
+ "breadth": {
+  "folder": "03_breadth_15_findings",
+  "cohort": "dentex",
+  "image_id": 58,
+  "scale": 0.9105,
+  "native_w": 1977,
+  "native_h": 976,
+  "n_findings": 15,
+  "n_turns": 20,
+  "n_calls": 42,
+  "ground_truth": [
+   {
+    "fdi": 16,
+    "diagnosis": "Caries",
+    "bbox": [
+     577.3006134969324,
+     310.0,
+     98.15950920245405,
+     198.58895705521468
+    ]
+   },
+   {
+    "fdi": 17,
+    "diagnosis": "Caries",
+    "bbox": [
+     487.11656441717787,
+     299.3865030674846,
+     106.1349693251534,
+     185.88957055214723
+    ]
+   },
+   {
+    "fdi": 24,
+    "diagnosis": "Caries",
+    "bbox": [
+     1119.0184049079753,
+     305.52147239263803,
+     73.61963190184065,
+     215.95092024539878
+    ]
+   },
+   {
+    "fdi": 25,
+    "diagnosis": "Caries",
+    "bbox": [
+     1177.9141104294479,
+     312.2699386503067,
+     68.09815950920233,
+     200.61349693251532
+    ]
+   },
+   {
+    "fdi": 26,
+    "diagnosis": "Caries",
+    "bbox": [
+     1219.6319018404906,
+     303.680981595092,
+     116.56441717791427,
+     196.31901840490792
+    ]
+   },
+   {
+    "fdi": 27,
+    "diagnosis": "Deep Caries",
+    "bbox": [
+     1301.0,
+     304.29447852760734,
+     84.27607361963192,
+     161.9631901840491
+    ]
+   },
+   {
+    "fdi": 28,
+    "diagnosis": "Caries",
+    "bbox": [
+     1368.7116564417177,
+     301.840490797546,
+     103.06748466257682,
+     163.80368098159505
+    ]
+   },
+   {
+    "fdi": 31,
+    "diagnosis": "Caries",
+    "bbox": [
+     985.8895705521471,
+     555.8282208588956,
+     46.01226993865032,
+     181.5950920245399
+    ]
+   },
+   {
+    "fdi": 34,
+    "diagnosis": "Caries",
+    "bbox": [
+     1108.5889570552147,
+     545.6257668711656,
+     99.38650306748468,
+     233.1288343558282
+    ]
+   },
+   {
+    "fdi": 35,
+    "diagnosis": "Caries",
+    "bbox": [
+     1160.122699386503,
+     539.8773006134969,
+     125.15337423312894,
+     214.72392638036808
+    ]
+   },
+   {
+    "fdi": 43,
+    "diagnosis": "Caries",
+    "bbox": [
+     786.5030674846626,
+     555.2147239263803,
+     115.3374233128834,
+     219.01840490797542
+    ]
+   },
+   {
+    "fdi": 45,
+    "diagnosis": "Caries",
+    "bbox": [
+     667.0,
+     540.4907975460122,
+     128.70552147239255,
+     203.50920245398777
+    ]
+   },
+   {
+    "fdi": 46,
+    "diagnosis": "Periapical Lesion",
+    "bbox": [
+     526.3803680981595,
+     522.0858895705521,
+     197.54601226993861,
+     231.90184049079755
+    ]
+   },
+   {
+    "fdi": 47,
+    "diagnosis": "Caries",
+    "bbox": [
+     444.17177914110425,
+     495.0920245398773,
+     191.41104294478532,
+     193.86503067484654
+    ]
+   },
+   {
+    "fdi": 46,
+    "diagnosis": "Deep Caries",
+    "bbox": [
+     538.0,
+     518.0,
+     195.0,
+     191.0
+    ]
+   }
+  ],
+  "final_answer": [
+   {
+    "quadrant": 1,
+    "tooth_position": 6,
+    "diagnosis": "Caries",
+    "confidence": 0.86
+   },
+   {
+    "quadrant": 1,
+    "tooth_position": 7,
+    "diagnosis": "Caries",
+    "confidence": 0.82
+   },
+   {
+    "quadrant": 2,
+    "tooth_position": 4,
+    "diagnosis": "Caries",
+    "confidence": 0.78
+   },
+   {
+    "quadrant": 2,
+    "tooth_position": 5,
+    "diagnosis": "Caries",
+    "confidence": 0.8
+   },
+   {
+    "quadrant": 2,
+    "tooth_position": 6,
+    "diagnosis": "Caries",
+    "confidence": 0.85
+   },
+   {
+    "quadrant": 2,
+    "tooth_position": 7,
+    "diagnosis": "Deep Caries",
+    "confidence": 0.9
+   },
+   {
+    "quadrant": 2,
+    "tooth_position": 8,
+    "diagnosis": "Caries",
+    "confidence": 0.8
+   },
+   {
+    "quadrant": 3,
+    "tooth_position": 1,
+    "diagnosis": "Caries",
+    "confidence": 0.75
+   },
+   {
+    "quadrant": 3,
+    "tooth_position": 4,
+    "diagnosis": "Caries",
+    "confidence": 0.79
+   },
+   {
+    "quadrant": 3,
+    "tooth_position": 5,
+    "diagnosis": "Caries",
+    "confidence": 0.81
+   },
+   {
+    "quadrant": 4,
+    "tooth_position": 3,
+    "diagnosis": "Caries",
+    "confidence": 0.77
+   },
+   {
+    "quadrant": 4,
+    "tooth_position": 5,
+    "diagnosis": "Caries",
+    "confidence": 0.8
+   },
+   {
+    "quadrant": 4,
+    "tooth_position": 6,
+    "diagnosis": "Periapical Lesion",
+    "confidence": 0.92
+   },
+   {
+    "quadrant": 4,
+    "tooth_position": 7,
+    "diagnosis": "Caries",
+    "confidence": 0.83
+   },
+   {
+    "quadrant": 4,
+    "tooth_position": 6,
+    "diagnosis": "Deep Caries",
+    "confidence": 0.88
+   }
+  ],
+  "image_size": [
+   1100,
+   543
+  ],
+  "focus": {
+   "fdi": 25,
+   "diagnosis": "Caries",
+   "gt_box": [
+    1177.9141104294479,
+    312.2699386503067,
+    68.09815950920233,
+    200.61349693251532
+   ],
+   "returned_box": [
+    1226.9,
+    447.0,
+    68.1,
+    200.6
+   ],
+   "nudges": [
+    [
+     1179.2,
+     336.7,
+     68.1,
+     200.6
+    ]
+   ],
+   "nudge_args": [
+    {
+     "dx_frac": -0.7,
+     "dy_frac": -0.55,
+     "scale": 1.0
+    }
+   ],
+   "iou_before": 0.048,
+   "iou_after": 0.757,
+   "offset_before": 0.984,
+   "offset_after": 0.123,
+   "dx_frac": 0.719,
+   "dy_frac": 0.672,
+   "context_region": [
+    1125.2,
+    211.7,
+    1347.7,
+    748.2
+   ],
+   "context_size": [
+    202,
+    488
+   ],
+   "crop_before_size": [
+    122,
+    360
+   ],
+   "crop_after_size": [
+    122,
+    360
+   ]
+  }
+ },
+ "deep_caries": {
+  "folder": "04_deep_caries_13_findings",
+  "cohort": "dentex",
+  "image_id": 291,
+  "scale": 0.6315,
+  "native_w": 2850,
+  "native_h": 1316,
+  "n_findings": 13,
+  "n_turns": 16,
+  "n_calls": 41,
+  "ground_truth": [
+   {
+    "fdi": 48,
+    "diagnosis": "Impacted",
+    "bbox": [
+     675.0,
+     710.0,
+     156.0,
+     189.0
+    ]
+   },
+   {
+    "fdi": 18,
+    "diagnosis": "Impacted",
+    "bbox": [
+     778.0,
+     414.0,
+     162.0,
+     193.0
+    ]
+   },
+   {
+    "fdi": 28,
+    "diagnosis": "Impacted",
+    "bbox": [
+     1896.0,
+     427.0,
+     194.0,
+     178.0
+    ]
+   },
+   {
+    "fdi": 38,
+    "diagnosis": "Impacted",
+    "bbox": [
+     2043.0,
+     713.0,
+     176.0,
+     192.0
+    ]
+   },
+   {
+    "fdi": 47,
+    "diagnosis": "Caries",
+    "bbox": [
+     779.0,
+     722.0,
+     211.0,
+     267.0
+    ]
+   },
+   {
+    "fdi": 46,
+    "diagnosis": "Caries",
+    "bbox": [
+     869.0,
+     781.0,
+     233.0,
+     255.0
+    ]
+   },
+   {
+    "fdi": 16,
+    "diagnosis": "Deep Caries",
+    "bbox": [
+     926.0,
+     440.0,
+     131.0,
+     315.0
+    ]
+   },
+   {
+    "fdi": 12,
+    "diagnosis": "Caries",
+    "bbox": [
+     1241.0,
+     486.0,
+     94.0,
+     284.0
+    ]
+   },
+   {
+    "fdi": 11,
+    "diagnosis": "Caries",
+    "bbox": [
+     1313.0,
+     461.0,
+     102.0,
+     322.0
+    ]
+   },
+   {
+    "fdi": 21,
+    "diagnosis": "Caries",
+    "bbox": [
+     1406.0,
+     444.0,
+     99.0,
+     329.0
+    ]
+   },
+   {
+    "fdi": 22,
+    "diagnosis": "Caries",
+    "bbox": [
+     1502.0,
+     456.0,
+     81.0,
+     310.0
+    ]
+   },
+   {
+    "fdi": 26,
+    "diagnosis": "Deep Caries",
+    "bbox": [
+     1755.0,
+     447.0,
+     147.0,
+     313.0
+    ]
+   },
+   {
+    "fdi": 36,
+    "diagnosis": "Deep Caries",
+    "bbox": [
+     1724.0,
+     813.0,
+     234.0,
+     159.0
+    ]
+   }
+  ],
+  "final_answer": [
+   {
+    "quadrant": 4,
+    "tooth_position": 8,
+    "diagnosis": "Impacted Tooth",
+    "confidence": 0.95
+   },
+   {
+    "quadrant": 1,
+    "tooth_position": 8,
+    "diagnosis": "Impacted Tooth",
+    "confidence": 0.95
+   },
+   {
+    "quadrant": 2,
+    "tooth_position": 8,
+    "diagnosis": "Impacted Tooth",
+    "confidence": 0.95
+   },
+   {
+    "quadrant": 3,
+    "tooth_position": 8,
+    "diagnosis": "Impacted Tooth",
+    "confidence": 0.95
+   },
+   {
+    "quadrant": 4,
+    "tooth_position": 7,
+    "diagnosis": "Caries",
+    "confidence": 0.88
+   },
+   {
+    "quadrant": 4,
+    "tooth_position": 6,
+    "diagnosis": "Caries",
+    "confidence": 0.9
+   },
+   {
+    "quadrant": 1,
+    "tooth_position": 6,
+    "diagnosis": "Deep Caries",
+    "confidence": 0.9
+   },
+   {
+    "quadrant": 1,
+    "tooth_position": 2,
+    "diagnosis": "Caries",
+    "confidence": 0.85
+   },
+   {
+    "quadrant": 1,
+    "tooth_position": 1,
+    "diagnosis": "Caries",
+    "confidence": 0.85
+   },
+   {
+    "quadrant": 2,
+    "tooth_position": 1,
+    "diagnosis": "Caries",
+    "confidence": 0.85
+   },
+   {
+    "quadrant": 2,
+    "tooth_position": 2,
+    "diagnosis": "Caries",
+    "confidence": 0.85
+   },
+   {
+    "quadrant": 2,
+    "tooth_position": 6,
+    "diagnosis": "Deep Caries",
+    "confidence": 0.92
+   },
+   {
+    "quadrant": 3,
+    "tooth_position": 6,
+    "diagnosis": "Deep Caries",
+    "confidence": 0.9
+   }
+  ],
+  "image_size": [
+   1100,
+   508
+  ],
+  "focus": {
+   "fdi": 36,
+   "diagnosis": "Deep Caries",
+   "gt_box": [
+    1724.0,
+    813.0,
+    234.0,
+    159.0
+   ],
+   "returned_box": [
+    1612.3,
+    722.7,
+    234.0,
+    159.0
+   ],
+   "nudges": [
+    [
+     1565.5,
+     786.3,
+     234.0,
+     159.0
+    ],
+    [
+     1653.2,
+     774.4,
+     269.1,
+     182.8
+    ],
+    [
+     1747.4,
+     801.8,
+     242.2,
+     164.5
+    ]
+   ],
+   "nudge_args": [
+    {
+     "dx_frac": -0.2,
+     "dy_frac": 0.4,
+     "scale": 1.0
+    },
+    {
+     "dx_frac": 0.45,
+     "scale": 1.15
+    },
+    {
+     "dx_frac": 0.3,
+     "dy_frac": 0.1,
+     "scale": 0.9
+    }
+   ],
+   "iou_before": 0.127,
+   "iou_after": 0.721,
+   "offset_before": 0.742,
+   "offset_after": 0.129,
+   "dx_frac": -0.477,
+   "dy_frac": -0.568,
+   "context_region": [
+    1374.7,
+    647.9,
+    2180.4,
+    1046.8
+   ],
+   "context_size": [
+    509,
+    252
+   ],
+   "crop_before_size": [
+    530,
+    360
+   ],
+   "crop_after_size": [
+    531,
+    360
+   ]
+  }
+ },
+ "tufts": {
+  "folder": "05_tufts_periapical",
+  "cohort": "tufts",
+  "image_id": 975,
+  "scale": 1.0,
+  "native_w": 1615,
+  "native_h": 840,
+  "n_findings": 3,
+  "n_turns": 12,
+  "n_calls": 19,
+  "ground_truth": [
+   {
+    "fdi": 37,
+    "diagnosis": "Periapical Lesion",
+    "bbox": [
+     1068.0,
+     490.0,
+     126.0,
+     125.0
+    ]
+   },
+   {
+    "fdi": 36,
+    "diagnosis": "Periapical Lesion",
+    "bbox": [
+     998.0,
+     517.0,
+     148.0,
+     142.0
+    ]
+   },
+   {
+    "fdi": 35,
+    "diagnosis": "Periapical Lesion",
+    "bbox": [
+     957.0,
+     545.0,
+     101.0,
+     122.0
+    ]
+   }
+  ],
+  "final_answer": [
+   {
+    "quadrant": 3,
+    "tooth_position": 7,
+    "diagnosis": "Periapical Lesion",
+    "confidence": 0.88
+   },
+   {
+    "quadrant": 3,
+    "tooth_position": 6,
+    "diagnosis": "Periapical Lesion",
+    "confidence": 0.93
+   },
+   {
+    "quadrant": 3,
+    "tooth_position": 5,
+    "diagnosis": "Periapical Lesion",
+    "confidence": 0.9
+   }
+  ],
+  "image_size": [
+   1100,
+   572
+  ],
+  "focus": {
+   "fdi": 36,
+   "diagnosis": "Periapical Lesion",
+   "gt_box": [
+    998.0,
+    517.0,
+    148.0,
+    142.0
+   ],
+   "returned_box": [
+    1087.8,
+    592.6,
+    148.0,
+    142.0
+   ],
+   "nudges": [
+    [
+     1013.8,
+     521.6,
+     148.0,
+     142.0
+    ]
+   ],
+   "nudge_args": [
+    {
+     "dx_frac": -0.5,
+     "dy_frac": -0.5,
+     "scale": 1.0
+    }
+   ],
+   "iou_before": 0.101,
+   "iou_after": 0.761,
+   "offset_before": 0.807,
+   "offset_after": 0.112,
+   "dx_frac": 0.607,
+   "dy_frac": 0.532,
+   "context_region": [
+    891.0,
+    451.7,
+    1342.8,
+    799.9
+   ],
+   "context_size": [
+    452,
+    348
+   ],
+   "crop_before_size": [
+    376,
+    360
+   ],
+   "crop_after_size": [
+    376,
+    360
+   ]
+  }
+ },
+ "healthy": {
+  "folder": "06_healthy_negative_control",
+  "cohort": "dentex",
+  "image_id": 622,
+  "scale": null,
+  "native_w": null,
+  "native_h": null,
+  "n_findings": 0,
+  "n_turns": 20,
+  "n_calls": 48,
+  "ground_truth": [],
+  "final_answer": [],
+  "image_size": [
+   1100,
+   488
+  ]
+ },
+ "small_tier": {
+  "folder": "08_small_tier_judgment",
+  "cohort": "dentex",
+  "image_id": 84,
+  "scale": 0.6245,
+  "native_w": 2882,
+  "native_h": 1316,
+  "n_findings": 5,
+  "n_turns": 17,
+  "n_calls": 27,
+  "ground_truth": [
+   {
+    "fdi": 28,
+    "diagnosis": "Impacted",
+    "bbox": [
+     1967.0,
+     299.0,
+     243.0,
+     175.0
+    ]
+   },
+   {
+    "fdi": 18,
+    "diagnosis": "Caries",
+    "bbox": [
+     721.0,
+     314.0,
+     173.0,
+     292.0
+    ]
+   },
+   {
+    "fdi": 27,
+    "diagnosis": "Caries",
+    "bbox": [
+     1977.0,
+     359.0,
+     148.0,
+     290.0
+    ]
+   },
+   {
+    "fdi": 11,
+    "diagnosis": "Caries",
+    "bbox": [
+     1399.0,
+     352.0,
+     114.0,
+     336.0
+    ]
+   },
+   {
+    "fdi": 16,
+    "diagnosis": "Caries",
+    "bbox": [
+     981.132075471698,
+     352.8301886792453,
+     134.90566037735857,
+     307.54716981132077
+    ]
+   }
+  ],
+  "final_answer": [
+   {
+    "quadrant": 2,
+    "tooth_position": 8,
+    "diagnosis": "Impacted Tooth",
+    "confidence": 0.95
+   },
+   {
+    "quadrant": 1,
+    "tooth_position": 8,
+    "diagnosis": "Caries",
+    "confidence": 0.85
+   },
+   {
+    "quadrant": 2,
+    "tooth_position": 7,
+    "diagnosis": "Caries",
+    "confidence": 0.88
+   },
+   {
+    "quadrant": 1,
+    "tooth_position": 1,
+    "diagnosis": "Caries",
+    "confidence": 0.82
+   },
+   {
+    "quadrant": 1,
+    "tooth_position": 6,
+    "diagnosis": "Caries",
+    "confidence": 0.87
+   }
+  ],
+  "image_size": [
+   1100,
+   502
+  ],
+  "focus": {
+   "fdi": 16,
+   "diagnosis": "Caries",
+   "gt_box": [
+    981.132075471698,
+    352.8301886792453,
+    134.90566037735857,
+    307.54716981132077
+   ],
+   "returned_box": [
+    1016.2,
+    268.4,
+    134.9,
+    307.5
+   ],
+   "nudges": [
+    [
+     989.2,
+     360.6,
+     134.9,
+     307.5
+    ]
+   ],
+   "nudge_args": [
+    {
+     "dx_frac": -0.2,
+     "dy_frac": 0.3,
+     "scale": 1.0
+    }
+   ],
+   "iou_before": 0.367,
+   "iou_after": 0.846,
+   "offset_before": 0.378,
+   "offset_after": 0.065,
+   "dx_frac": 0.26,
+   "dy_frac": -0.275,
+   "context_region": [
+    904.6,
+    148.5,
+    1227.6,
+    788.0
+   ],
+   "context_size": [
+    202,
+    399
+   ],
+   "crop_before_size": [
+    158,
+    360
+   ],
+   "crop_after_size": [
+    158,
+    360
+   ]
+  }
+ }
+}

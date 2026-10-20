@@ -88,7 +88,8 @@ def L(x1, y1, x2, y2, color=C_MUT, sw=1.0, dash=None):
 
 
 def IMG(x, y, w, h, b64):
-    return f'<image x="{x}" y="{y}" width="{w}" height="{h}" xlink:href="data:image/png;base64,{b64}"/>'
+    mime = "jpeg" if b64.startswith("/9j/") else "png"  # base64 of a JPEG always starts with /9j/
+    return f'<image x="{x}" y="{y}" width="{w}" height="{h}" xlink:href="data:image/{mime};base64,{b64}"/>'
 
 
 def arrow(points, color="#666666", sw=1.5, dash=None):
@@ -381,3 +382,27 @@ def scaled_box(box, region, disp_x, disp_y, disp_w, disp_h):
         box[2] * sx,
         box[3] * sy,
     )
+
+
+SHOWCASE_DIR = ASSET_DIR / "showcase"
+
+
+def load_showcase() -> dict:
+    """Showcase pairs (see prepare_showcase.py): {id: {"meta": ..., "image": b64, ...}}."""
+    meta = json.loads((SHOWCASE_DIR / "showcase.json").read_text(encoding="utf-8"))
+    out = {}
+    for pid, item in meta.items():
+        d = {"meta": item}
+        for nm in ("image", "context", "crop_before", "crop_after"):
+            f = SHOWCASE_DIR / pid / f"{nm}.jpg"
+            if f.exists():
+                d[nm] = b64_of(f)
+        out[pid] = d
+    return out
+
+
+def native_box(box, item, disp_x, disp_y, disp_w, disp_h, region=None):
+    """Native-pixel box -> display coords for an image showing `region` (default: the
+    whole radiograph) at (disp_x, disp_y, disp_w, disp_h)."""
+    reg = region or (0.0, 0.0, float(item["native_w"]), float(item["native_h"]))
+    return scaled_box(box, reg, disp_x, disp_y, disp_w, disp_h)
