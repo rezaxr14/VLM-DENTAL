@@ -46,6 +46,7 @@ from diagram_common import (  # noqa: E402
     SVG_DIR,
     arrow,
     badge,
+    connect,
     b64_of,
     icon_check,
     icon_db,
@@ -96,7 +97,7 @@ def L(x1, y1, x2, y2, **kw):
 
 
 def build_traces_evidence(a):
-    """Evidence trail on the real radiograph: returned boxes, 4.5x inset, final crop."""
+    """Evidence trail on the real radiograph: returned boxes, magnified inset, final crop."""
     W0, H0 = a["native_w"], a["native_h"]
     gt, loc = BOXES_624["gt"], BOXES_624["loc"]
     n1, n2, n3 = BOXES_624["n1"], BOXES_624["n2"], BOXES_624["n3"]
@@ -120,10 +121,13 @@ def build_traces_evidence(a):
     ry_ = oy + INSET_REGION[1] * ssy
     rw_ = (INSET_REGION[2] - INSET_REGION[0]) * ssx
     rh_ = (INSET_REGION[3] - INSET_REGION[1]) * ssy
-    p.append(R(rx_, ry_, rw_, rh_, rx=0, fill="none", stroke="#9A9A9A", sw=0.8))
-    p.append(L(rx_ + rw_, ry_, ix, iy, color="#C4C4C4", sw=0.9))
-    p.append(L(rx_ + rw_, ry_ + rh_, ix, iy + ih, color="#C4C4C4", sw=0.9))
-    p.append(t(ix, iy - 7, "4.5× zoom", size=9.0, fill="#444444", anchor="start", maxw=96))
+    zoom = (iw / (INSET_REGION[2] - INSET_REGION[0])) / ssx  # drawn magnification, not a typed constant
+    p.append(R(rx_, ry_, rw_, rh_, rx=0, fill="none", stroke="#555555", sw=1.0))
+    # one orthogonal connector: out of the bottom edge of the source window, along the gutter
+    # under the radiograph, into the left edge of the inset (no diagonal leaders)
+    gy = oy + oh + 12
+    p.append(connect((rx_, ry_, rw_, rh_), "b", (ix, iy, iw, ih), "l", ob=gy - iy, color="#666666", sw=1.2))
+    p.append(t(ix, iy - 7, f"{zoom:.1f}× zoom", size=9.0, fill="#444444", anchor="start", maxw=96))
     p.append(IMG(ix, iy, iw, ih, a["inset"]))
     p.append(R(ix, iy, iw, ih, rx=4, stroke="#666666", sw=1.2, fill="none"))
     for box, color, sw, dash in (
@@ -132,12 +136,10 @@ def build_traces_evidence(a):
     ):
         bx, by, bw, bh = scaled_box(box, INSET_REGION, ix, iy, iw, ih)
         p.append(R(bx, by, bw, bh, rx=0, fill="none", stroke=color, sw=sw, dash=dash))
-    wx = ix + 0.538 * iw
-    p.append(arrow([(wx, iy + 0.941 * ih), (wx, iy + 0.163 * ih)], color=C_ORANGE, sw=1.5))
     p.append(t(cx, iy - 7, "final crop · turn 10", size=9.0, fill="#444444", anchor="start", maxw=94))
     p.append(IMG(cx, iy, cw, ih, a["crop_final"]))
     p.append(R(cx, iy, cw, ih, rx=4, stroke="#666666", sw=1.2, fill="none"))
-    ly = oy + oh + 22
+    ly = oy + oh + 30
     p.append(L(10, ly - 3, 34, ly - 3, color=C_BLUE, sw=2.6))
     p.append(t(40, ly, "locate_tooth(34) box", size=9.2, anchor="start", maxw=150))
     p.append(L(206, ly - 3, 214, ly - 3, color="#FFC287", sw=2.6))
@@ -146,12 +148,17 @@ def build_traces_evidence(a):
     p.append(t(236, ly, "nudges 1-3, light to dark", size=9.2, anchor="start", maxw=146))
     p.append(L(10, ly + 15, 34, ly + 15, color="#2ca02c", sw=2.6))
     p.append(t(40, ly + 18, "ground-truth box", size=9.2, anchor="start", maxw=150))
-    p.append(t(236, ly + 18, "coords as returned:", size=9.2, fill=C_SUB, anchor="start", maxw=146))
-    p.append(t(10, ly + 38, f"{_fmt_box(loc, False)} - {_fmt_box(n1, False)}", size=8.6, fill="#555555", anchor="start", font=MONO, maxw=372))
-    p.append(t(10, ly + 51, f"- {_fmt_box(n2, False)} - {_fmt_box(n3, False)}", size=8.6, fill="#555555", anchor="start", font=MONO, maxw=372))
+    # the four returned boxes, labelled (a bare list with dashes read as a subtraction)
+    cy = ly + 42
+    p.append(t(10, cy, "boxes as returned by the tools [x, y, w, h], native pixels:", size=8.6, fill=C_SUB, anchor="start", maxw=372))
+    for k, (lab, box) in enumerate((("locate_tooth", loc), ("nudge 1", n1), ("nudge 2", n2), ("nudge 3", n3))):
+        col, row = k % 2, k // 2
+        x0 = 10 + col * 190
+        p.append(t(x0, cy + 14 + row * 13, lab, size=8.6, fill="#444444", anchor="start", maxw=62))
+        p.append(t(x0 + 66, cy + 14 + row * 13, _fmt_box(box, False), size=8.6, fill="#555555", anchor="start", font=MONO, maxw=110))
     if warn:
         print("  traces_evidence text-fit warnings:\n   " + "\n   ".join(warn))
-    return svg(W, max(iy + ih, ly + 51) + 12, "".join(p))
+    return svg(W, max(iy + ih, cy + 27) + 12, "".join(p))
 
 
 def build_traces_comparison(a):
@@ -276,9 +283,9 @@ def _band(p, t, y, h, fill, stroke, pill_fill, pill_text, pill_w, right_text, ri
     px = 630 - pill_w if pill_right else 10
     p.append(R(px, y, pill_w, 22, rx=6, fill=pill_fill, stroke="none", sw=0))
     p.append(t(px + pill_w / 2, y + 15, pill_text, size=8.4, weight="bold", fill="#FFFFFF", maxw=pill_w - 12))
-    if pill_right:
+    if right_text and pill_right:
         p.append(t(22, y + 15, right_text, size=8.4, fill=right_col, anchor="start", maxw=620 - pill_w - 30))
-    else:
+    elif right_text:
         p.append(t(618, y + 15, right_text, size=8.4, fill=right_col, anchor="end", maxw=620 - pill_w - 30))
 
 
@@ -381,12 +388,18 @@ def build_trace_generation(a):
 
 
 def build_trace_verification(a):
-    """Stages 2-3: strict verification + repair loop, dual-gate decontamination, release."""
+    """Stages 2-3: strict verification + repair loop, dual-gate decontamination, release.
+
+    Both stages share one three-column grid so every connector is a straight, centred
+    orthogonal line (PASS arrows drop from a column's centre to the same column below).
+    """
     W = 640
     warn: list[str] = []
     t = _checked(warn)
     p = []
     G = "#999999"
+    COLW, GUT = 165, 52
+    X = [20, 20 + COLW + GUT, 20 + 2 * (COLW + GUT)]  # 20, 237, 454
     # ===================== stage 2 =====================
     yb = 10
     cb = yb + 46
@@ -394,8 +407,9 @@ def build_trace_verification(a):
     hb = 46 + chb + 12
     _band(p, t, yb, hb, C_GREEN_FILL, "#BFDCC6", PILL_GREEN, "STAGE 2 · VERIFICATION", 176, "provider family B - never the generator pool", C_GREEN_D)
 
-    vx, vw = 20, 176
-    p.append(R(vx, cb, vw, chb))
+    vx, vw = X[0], COLW
+    ver = (vx, cb, vw, chb)
+    p.append(R(*ver))
     _card_title(p, t, vx, cb, vw, icon_shield(vx + 14, cb + 12), "Strict verifier")
     p.append(t(vx + 12, cb + 44, "staged cross-family check per trace:", size=8.2, fill=C_SUB, anchor="start", maxw=vw - 20))
     for iy_, l1, l2 in (
@@ -405,100 +419,108 @@ def build_trace_verification(a):
         (cb + 144, "format + FDI notation valid", None),
     ):
         p.append(icon_check(vx + 12, iy_ - 5.5))
-        p.append(t(vx + 26, iy_, l1, size=8.6, anchor="start", maxw=vw - 34))
+        p.append(t(vx + 26, iy_, l1, size=8.4, anchor="start", maxw=vw - 32))
         if l2:
-            p.append(t(vx + 26, iy_ + 12, l2, size=8.6, anchor="start", maxw=vw - 34))
+            p.append(t(vx + 26, iy_ + 12, l2, size=8.4, anchor="start", maxw=vw - 32))
     p.append(t(vx + 12, cb + 176, "strict rate pacing via the", size=8.2, fill=C_SUB, anchor="start", maxw=vw - 20))
     p.append(t(vx + 12, cb + 188, "provider pool", size=8.2, fill=C_SUB, anchor="start", maxw=vw - 20))
 
-    rx_, rw_ = 248, 150
+    rx_, rw_ = X[1], COLW
+    rep = (rx_, cb, rw_, chb)
     gmid = (vx + vw + rx_) / 2
-    p.append(arrow([(vx + vw, cb + 74), (rx_ - 2, cb + 74)], color=C_RED, sw=1.6))
-    p.append(t(gmid, cb + 54, "REJECT", size=8.2, weight="bold", fill=C_RED, maxw=46))
-    p.append(t(gmid, cb + 65, "· 92", size=8.2, weight="bold", fill=C_RED, maxw=46))
-    p.append(R(rx_, cb, rw_, chb))
+    p.append(connect(ver, "r", rep, "l", oa=74, ob=74, color=C_RED, sw=1.6))
+    p.append(t(gmid, cb + 54, "REJECT", size=8.2, weight="bold", fill=C_RED, maxw=GUT - 8))
+    p.append(t(gmid, cb + 65, "· 92", size=8.2, weight="bold", fill=C_RED, maxw=GUT - 8))
+    p.append(R(*rep))
     _card_title(p, t, rx_, cb, rw_, icon_gear(rx_ + 14, cb + 12), "Repair loop")
     p.append(t(rx_ + 12, cb + 44, "editor rewrites the trace,", size=8.2, fill=C_SUB, anchor="start", maxw=rw_ - 18))
     p.append(t(rx_ + 12, cb + 56, "keeping the valid CoT prefix:", size=8.2, fill=C_SUB, anchor="start", maxw=rw_ - 18))
     for ry_, txt in ((cb + 82, "fix tool-arg / FDI slips"), (cb + 102, "drop phantom claims"), (cb + 122, "excise directive leakage")):
         p.append(R(rx_ + 12, ry_ - 5, 5, 5, rx=1, fill=C_ORANGE, stroke="none", sw=0))
-        p.append(t(rx_ + 24, ry_, txt, size=8.6, anchor="start", maxw=rw_ - 32))
+        p.append(t(rx_ + 24, ry_, txt, size=8.4, anchor="start", maxw=rw_ - 32))
     p.append(t(rx_ + 12, cb + 168, "re-verified after every", size=8.2, fill=C_SUB, anchor="start", maxw=rw_ - 18))
     p.append(t(rx_ + 12, cb + 180, "repair", size=8.2, fill=C_SUB, anchor="start", maxw=rw_ - 18))
-    p.append(arrow([(rx_, cb + 138), (vx + vw + 2, cb + 138)], color="#7FA98B", sw=1.6))
-    p.append(t(gmid, cb + 156, "re-verify", size=8.2, weight="bold", fill=C_GREEN_D, maxw=48))
-    p.append(t(gmid, cb + 167, "until pass", size=8.2, weight="bold", fill=C_GREEN_D, maxw=48))
+    p.append(connect(rep, "l", ver, "r", oa=138, ob=138, color="#7FA98B", sw=1.6))
+    p.append(t(gmid, cb + 156, "re-verify", size=8.2, weight="bold", fill=C_GREEN_D, maxw=GUT - 8))
+    p.append(t(gmid, cb + 167, "until pass", size=8.2, weight="bold", fill=C_GREEN_D, maxw=GUT - 8))
 
-    ax, aw = rx_ + rw_ + 40, 182
-    p.append(arrow([(rx_ + rw_, cb + 96), (ax - 2, cb + 96)], color="#AAAAAA", sw=1.4))
-    p.append(t((rx_ + rw_ + ax) / 2, cb + 88, "logged", size=8.0, fill=C_SUB, maxw=38))
-    p.append(R(ax, cb, aw, chb))
+    ax, aw = X[2], COLW
+    aud = (ax, cb, aw, chb)
+    gmid2 = (rx_ + rw_ + ax) / 2
+    p.append(connect(rep, "r", aud, "l", oa=96, ob=96, color="#AAAAAA", sw=1.4))
+    p.append(t(gmid2, cb + 88, "logged", size=8.0, fill=C_SUB, maxw=GUT - 8))
+    p.append(R(*aud))
     _card_title(p, t, ax, cb, aw, icon_magnifier(ax + 18, cb + 18, r=4.5), "First-pass audit")
-    p.append(t(ax + 12, cb + 46, "92 rejections on 3,694 traces", size=8.8, weight="bold", anchor="start", maxw=aw - 20))
-    p.append(t(ax + 12, cb + 58, "(97.5% pass)", size=8.8, weight="bold", anchor="start", maxw=aw - 20))
+    p.append(t(ax + 12, cb + 46, "92 rejections on 3,694 traces", size=8.6, weight="bold", anchor="start", maxw=aw - 18))
+    p.append(t(ax + 12, cb + 58, "(97.5% pass)", size=8.6, weight="bold", anchor="start", maxw=aw - 18))
     for by_, label, bw_, bc, cnt, cc in (
         (cb + 82, "hallucinated findings on", 110, C_RED, "66", C_RED),
         (cb + 118, "contradicted the ground truth", 26, "#DD8452", "15", C_RED),
         (cb + 150, "drift left uncorrected", 19, C_ORANGE, "11", C_ORANGE_D),
     ):
-        p.append(t(ax + 12, by_, label, size=8.2, fill="#555555", anchor="start", maxw=aw - 20))
+        p.append(t(ax + 12, by_, label, size=8.2, fill="#555555", anchor="start", maxw=aw - 18))
         if by_ == cb + 82:
-            p.append(t(ax + 12, by_ + 11, "healthy tissue", size=8.2, fill="#555555", anchor="start", maxw=aw - 20))
+            p.append(t(ax + 12, by_ + 11, "healthy tissue", size=8.2, fill="#555555", anchor="start", maxw=aw - 18))
             by_ += 11
         p.append(R(ax + 12, by_ + 6, bw_, 9, rx=2, fill=bc, stroke="none", sw=0))
         p.append(t(ax + 12 + bw_ + 6, by_ + 14, cnt, size=8.4, weight="bold", fill=cc, anchor="start"))
-    p.append(t(ax + 12, cb + 182, "category 3 exists because", size=8.0, fill=C_ORANGE_D, anchor="start", maxw=aw - 20))
-    p.append(t(ax + 12, cb + 192, "perturbation pressure", size=8.0, fill=C_ORANGE_D, anchor="start", maxw=aw - 20))
+    p.append(t(ax + 12, cb + 182, "category 3 exists because", size=8.0, fill=C_ORANGE_D, anchor="start", maxw=aw - 18))
+    p.append(t(ax + 12, cb + 192, "perturbation pressure", size=8.0, fill=C_ORANGE_D, anchor="start", maxw=aw - 18))
 
     # ===================== stage 3 =====================
     yc = yb + hb + 26
     cc_ = yc + 34
     chc = 176
-    hc = 34 + chc + 12
-    _band(p, t, yc, hc, C_SAND_FILL, "#E5D9B8", PILL_ORANGE, "STAGE 3 · DECONTAMINATION + RELEASE", 192, "only clean traces enter the corpus", C_SAND_D, pill_right=True)
-    p.append(arrow([(190, cb + chb), (190, cc_ - 1)], color=C_GREEN, sw=1.6))
-    p.append(t(200, yc + 15, "PASS · 97.5% first-pass", size=8.2, fill=C_GREEN_D, anchor="start", maxw=96))
-    gx, gw = 20, 190
-    cx_, cw_ = 236, 190
-    px_ = cx_ + 96
-    p.append(arrow([(px_, cb + chb), (px_, cc_ - 1)], color="#7FA98B", sw=1.3))
-    p.append(t(px_ + 8, yc + 15, "PASS", size=8.2, fill=C_GREEN_D, anchor="start", maxw=40))
+    hc = 34 + chc + 28
+    _band(p, t, yc, hc, C_SAND_FILL, "#E5D9B8", PILL_ORANGE, "STAGE 3 · DECONTAMINATION + RELEASE", 192, "", C_SAND_D, pill_right=True)
+    p.append(t(320, yc + hc - 11, "only clean traces enter the corpus", size=8.4, fill=C_SAND_D, maxw=300))
 
-    p.append(R(gx, cc_, gw, chc))
-    _card_title(p, t, gx, cc_, gw, icon_shield(gx + 14, cc_ + 12, color=C_SAND_D), "Dual-gate decontamination", size=8.8)
-    for i, ln in enumerate(("Gate 1 - regex sweep for directive", "phrasings leaked into the CoT")):
+    gx, gw = X[0], COLW
+    cx_, cw_ = X[1], COLW
+    rlx, rlw = X[2], COLW
+    dual = (gx, cc_, gw, chc)
+    corp = (cx_, cc_, cw_, chc)
+    rel = (rlx, cc_, rlw, chc)
+    # PASS connectors drop from the centre of a stage-2 card into the same column below
+    p.append(connect(ver, "b", dual, "t", color=C_GREEN, sw=1.6))
+    p.append(t(gx + gw / 2 + 9, yc + 15, "PASS · 97.5% first-pass", size=8.2, fill=C_GREEN_D, anchor="start", maxw=150))
+    p.append(connect(rep, "b", corp, "t", color="#7FA98B", sw=1.6))
+    p.append(t(cx_ + cw_ / 2 + 9, yc + 15, "PASS", size=8.2, fill=C_GREEN_D, anchor="start", maxw=40))
+
+    p.append(R(*dual))
+    _card_title(p, t, gx, cc_, gw, icon_shield(gx + 14, cc_ + 12, color=C_SAND_D), "Dual-gate decontamination", size=8.4)
+    for i, ln in enumerate(("Gate 1 - regex sweep for", "directive phrasings leaked", "into the CoT")):
         p.append(t(gx + 12, cc_ + 46 + i * 12, ln, size=8.4, anchor="start", maxw=gw - 18))
-    for i, ln in enumerate(("Gate 2 - flagged traces re-verified", "by family B before any action")):
-        p.append(t(gx + 12, cc_ + 78 + i * 12, ln, size=8.4, anchor="start", maxw=gw - 18))
-    p.append(R(gx + 12, cc_ + 104, 150, 22, rx=11, fill="#FDEEEE", stroke=C_RED, sw=1.0))
-    p.append(t(gx + 87, cc_ + 119, "105 traces excised", size=8.6, weight="bold", fill="#8A2E33", maxw=140))
-    p.append(t(gx + 12, cc_ + 148, "0 false positives on clinical", size=8.2, fill=C_GREEN_D, anchor="start", maxw=gw - 18))
-    p.append(t(gx + 12, cc_ + 160, '"hint of"', size=8.2, fill=C_GREEN_D, anchor="start", maxw=gw - 18))
-    p.append(arrow([(gx + gw, cc_ + 90), (cx_ - 2, cc_ + 90)], color=G, sw=1.5))
-    p.append(t((gx + gw + cx_) / 2, cc_ + 82, "clean", size=8.0, fill=C_SUB, maxw=24))
+    for i, ln in enumerate(("Gate 2 - flagged traces", "re-verified by family B", "before any action")):
+        p.append(t(gx + 12, cc_ + 88 + i * 12, ln, size=8.4, anchor="start", maxw=gw - 18))
+    p.append(R(gx + 12, cc_ + 122, gw - 24, 20, rx=10, fill="#FDEEEE", stroke=C_RED, sw=1.0))
+    p.append(t(gx + gw / 2, cc_ + 136, "105 traces excised", size=8.6, weight="bold", fill="#8A2E33", maxw=gw - 32))
+    p.append(t(gx + 12, cc_ + 157, "0 false positives on clinical", size=8.2, fill=C_GREEN_D, anchor="start", maxw=gw - 18))
+    p.append(t(gx + 12, cc_ + 168, '"hint of"', size=8.2, fill=C_GREEN_D, anchor="start", maxw=gw - 18))
+    p.append(connect(dual, "r", corp, "l", oa=90, ob=90, color=G, sw=1.5))
+    p.append(t((gx + gw + cx_) / 2, cc_ + 82, "clean", size=8.0, fill=C_SUB, maxw=GUT - 8))
 
-    p.append(R(cx_, cc_, cw_, chc))
+    p.append(R(*corp))
     _card_title(p, t, cx_, cc_, cw_, icon_db(cx_ + 12, cc_ + 10, color=C_GREEN_D), "Released corpus")
-    p.append(R(cx_ + 12, cc_ + 40, 78, 14, rx=2, fill=C_BLUE, stroke="none", sw=0))
-    p.append(t(cx_ + 51, cc_ + 68, "1,847 with-tools", size=8.2, fill=C_BLUE_D, maxw=82))
-    p.append(R(cx_ + 100, cc_ + 40, 78, 14, rx=2, fill=C_GREEN, stroke="none", sw=0))
-    p.append(t(cx_ + 139, cc_ + 68, "1,847 no-tools", size=8.2, fill=C_GREEN_D, maxw=82))
+    p.append(R(cx_ + 12, cc_ + 40, 66, 14, rx=2, fill=C_BLUE, stroke="none", sw=0))
+    p.append(t(cx_ + 45, cc_ + 68, "1,847 with-tools", size=8.0, fill=C_BLUE_D, maxw=70))
+    p.append(R(cx_ + 87, cc_ + 40, 66, 14, rx=2, fill=C_GREEN, stroke="none", sw=0))
+    p.append(t(cx_ + 120, cc_ + 68, "1,847 no-tools", size=8.0, fill=C_GREEN_D, maxw=70))
     p.append(t(cx_ + 12, cc_ + 90, "exact per-cohort 1:1 parity", size=8.2, fill=C_SUB, anchor="start", maxw=cw_ - 18))
     p.append(t(cx_ + 12, cc_ + 102, "(5 cohorts)", size=8.2, fill=C_SUB, anchor="start", maxw=cw_ - 18))
     p.append(t(cx_ + 12, cc_ + 124, "3,694 verified traces", size=8.6, anchor="start", maxw=cw_ - 18))
-    p.append(t(cx_ + 12, cc_ + 137, "5,144 findings · 687 healthy images", size=8.4, anchor="start", maxw=cw_ - 18))
+    p.append(t(cx_ + 12, cc_ + 137, "5,144 findings · 687 healthy images", size=8.0, anchor="start", maxw=cw_ - 18))
     p.append(t(cx_ + 12, cc_ + 150, "44,350 tool calls", size=8.6, anchor="start", maxw=cw_ - 18))
-    p.append(arrow([(cx_ + cw_, cc_ + 90), (cx_ + cw_ + 24, cc_ + 90)], color=G, sw=1.5))
-    p.append(t(cx_ + cw_ + 12, cc_ + 82, "clean", size=8.0, fill=C_SUB, maxw=24))
+    p.append(connect(corp, "r", rel, "l", oa=90, ob=90, color=G, sw=1.5))
+    p.append(t((cx_ + cw_ + rlx) / 2, cc_ + 82, "clean", size=8.0, fill=C_SUB, maxw=GUT - 8))
 
-    rlx, rlw = cx_ + cw_ + 26, 168
-    p.append(R(rlx, cc_, rlw, chc))
+    p.append(R(*rel))
     _card_title(p, t, rlx, cc_, rlw, icon_doc(rlx + 12, cc_ + 10), "Release")
     p.append(t(rlx + 12, cc_ + 46, "public on the Hugging Face Hub", size=8.4, anchor="start", maxw=rlw - 18))
     for i, ln in enumerate(("per-call audit: perturbation", "tier, shown vs true bbox,", "offsets")):
         p.append(t(rlx + 12, cc_ + 64 + i * 12, ln, size=8.4, anchor="start", maxw=rlw - 18))
     p.append(R(rlx + 12, cc_ + 106, rlw - 24, 22, rx=11, fill="#EEF2FA", stroke=C_BLUE, sw=1.0))
-    p.append(t(rlx + rlw / 2, cc_ + 121, "every number regenerable", size=8.4, weight="bold", fill=C_BLUE_D, maxw=rlw - 32))
+    p.append(t(rlx + rlw / 2, cc_ + 121, "every number regenerable", size=8.2, weight="bold", fill=C_BLUE_D, maxw=rlw - 32))
     p.append(t(rlx + 12, cc_ + 148, "scripts/paper rebuilds all", size=8.2, fill=C_SUB, anchor="start", maxw=rlw - 18))
     p.append(t(rlx + 12, cc_ + 160, "figures and tables in this paper", size=8.2, fill=C_SUB, anchor="start", maxw=rlw - 18))
     if warn:
@@ -517,21 +539,28 @@ def build_architecture(a):
     First half of the old combined architecture figure (the offline
     data/trace/training stack is now `build_architecture_training`). 640-unit
     canvas so labels print at ~6.3-7.5 pt; badges 4/5/6 keep the numbered
-    path of the training figure.
+    path of the training figure. Every connector is drawn with connect(): it starts and
+    ends exactly on a box edge, is orthogonal, and keeps its label beside the shaft.
     """
     W = 640
     warn: list[str] = []
     t = _checked(warn)
     p = []
     G = "#777777"
-    # ---- row 1: native input + dispatcher notes ----
+    GR = "#7FA98B"
+
+    def pill(box, text):
+        p.append(R(*box, rx=6, fill="#F5F5F5", stroke=C_MUT, sw=1.0))
+        p.append(t(box[0] + box[2] / 2, box[1] + box[3] / 2 + 3, text, size=8.2, fill=C_SUB, maxw=box[2] - 6))
+
+    # ---- row 1: native input -> shared dispatcher note ----
     sc_ = _showcase()["params_tufts"]
-    p.append(t(10, 22, "input · native-resolution OPG", size=9.2, weight="bold", anchor="start", maxw=300))
-    p.append(IMG(10, 34, 300, 141, _cover_b64(sc_["image"], 300 / 141)))
-    p.append(R(10, 34, 300, 141, rx=3, stroke="#666666", sw=1.2, fill="none"))
-    p.append(t(10, 190, "every tool executes at full resolution", size=8.8, fill=C_SUB, anchor="start", maxw=300))
-    nx, nw = 330, 300
-    p.append(R(nx, 34, nw, 141, rx=8, fill=C_BLUE_FILL, stroke="#C7D3E8", sw=1.2))
+    img = (10, 34, 280, 141)
+    note = (330, 34, 300, 141)
+    p.append(t(10, 22, "input · native-resolution OPG", size=9.2, weight="bold", anchor="start", maxw=280))
+    p.append(IMG(*img, _cover_b64(sc_["image"], img[2] / img[3])))
+    p.append(R(*img, rx=3, stroke="#666666", sw=1.2, fill="none"))
+    p.append(R(*note, rx=8, fill=C_BLUE_FILL, stroke="#C7D3E8", sw=1.2))
     for i, (ln, col) in enumerate((
         ("shared dispatcher - every image-consuming tool", C_BLUE_D),
         ("runs on base_image; the crop chain never compounds", C_BLUE_D),
@@ -541,51 +570,58 @@ def build_architecture(a):
         ("decision pending; tools always run native", C_BLUE_D),
     )):
         if ln:
-            p.append(t(nx + 14, 58 + i * 14, ln, size=8.8, fill=col, anchor="start", maxw=nw - 24))
+            p.append(t(note[0] + 14, 58 + i * 14, ln, size=8.8, fill=col, anchor="start", maxw=note[2] - 24))
+    p.append(connect(img, "r", note, "l", color=G, sw=1.5))
 
     # ---- row 2: policy <-> tool node ----
     c0, ch = 222, 172
-    px0, pw = 62, 176
-    tx0, tw = 278, 352
-    p.append(arrow([(150, 175), (150, c0 - 1)], color=G, sw=1.5))
-    p.append(arrow([(294, 175), (294, c0 - 1)], color="#AAAAAA", sw=1.4))
-    p.append(t(302, 204, "base_image", size=8.6, fill=C_SUB, anchor="start", maxw=70))
-    # adapters arrive from the training stack
+    pol = (100, c0, 176, ch)
+    tool = (328, c0, 302, ch)
+    pcx = pol[0] + pol[2] / 2  # 188: image, answer arrows share the policy's centre line
+    p.append(connect(img, "b", pol, "t", oa=pcx - img[0], color=G, sw=1.5))
+    ncx = note[0] + note[2] / 2  # 480: dispatcher -> tool node
+    p.append(connect(note, "b", tool, "t", ob=ncx - tool[0], color=G, sw=1.5))
+    p.append(t(ncx + 10, (img[1] + img[3] + c0) / 2 + 3, "base_image · full resolution", size=8.6, fill=C_SUB, anchor="start", maxw=140))
+    # adapters arrive from the offline training stack (a small source box, not a free tail)
     ay = c0 + 70
-    p.append(arrow([(10, ay), (px0 - 1, ay)], color="#7FA98B", sw=1.6))
-    p.append(badge(4, 28, ay + 15))
-    p.append(t(36, ay - 7, "adapters", size=8.4, fill=C_GREEN_D, maxw=46))
-    p.append(R(px0, c0, pw, ch, rx=8, stroke=C_BLUE, sw=1.5))
-    p.append(t(px0 + pw / 2, c0 + 24, "Policy", size=11.5, weight="bold", fill=C_BLUE_D))
-    p.append(t(px0 + pw / 2, c0 + 46, "Qwen3.5-9B", size=10.2, weight="bold", maxw=pw - 14))
-    p.append(t(px0 + pw / 2, c0 + 68, "reasoning node", size=8.8, fill=C_SUB, maxw=pw - 14))
-    p.append(t(px0 + pw / 2, c0 + 81, "thought + JSON tool calls", size=8.8, fill=C_SUB, maxw=pw - 14))
-    p.append(t(px0 + pw / 2, c0 + 106, "LoRA adapters:", size=8.8, fill=C_SUB, maxw=pw - 14))
-    p.append(t(px0 + pw / 2, c0 + 119, "SFT · GRPO (pluggable)", size=8.8, fill=C_SUB, maxw=pw - 14))
-    p.append(R(tx0, c0, tw, ch, rx=8, stroke=C_BLUE, sw=1.5))
-    p.append(t(tx0 + tw / 2, c0 + 24, "Tool node", size=11.5, weight="bold", fill=C_BLUE_D))
+    src = (10, ay - 13, 46, 26)
+    pill(src, "training")
+    p.append(connect(src, "r", pol, "l", oa=13, ob=70, color=GR, sw=1.6))
+    p.append(t((src[0] + src[2] + pol[0]) / 2, ay - 7, "adapters", size=8.4, fill=C_GREEN_D, maxw=44))
+    p.append(badge(4, (src[0] + src[2] + pol[0]) / 2, ay + 17))
+    p.append(R(*pol, rx=8, stroke=C_BLUE, sw=1.5))
+    pc = pol[0] + pol[2] / 2
+    p.append(t(pc, c0 + 24, "Policy", size=11.5, weight="bold", fill=C_BLUE_D))
+    p.append(t(pc, c0 + 46, "Qwen3.5-9B", size=10.2, weight="bold", maxw=pol[2] - 14))
+    p.append(t(pc, c0 + 68, "reasoning node", size=8.8, fill=C_SUB, maxw=pol[2] - 14))
+    p.append(t(pc, c0 + 81, "thought + JSON tool calls", size=8.8, fill=C_SUB, maxw=pol[2] - 14))
+    p.append(t(pc, c0 + 106, "LoRA adapters:", size=8.8, fill=C_SUB, maxw=pol[2] - 14))
+    p.append(t(pc, c0 + 119, "SFT · GRPO (pluggable)", size=8.8, fill=C_SUB, maxw=pol[2] - 14))
+    p.append(R(*tool, rx=8, stroke=C_BLUE, sw=1.5))
+    p.append(t(tool[0] + tool[2] / 2, c0 + 24, "Tool node", size=11.5, weight="bold", fill=C_BLUE_D))
     live = sc_["tools"][0]  # the zoom_crop output
     lw_ = 120 * live["size"][0] / live["size"][1]
-    p.append(IMG(tx0 + 14, c0 + 36, lw_, 120, live["b64"]))
-    p.append(R(tx0 + 14, c0 + 36, lw_, 120, rx=1, stroke="#888888", sw=0.9, fill="none"))
-    p.append(t(tx0 + 14 + lw_ / 2, c0 + 168, "live crop", size=8.4, fill=C_SUB))
-    tt = tx0 + 14 + lw_ + 14
-    p.append(t(tt, c0 + 48, "8 registered tools", size=9.4, weight="bold", anchor="start", maxw=tw - 78))
+    p.append(IMG(tool[0] + 14, c0 + 36, lw_, 120, live["b64"]))
+    p.append(R(tool[0] + 14, c0 + 36, lw_, 120, rx=1, stroke="#888888", sw=0.9, fill="none"))
+    p.append(t(tool[0] + 14 + lw_ / 2, c0 + 168, "live crop", size=8.4, fill=C_SUB))
+    tt = tool[0] + 14 + lw_ + 14
+    p.append(t(tt, c0 + 48, "8 registered tools", size=9.4, weight="bold", anchor="start", maxw=tool[2] - 78))
     for i, line in enumerate(("zoom · window · denoise", "enhance · contrast", "locate · nudge", "bilateral compare · fdi")):
-        p.append(t(tt, c0 + 66 + 13 * i, line, size=8.8, fill=C_SUB, anchor="start", maxw=tw - 78))
-    p.append(t(tt, c0 + 130, "continuous parameters:", size=8.8, fill=C_SUB, anchor="start", maxw=tw - 78))
-    p.append(t(tt, c0 + 143, "strength · center · width", size=8.8, fill=C_SUB, anchor="start", maxw=tw - 78))
-    gx0, gx1 = px0 + pw, tx0
-    p.append(arrow([(gx0, c0 + 60), (gx1, c0 + 60)], color=C_BLUE, sw=1.6))
-    p.append(t((gx0 + gx1) / 2, c0 + 52, "call", size=8.6, fill=C_BLUE_D, maxw=36))
-    p.append(arrow([(gx1, c0 + 112), (gx0, c0 + 112)], color="#8DA2C4", sw=1.6))
-    p.append(t((gx0 + gx1) / 2, c0 + 104, "obs", size=8.6, fill="#4F6690", maxw=36))
+        p.append(t(tt, c0 + 66 + 13 * i, line, size=8.8, fill=C_SUB, anchor="start", maxw=tool[2] - 78))
+    p.append(t(tt, c0 + 130, "continuous parameters:", size=8.8, fill=C_SUB, anchor="start", maxw=tool[2] - 78))
+    p.append(t(tt, c0 + 143, "strength · center · width", size=8.8, fill=C_SUB, anchor="start", maxw=tool[2] - 78))
+    gmid = (pol[0] + pol[2] + tool[0]) / 2
+    p.append(connect(pol, "r", tool, "l", oa=60, ob=60, color=C_BLUE, sw=1.6))
+    p.append(t(gmid, c0 + 52, "call", size=8.6, fill=C_BLUE_D, maxw=36))
+    p.append(connect(tool, "l", pol, "r", oa=112, ob=112, color=C_BLUE, sw=1.6))
+    p.append(t(gmid, c0 + 104, "obs", size=8.6, fill=C_BLUE_D, maxw=36))
 
     # ---- row 3: final answer ----
     a0 = c0 + ch + 34
-    p.append(arrow([(150, c0 + ch), (150, a0 - 1)], color=G, sw=1.5))
-    p.append(t(160, c0 + ch + 21, "on answer / budget", size=8.6, fill=C_SUB, anchor="start", maxw=140))
-    p.append(R(10, a0, 620, 56, rx=8, fill="#F2F8F2", stroke=C_GREEN, sw=1.4))
+    ans = (10, a0, 620, 56)
+    p.append(connect(pol, "b", ans, "t", ob=pcx - ans[0], color=G, sw=1.5))
+    p.append(t(pcx + 10, c0 + ch + 21, "on answer / budget", size=8.6, fill=C_SUB, anchor="start", maxw=140))
+    p.append(R(*ans, rx=8, fill="#F2F8F2", stroke=C_GREEN, sw=1.4))
     p.append(t(320, a0 + 20, "final answer - findings JSON", size=9.8, weight="bold", fill=C_GREEN_D, maxw=596))
     fa_ = sc_["meta"]["final_answer"][0]
     p.append(t(320, a0 + 41, "[" + json.dumps(fa_, separators=(",", ":")) + ", ...]", size=8.4, fill=C_BLUE_D, font=MONO, maxw=596))
@@ -593,10 +629,11 @@ def build_architecture(a):
     # ---- row 4: evaluation ----
     e0 = a0 + 56 + 34
     eh = 132
-    p.append(arrow([(320, a0 + 56), (320, e0 - 1)], color=G, sw=1.5))
+    ev = (10, e0, 620, eh)
+    p.append(connect(ans, "b", ev, "t", oa=310, ob=310, color=G, sw=1.5))
     p.append(badge(5, 300, a0 + 56 + 17))
     p.append(t(336, a0 + 56 + 20, "per-image findings", size=8.6, fill=C_SUB, anchor="start", maxw=140))
-    p.append(R(10, e0, 620, eh))
+    p.append(R(*ev))
     p.append(icon_magnifier(32, e0 + 20, r=4.5))
     p.append(t(50, e0 + 24, "Evaluation", size=11.5, weight="bold", anchor="start"))
     p.append(t(24, e0 + 48, "set-matched precision / recall / F1", size=9.2, anchor="start", maxw=270))
@@ -609,13 +646,15 @@ def build_architecture(a):
     for i, ln in enumerate(("- tool removal: with vs without", "- perturbation: shown-box vs true-box", "- nudge budget K sweep")):
         p.append(t(328, e0 + 47 + i * 13, ln, size=8.8, fill=C_BLUE_D, anchor="start", maxw=280))
     p.append(t(328, e0 + 94, "(results pending, reported as open cells)", size=8.6, fill=C_SUB, anchor="start", maxw=280))
-    # dev-split signal back to training
-    p.append(arrow([(560, e0 + eh), (560, e0 + eh + 26)], color=G, sw=1.4))
-    p.append(badge(6, 538, e0 + eh + 13))
-    p.append(t(526, e0 + eh + 17, "dev-split signal to training", size=8.6, fill=C_SUB, anchor="end", maxw=240))
+    # dev-split signal back to the training stack (a sink box, not a dangling tip)
+    sink = (537, e0 + eh + 30, 46, 26)
+    p.append(connect(ev, "b", sink, "t", oa=sink[0] + sink[2] / 2 - ev[0], color=G, sw=1.5))
+    pill(sink, "training")
+    p.append(badge(6, 538 - 6, e0 + eh + 15))
+    p.append(t(526 - 6, e0 + eh + 19, "dev-split signal to training", size=8.6, fill=C_SUB, anchor="end", maxw=240))
     if warn:
         print("  architecture text-fit warnings:\n   " + "\n   ".join(warn))
-    return svg(W, e0 + eh + 34, "".join(p))
+    return svg(W, sink[1] + sink[3] + 10, "".join(p))
 
 
 def build_architecture_training(a):

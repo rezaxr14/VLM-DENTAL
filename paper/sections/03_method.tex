@@ -68,8 +68,9 @@ evaluation layer (\cref{sec:eval}) whose probes feed model selection on a fixed 
   (Qwen3.5-9B with pluggable SFT/GRPO LoRA adapters) calls the registered tools, which always
   execute on the native source image; the final findings JSON is scored by an evaluation layer
   whose probes select on a dev split only, with the test split run once at the end. Badges 4--6
-  continue the numbered path of \cref{fig:training}; radiograph and crop pixels are real assets
-  from the corpus.}
+  continue the numbered path of \cref{fig:training}, whose training stack is the source of the
+  adapters and the sink of the dev-split signal (the grey ``training'' boxes); radiograph and
+  crop pixels are real assets from the corpus.}
   \label{fig:architecture}
 \end{figure}
 
@@ -379,10 +380,10 @@ structured final answer, which matches the expert label.
   \includegraphics[width=\linewidth]{fig_traces_evidence}
   \caption{Evidence trail for one DENTEX image (image 624, a carious FDI tooth 34): the real
   radiograph with the returned grounding box (blue), the three corrective
-  \texttt{nudge\_crop} boxes (orange, light to dark, magnified in the 4.5$\times$ inset; the arrow
-  marks the upward walk from the returned box to the corrected one), and the expert box (green
-  dashed). All coordinates are the values actually returned by the tools, and the narrow
-  right-hand panel shows the crop the teacher finally saw.}
+  \texttt{nudge\_crop} boxes (orange, light to dark) and the expert box (green). The grey window
+  on the radiograph is shown magnified $2.6\times$ in the inset, where the walk of the returned
+  box up to the corrected one is visible. The four boxes listed under the legend are the values the tools
+  actually returned, and the narrow right-hand panel shows the crop the teacher finally saw.}
   \label{fig:evidence}
 \end{figure}
 
