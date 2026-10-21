@@ -57,6 +57,7 @@ arguments the policy chose in those traces.
 |---|---|
 | `generate_paper_assets.py` | Corpus stats, tool usage, nudge-vs-tier mechanism analysis, data figures, SVG→PDF conversion |
 | `build_diagrams.py` | Generates the eight composited diagrams (real radiograph assets embedded as base64 data URIs; canonical views rendered by `dental_agent.utils.canonical`; the real returned box trajectory from trace 624; corpus/dataset/grounding numbers from `assets_summary.json` and `docs/YOLO_CV_RESULTS.md`) and converts them to PDF; `--preview` also writes PNG renders to `scratch/preview` |
+| `audit_diagram_arrows.py` | Connector audit for the builder SVGs: every arrow must start and end on a box edge, stay orthogonal, and not cross text, cards or badges (diagram connectors are drawn with `connect()` in `diagram_common.py`); run after `build_diagrams.py` |
 | `verify_paper.py` | Static draft checks: labels, inputs, escaping, number consistency vs `assets_summary.json` |
 | `preview_figures.py` | PNG previews of every figure for visual verification (writes to `scratch/preview`) |
 | `extract_trace_examples.py` | Pull real with-tools / no-tools trace excerpts (same image) for the comparison figure |

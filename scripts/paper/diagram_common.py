@@ -92,8 +92,12 @@ def IMG(x, y, w, h, b64):
     return f'<image x="{x}" y="{y}" width="{w}" height="{h}" xlink:href="data:image/{mime};base64,{b64}"/>'
 
 
-def arrow(points, color="#666666", sw=1.5, dash=None):
+def arrow(points, color="#666666", sw=1.5, dash=None, free=""):
     """Orthogonal polyline ending in an explicit triangular arrowhead.
+
+    ``free`` ("tail", "tip" or "both") marks an end that is deliberately not on a
+    box (written as an SVG comment that audit_diagram_arrows.py reads); prefer a
+    small source/sink box and connect() instead.
 
     svglib silently drops SVG <marker> elements, so heads drawn with
     marker-end vanish in the PDF the paper actually includes. The head is
@@ -115,10 +119,53 @@ def arrow(points, color="#666666", sw=1.5, dash=None):
         f"{bx - uy * head_hw:.1f},{by + ux * head_hw:.1f} "
         f"{bx + uy * head_hw:.1f},{by - ux * head_hw:.1f}"
     )
+    mark = f"<!--free:{free}-->" if free else ""
     return (
-        f'<polyline points="{pts}" fill="none" stroke="{color}" stroke-width="{sw}"{d}/>'
-        f'<polygon points="{tri}" fill="{color}" stroke="none"/>'
+        mark
+        + f'<polyline points="{pts}" fill="none" stroke="{color}" stroke-width="{sw}"{d}/>'
+        + f'<polygon points="{tri}" fill="{color}" stroke="none"/>'
     )
+
+
+def anchor(box, side, off=None):
+    """Point on a box edge. box = (x, y, w, h); side in l/r/t/b; ``off`` is the distance
+    from the box's left (for t/b) or top (for l/r) edge, default the edge midpoint."""
+    x, y, w, h = box
+    if side == "l":
+        return (x, y + (h / 2 if off is None else off))
+    if side == "r":
+        return (x + w, y + (h / 2 if off is None else off))
+    if side == "t":
+        return (x + (w / 2 if off is None else off), y)
+    if side == "b":
+        return (x + (w / 2 if off is None else off), y + h)
+    raise ValueError(side)
+
+
+def route(a, sa, b, sb, oa=None, ob=None, mid=None):
+    """Orthogonal points from box a (side sa) to box b (side sb), both ends exactly on
+    the edges: straight when aligned, a Z (shared gutter coordinate ``mid``) between
+    parallel sides, an L between perpendicular sides. Never diagonal."""
+    p0, p1 = anchor(a, sa, oa), anchor(b, sb, ob)
+    horiz_a, horiz_b = sa in "lr", sb in "lr"
+    if horiz_a and horiz_b:
+        if abs(p0[1] - p1[1]) < 0.05:
+            return [p0, p1]
+        mx = (p0[0] + p1[0]) / 2 if mid is None else mid
+        return [p0, (mx, p0[1]), (mx, p1[1]), p1]
+    if not horiz_a and not horiz_b:
+        if abs(p0[0] - p1[0]) < 0.05:
+            return [p0, p1]
+        my = (p0[1] + p1[1]) / 2 if mid is None else mid
+        return [p0, (p0[0], my), (p1[0], my), p1]
+    if horiz_a:  # leave sideways, enter vertically
+        return [p0, (p1[0], p0[1]), p1]
+    return [p0, (p0[0], p1[1]), p1]  # leave vertically, enter sideways
+
+
+def connect(a, sa, b, sb, oa=None, ob=None, mid=None, color="#666666", sw=1.5, dash=None, free=""):
+    """arrow() between two boxes' edges (see route()); the single way diagrams connect cards."""
+    return arrow(route(a, sa, b, sb, oa, ob, mid), color=color, sw=sw, dash=dash, free=free)
 
 
 def marker_defs() -> str:
