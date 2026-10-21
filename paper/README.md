@@ -18,6 +18,39 @@ corpus by `scripts/paper/generate_paper_assets.py` — tables in `generated/`, f
 | `figures/assets/` | Base64-embedded radiograph crops extracted from DENTEX image 624 by `build_diagrams.py` (plus `_assets_b64.json` cache) |
 | `assets_summary.json` | Every number emitted by the asset script (check prose against this) |
 
+## Figure imagery (showcase radiographs)
+
+The raw DENTEX / Tufts images are not in the repository, so the radiographs in the figures come
+from ten curated pairs mined from the verified traces (`scripts/paper/prepare_showcase.py`
+turns them into small committed assets under `figures/assets/showcase/`; `showcase.json` holds
+native-coordinate boxes, correction chains, IoU metrics, final answers, logged tiers and the
+tool-output tiles).
+
+```
+python scripts/paper/prepare_showcase.py --pairs <send_to_claude dir> \
+       --traces <train_cot_traces.jsonl>      # --traces asserts logged tier == geometric tier
+python scripts/paper/build_diagrams.py        # rebuild the diagrams (PDFs included)
+python scripts/paper/audit_diagram_text.py    # no label may overflow its box
+```
+
+Keep **one image per figure and no image in neighbouring figures** (each at most twice):
+
+| Pair (id) | Used in |
+|---|---|
+| 01 flagship (DENTEX 127) | concept figure |
+| 02 three-step (DENTEX 62) | trace generation, gallery |
+| 03 breadth (DENTEX 58) | pipeline thumbnail, gallery |
+| 04 deep caries (DENTEX 291) | datasets (DENTEX), gallery |
+| 05 Tufts periapical (Tufts 975) | datasets (Tufts), gallery |
+| 06 healthy (DENTEX 622) | gallery |
+| 07 params (DENTEX 334) | pipeline loop, tools figure (a) |
+| 08 small tier (DENTEX 84) | training stack, gallery |
+| 09 Tufts params (Tufts 573) | agent loop, tools figure (b) |
+| 10 reference (DENTEX 624) | input geometry, evidence figure (canonical views and the paired no-tools trace exist only for it) |
+
+The tool tiles are produced by the project's own tool functions (`dental_agent/tools`) with the
+arguments the policy chose in those traces.
+
 ## Tooling (in `scripts/paper/`)
 
 | Script | Purpose |
