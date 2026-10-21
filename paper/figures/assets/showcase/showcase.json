@@ -206,6 +206,7 @@
     439,
     469
    ],
+   "logged_tier": "big",
    "crop_before_size": [
     300,
     360
@@ -334,6 +335,7 @@
     436,
     496
    ],
+   "logged_tier": "big",
    "crop_before_size": [
     210,
     360
@@ -648,6 +650,7 @@
     202,
     488
    ],
+   "logged_tier": "big",
    "crop_before_size": [
     122,
     360
@@ -951,6 +954,7 @@
     509,
     252
    ],
+   "logged_tier": "big",
    "crop_before_size": [
     530,
     360
@@ -1073,6 +1077,7 @@
     452,
     348
    ],
+   "logged_tier": "big",
    "crop_before_size": [
     376,
     360
@@ -1244,6 +1249,7 @@
     202,
     399
    ],
+   "logged_tier": "small",
    "crop_before_size": [
     158,
     360
@@ -1253,5 +1259,309 @@
     360
    ]
   }
+ },
+ "params_dentex": {
+  "folder": "07_continuous_parameters",
+  "cohort": "dentex",
+  "image_id": 334,
+  "scale": 0.6095,
+  "native_w": 2953,
+  "native_h": 1316,
+  "n_findings": 5,
+  "n_turns": 21,
+  "n_calls": 39,
+  "ground_truth": [
+   {
+    "fdi": 15,
+    "diagnosis": "Caries",
+    "bbox": [
+     1044.7142857142856,
+     502.0,
+     140.28571428571445,
+     297.0
+    ]
+   },
+   {
+    "fdi": 17,
+    "diagnosis": "Deep Caries",
+    "bbox": [
+     803.0,
+     570.0,
+     153.85714285714278,
+     295.0
+    ]
+   },
+   {
+    "fdi": 37,
+    "diagnosis": "Caries",
+    "bbox": [
+     1884.0,
+     760.0,
+     201.0,
+     308.0
+    ]
+   },
+   {
+    "fdi": 46,
+    "diagnosis": "Deep Caries",
+    "bbox": [
+     991.0,
+     769.0,
+     204.0,
+     309.0
+    ]
+   },
+   {
+    "fdi": 47,
+    "diagnosis": "Deep Caries",
+    "bbox": [
+     892.0,
+     770.0,
+     204.0,
+     283.0
+    ]
+   }
+  ],
+  "final_answer": [
+   {
+    "quadrant": 1,
+    "tooth_position": 5,
+    "diagnosis": "Caries",
+    "confidence": 0.82
+   },
+   {
+    "quadrant": 1,
+    "tooth_position": 7,
+    "diagnosis": "Deep Caries",
+    "confidence": 0.92
+   },
+   {
+    "quadrant": 3,
+    "tooth_position": 7,
+    "diagnosis": "Caries",
+    "confidence": 0.85
+   },
+   {
+    "quadrant": 4,
+    "tooth_position": 6,
+    "diagnosis": "Deep Caries",
+    "confidence": 0.9
+   },
+   {
+    "quadrant": 4,
+    "tooth_position": 7,
+    "diagnosis": "Deep Caries",
+    "confidence": 0.91
+   }
+  ],
+  "image_size": [
+   1100,
+   490
+  ],
+  "tools": [
+   {
+    "tool": "zoom_crop",
+    "lines": [
+     "padding 0.3"
+    ],
+    "file": "tool_0.jpg",
+    "size": [
+     121,
+     240
+    ]
+   },
+   {
+    "tool": "window_level",
+    "lines": [
+     "bone"
+    ],
+    "file": "tool_1.jpg",
+    "size": [
+     121,
+     240
+    ]
+   },
+   {
+    "tool": "window_level",
+    "lines": [
+     "enamel"
+    ],
+    "file": "tool_2.jpg",
+    "size": [
+     121,
+     240
+    ]
+   },
+   {
+    "tool": "window_level",
+    "lines": [
+     "soft_tissue"
+    ],
+    "file": "tool_3.jpg",
+    "size": [
+     121,
+     240
+    ]
+   },
+   {
+    "tool": "window_level",
+    "lines": [
+     "bone",
+     "center 128, width 200"
+    ],
+    "file": "tool_4.jpg",
+    "size": [
+     121,
+     240
+    ]
+   },
+   {
+    "tool": "enhance_contrast",
+    "lines": [
+     "factor 1.8"
+    ],
+    "file": "tool_5.jpg",
+    "size": [
+     121,
+     240
+    ]
+   },
+   {
+    "tool": "denoise",
+    "lines": [
+     "bilateral",
+     "strength 0.5"
+    ],
+    "file": "tool_6.jpg",
+    "size": [
+     121,
+     240
+    ]
+   }
+  ]
+ },
+ "params_tufts": {
+  "folder": "09_tufts_params",
+  "cohort": "tufts",
+  "image_id": 573,
+  "scale": 1.0,
+  "native_w": 1615,
+  "native_h": 840,
+  "n_findings": 3,
+  "n_turns": 13,
+  "n_calls": 15,
+  "ground_truth": [
+   {
+    "fdi": 18,
+    "diagnosis": "Periapical Lesion",
+    "bbox": [
+     404.0,
+     218.0,
+     82.0,
+     124.0
+    ]
+   },
+   {
+    "fdi": 17,
+    "diagnosis": "Periapical Lesion",
+    "bbox": [
+     459.0,
+     236.0,
+     93.0,
+     151.0
+    ]
+   },
+   {
+    "fdi": 16,
+    "diagnosis": "Periapical Lesion",
+    "bbox": [
+     532.0,
+     248.0,
+     84.0,
+     159.0
+    ]
+   }
+  ],
+  "final_answer": [
+   {
+    "quadrant": 1,
+    "tooth_position": 6,
+    "diagnosis": "Periapical Lesion",
+    "confidence": 0.82
+   },
+   {
+    "quadrant": 1,
+    "tooth_position": 7,
+    "diagnosis": "Periapical Lesion",
+    "confidence": 0.82
+   },
+   {
+    "quadrant": 1,
+    "tooth_position": 8,
+    "diagnosis": "Periapical Lesion",
+    "confidence": 0.82
+   }
+  ],
+  "image_size": [
+   1100,
+   572
+  ],
+  "tools": [
+   {
+    "tool": "zoom_crop",
+    "lines": [
+     "padding 0.3"
+    ],
+    "file": "tool_0.jpg",
+    "size": [
+     182,
+     224
+    ]
+   },
+   {
+    "tool": "denoise",
+    "lines": [
+     "strength 0.7"
+    ],
+    "file": "tool_1.jpg",
+    "size": [
+     182,
+     224
+    ]
+   },
+   {
+    "tool": "enhance_contrast",
+    "lines": [
+     "factor 1.8"
+    ],
+    "file": "tool_2.jpg",
+    "size": [
+     182,
+     224
+    ]
+   },
+   {
+    "tool": "enhance_contrast",
+    "lines": [
+     "factor 2.5"
+    ],
+    "file": "tool_3.jpg",
+    "size": [
+     182,
+     224
+    ]
+   },
+   {
+    "tool": "contralateral_compare",
+    "lines": [
+     "quadrant 1"
+    ],
+    "file": "tool_4.jpg",
+    "size": [
+     340,
+     200
+    ]
+   }
+  ]
  }
 }

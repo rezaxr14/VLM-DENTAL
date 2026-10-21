@@ -6,7 +6,11 @@ Input : the folder of curated pairs (01_flagship_big_offset/, 02_..., each with
 Output: paper/figures/assets/showcase/<id>/{image.jpg,crop_before.jpg,crop_after.jpg}
         and showcase.json (native-coordinate boxes, correction chain, metrics).
 
-    python scripts/paper/prepare_showcase.py --pairs path/to/send_to_claude
+    python scripts/paper/prepare_showcase.py --pairs path/to/send_to_claude \\
+        [--traces path/to/train_cot_traces.jsonl]
+
+--traces reads the logged perturbation tier (perturb_tier / true_bbox, kept in
+the training traces) and asserts it agrees with the geometric recovery.
 
 The raw DENTEX/Tufts images are not in the repository, so the committed
 outputs of this script are the (small, downscaled) inputs of
@@ -22,9 +26,12 @@ images are not downscaled, scale 1.0).
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import math
 import re
+import sys
+import types
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -43,6 +50,8 @@ PAIRS = {
     "05_tufts_periapical": "tufts",
     "06_healthy_negative_control": "healthy",
     "08_small_tier_judgment": "small_tier",
+    "07_continuous_parameters": "params_dentex",
+    "09_tufts_params": "params_tufts",
 }
 FOCUS = {"flagship": 48, "three_step": 16, "breadth": 25, "deep_caries": 36, "tufts": 36, "small_tier": 16}
 MAX_W = 1800
@@ -171,6 +180,103 @@ def chain_for(t, focus):
     return first.get(focus), chain.get(focus, []), args_chain.get(focus, [])
 
 
+# ---- real tool outputs --------------------------------------------------------------------
+def _load_tools():
+    """Import the project's own tool functions without importing the dental_agent package."""
+    tools_dir = REPO / "dental_agent" / "tools"
+    for pkg in ("dental_agent", "dental_agent.tools"):
+        sys.modules.setdefault(pkg, types.ModuleType(pkg))
+    mods = {}
+    for name in ("fdi", "windowing", "contrast", "denoise", "zoom_crop", "contralateral"):
+        spec = importlib.util.spec_from_file_location(f"dental_agent.tools.{name}", tools_dir / f"{name}.py")
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[f"dental_agent.tools.{name}"] = mod
+        spec.loader.exec_module(mod)
+        mods[name] = mod
+    return mods
+
+
+# (tool, label lines, args) -- the arguments the policy actually chose in the trace
+TOOL_SPECS = {
+    "params_dentex": {
+        "bbox": [1044.71, 502.0, 140.29, 297.0],  # contralateral_compare target in the trace
+        "quadrant": 1,
+        "tiles": [
+            ("zoom_crop", ["padding 0.3"], {}),
+            ("window_level", ["bone"], {"preset": "bone"}),
+            ("window_level", ["enamel"], {"preset": "enamel"}),
+            ("window_level", ["soft_tissue"], {"preset": "soft_tissue"}),
+            ("window_level", ["bone", "center 128, width 200"], {"preset": "bone", "center": 128, "width": 200}),
+            ("enhance_contrast", ["factor 1.8"], {"factor": 1.8}),
+            ("denoise", ["bilateral", "strength 0.5"], {"method": "bilateral", "strength": 0.5}),
+        ],
+    },
+    "params_tufts": {
+        "bbox": [404.0, 218.0, 82.0, 124.0],
+        "quadrant": 1,
+        "tiles": [
+            ("zoom_crop", ["padding 0.3"], {}),
+            ("denoise", ["strength 0.7"], {"strength": 0.7}),
+            ("enhance_contrast", ["factor 1.8"], {"factor": 1.8}),
+            ("enhance_contrast", ["factor 2.5"], {"factor": 2.5}),
+        ],
+        "contralateral": {"bbox": [392.1, 142.1, 165.1, 200.0], "quadrant": 1},
+    },
+}
+TILE_H = 240
+
+
+def render_tools(pid: str, full: Image.Image, k: float, pdir: Path) -> list[dict]:
+    """Run the repo's tool functions on the image (resized back to native geometry)."""
+    tools = _load_tools()
+    spec = TOOL_SPECS[pid]
+    native = full.convert("RGB").resize((round(full.width / k), round(full.height / k)), Image.LANCZOS)
+    base = tools["zoom_crop"].tool_zoom_crop(native, spec["bbox"], padding_frac=0.3)
+    funcs = {
+        "zoom_crop": lambda im, a: im,
+        "window_level": lambda im, a: tools["windowing"].tool_window_level(im, **a),
+        "enhance_contrast": lambda im, a: tools["contrast"].tool_enhance_contrast(im, **a),
+        "denoise": lambda im, a: tools["denoise"].tool_denoise(im, **a),
+    }
+    out = []
+    items = [(n, lines, funcs[n](base, a)) for n, lines, a in spec["tiles"]]
+    if "contralateral" in spec:
+        c = spec["contralateral"]
+        comp = tools["contralateral"].tool_contralateral_compare(native, c["bbox"], c["quadrant"])
+        items.append(("contralateral_compare", [f"quadrant {c['quadrant']}"], comp))
+    for i, (name, lines, im) in enumerate(items):
+        im = im.convert("RGB")
+        if im.height > TILE_H:
+            im = im.resize((round(im.width * TILE_H / im.height), TILE_H), Image.LANCZOS)
+        fn = f"tool_{i}.jpg"
+        im.save(pdir / fn, quality=90, optimize=True)
+        out.append({"tool": name, "lines": lines, "file": fn, "size": list(im.size)})
+    return out
+
+
+def logged_tiers(traces_path: Path, wanted: dict) -> dict:
+    """{(cohort, image_id): {fdi: perturb_tier}} from the training traces' tool-call metadata."""
+    out = {}
+    with traces_path.open(encoding="utf-8") as fh:
+        for line in fh:
+            t = json.loads(line)
+            key = (t["dataset"], t["image_id"])
+            if key not in wanted:
+                continue
+            d = {}
+            for tu in t["turns"]:
+                for c in tu.get("tool_calls_this_turn", []):
+                    if c.get("tool_name") == "locate_tooth" and "perturb_tier" in c:
+                        d.setdefault(int(c["tool_args"]["tooth"]), c["perturb_tier"])
+            out[key] = d
+    return out
+
+
+def geometric_tier(dx: float, dy: float) -> str:
+    m = max(abs(dx), abs(dy))
+    return "none" if m < 0.05 else ("small" if m <= 0.32 else "big")
+
+
 def save_jpg(src: Path, dst: Path, width=None, height=None, q=86):
     im = Image.open(src).convert("RGB")
     if width and im.width > width:
@@ -184,9 +290,17 @@ def save_jpg(src: Path, dst: Path, width=None, height=None, q=86):
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--pairs", required=True, type=Path)
+    ap.add_argument("--traces", type=Path, help="train_cot_traces.jsonl (logged perturbation tiers)")
     args = ap.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
     meta = {}
+    tiers = {}
+    if args.traces:
+        wanted = {}
+        for folder in PAIRS:
+            t = json.loads((args.pairs / folder / "trace.json").read_text(encoding="utf-8"))
+            wanted[(t["dataset"], t["image_id"])] = folder
+        tiers = logged_tiers(args.traces, wanted)
     for folder, pid in PAIRS.items():
         d = args.pairs / folder
         t = json.loads((d / "trace.json").read_text(encoding="utf-8"))
@@ -244,9 +358,16 @@ def main() -> None:
             ctx.save(pdir / "context.jpg", quality=88, optimize=True)
             item["focus"]["context_region"] = [round(rx0, 1), round(ry0, 1), round(rx1, 1), round(ry1, 1)]
             item["focus"]["context_size"] = [ctx.width, ctx.height]
+            logged = tiers.get((t["dataset"], t["image_id"]), {}).get(focus)
+            if logged is not None:
+                geo = geometric_tier(item["focus"]["dx_frac"], item["focus"]["dy_frac"])
+                assert logged == geo, f"{pid}: logged tier {logged} != geometric {geo}"
+                item["focus"]["logged_tier"] = logged
             for nm in ("crop_before", "crop_after"):
                 if (d / f"{nm}.png").exists():
                     item["focus"][nm + "_size"] = list(save_jpg(d / f"{nm}.png", pdir / f"{nm}.jpg", height=CROP_H))
+        if pid in TOOL_SPECS:
+            item["tools"] = render_tools(pid, full, k, pdir)
         meta[pid] = item
         print(f"{pid:12s} scale={k} native={item['native_w']}x{item['native_h']} findings={item['n_findings']}", item.get("focus", {}).get("iou_before"), item.get("focus", {}).get("iou_after"))
     (OUT / "showcase.json").write_text(json.dumps(meta, indent=1), encoding="utf-8")

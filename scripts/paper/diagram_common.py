@@ -397,6 +397,7 @@ def load_showcase() -> dict:
             f = SHOWCASE_DIR / pid / f"{nm}.jpg"
             if f.exists():
                 d[nm] = b64_of(f)
+        d["tools"] = [dict(tl, b64=b64_of(SHOWCASE_DIR / pid / tl["file"])) for tl in item.get("tools", [])]
         out[pid] = d
     return out
 
