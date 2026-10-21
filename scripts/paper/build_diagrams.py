@@ -302,7 +302,7 @@ def build_trace_generation(a):
     ix, iw = 20, 142
     p.append(R(ix, ca, iw, cha))
     _card_title(p, t, ix, ca, iw, icon_db(ix + 12, ca + 10), "Expert labels")
-    fl_ = _showcase()["flagship"]
+    fl_ = _showcase()["three_step"]
     fw_, fh_ = _fit(*fl_["meta"]["image_size"], 122, 62)
     p.append(IMG(ix + 10, ca + 36 + (62 - fh_) / 2, fw_, fh_, fl_["image"]))
     _gt_overlay(p, fl_["meta"], ix + 10, ca + 36 + (62 - fh_) / 2, fw_, fh_, sw=0.8)
@@ -360,7 +360,12 @@ def build_trace_generation(a):
     p.append(R(32, uy + 34, 300, 52, rx=4, fill="#F7F8FA", stroke="#E3E3E3", sw=1.0))
     f_ = fl_["meta"]["focus"]
     a0_ = f_["nudge_args"][0]
-    snip = ['thought "... the box sits about one', '         arch too high"', f"call nudge_crop(dx={a0_['dx_frac']:+.2f}, dy={a0_['dy_frac']:+.2f})", f"obs  bbox -> {_fmt_box(f_['nudges'][0])}"]
+    snip = [
+        'thought "The 16 crop, however, missed:',
+        '         ... tooth 16 is not centered"',
+        f"call nudge_crop(dx={a0_['dx_frac']:+.2f}, dy={a0_['dy_frac']:+.2f}, s={a0_['scale']:.2f})",
+        f"obs  bbox -> {_fmt_box(f_['nudges'][0])}",
+    ]
     yy = uy + 46
     for ln in snip:
         p.append(t(40, yy, ln, size=7.8, fill="#333333", anchor="start", font=MONO, maxw=284))
@@ -520,7 +525,7 @@ def build_architecture(a):
     p = []
     G = "#777777"
     # ---- row 1: native input + dispatcher notes ----
-    sc_ = _showcase()["flagship"]
+    sc_ = _showcase()["params_tufts"]
     p.append(t(10, 22, "input · native-resolution OPG", size=9.2, weight="bold", anchor="start", maxw=300))
     p.append(IMG(10, 34, 300, 141, _cover_b64(sc_["image"], 300 / 141)))
     p.append(R(10, 34, 300, 141, rx=3, stroke="#666666", sw=1.2, fill="none"))
@@ -559,9 +564,9 @@ def build_architecture(a):
     p.append(t(px0 + pw / 2, c0 + 119, "SFT · GRPO (pluggable)", size=8.8, fill=C_SUB, maxw=pw - 14))
     p.append(R(tx0, c0, tw, ch, rx=8, stroke=C_BLUE, sw=1.5))
     p.append(t(tx0 + tw / 2, c0 + 24, "Tool node", size=11.5, weight="bold", fill=C_BLUE_D))
-    cwid, chid = sc_["meta"]["focus"]["crop_after_size"]
-    lw_ = 120 * cwid / chid
-    p.append(IMG(tx0 + 14, c0 + 36, lw_, 120, sc_["crop_after"]))
+    live = sc_["tools"][0]  # the zoom_crop output
+    lw_ = 120 * live["size"][0] / live["size"][1]
+    p.append(IMG(tx0 + 14, c0 + 36, lw_, 120, live["b64"]))
     p.append(R(tx0 + 14, c0 + 36, lw_, 120, rx=1, stroke="#888888", sw=0.9, fill="none"))
     p.append(t(tx0 + 14 + lw_ / 2, c0 + 168, "live crop", size=8.4, fill=C_SUB))
     tt = tx0 + 14 + lw_ + 14
@@ -582,7 +587,7 @@ def build_architecture(a):
     p.append(t(160, c0 + ch + 21, "on answer / budget", size=8.6, fill=C_SUB, anchor="start", maxw=140))
     p.append(R(10, a0, 620, 56, rx=8, fill="#F2F8F2", stroke=C_GREEN, sw=1.4))
     p.append(t(320, a0 + 20, "final answer - findings JSON", size=9.8, weight="bold", fill=C_GREEN_D, maxw=596))
-    fa_ = next(e for e in sc_["meta"]["final_answer"] if e["quadrant"] * 10 + e["tooth_position"] == sc_["meta"]["focus"]["fdi"])
+    fa_ = sc_["meta"]["final_answer"][0]
     p.append(t(320, a0 + 41, "[" + json.dumps(fa_, separators=(",", ":")) + ", ...]", size=8.4, fill=C_BLUE_D, font=MONO, maxw=596))
 
     # ---- row 4: evaluation ----
@@ -631,7 +636,7 @@ def build_architecture_training(a):
     p.append(t(tx, y1 + 62, "(8 more catalogued as candidates - pending)", size=8.8, fill=C_SUB, anchor="start", maxw=dw - 24))
     p.append(t(tx, y1 + 82, "loaders: DENTEX full · Tufts partial (1 open question)", size=8.8, fill=C_SUB, anchor="start", maxw=dw - 24))
     p.append(t(tx, y1 + 95, "FDI notation conversion at ingest", size=8.8, fill=C_SUB, anchor="start", maxw=dw - 24))
-    dc_ = _showcase()["deep_caries"]
+    dc_ = _showcase()["small_tier"]
     tw_, th_ = _fit(*dc_["meta"]["image_size"], 130, 61)
     p.append(IMG(tx, y1 + 110, tw_, th_, dc_["image"]))
     _gt_overlay(p, dc_["meta"], tx, y1 + 110, tw_, th_, sw=0.9)
@@ -910,14 +915,14 @@ def build_dataset_catalog(a):
 
     # ---- in use ----
     y0 = 60
-    p.append(R(10, y0, 620, 232, fill=C_GREEN_FILL, stroke=C_GREEN, sw=1.4))
+    p.append(R(10, y0, 620, 294, fill=C_GREEN_FILL, stroke=C_GREEN, sw=1.4))
     p.append(R(22, y0 + 10, 62, 18, rx=9, fill=PILL_GREEN, stroke="none", sw=0))
     p.append(t(53, y0 + 23, "IN USE", size=8.8, weight="bold", fill="#FFFFFF"))
     p.append(t(618, y0 + 23, "feeds the released corpus", size=8.8, fill=C_GREEN_D, anchor="end"))
 
     cy = y0 + 38
     # DENTEX card
-    p.append(R(22, cy, 298, 184))
+    p.append(R(22, cy, 298, 246))
     p.append(icon_db(34, cy + 10))
     p.append(t(58, cy + 24, "DENTEX", size=11.5, weight="bold", anchor="start"))
     p.append(t(308, cy + 24, "2,332 images", size=9.2, fill=C_BLUE_D, anchor="end"))
@@ -927,13 +932,14 @@ def build_dataset_catalog(a):
     p.append(t(34, cy + 87, "with all four reward-relevant classes", size=8.6, fill=C_SUB, anchor="start", maxw=276))
     p.append(R(34, cy + 98, 130, 20, rx=10, fill="#F0F7F0", stroke=C_GREEN, sw=1.0))
     p.append(t(99, cy + 112, "loader: complete", size=8.8, weight="bold", fill=C_GREEN_D))
-    p.append(t(34, cy + 140, "contributes 705 corpus traces", size=9.4, weight="bold", fill=C_BLUE_D, anchor="start", maxw=276))
-    p.append(t(34, cy + 153, "(678 pathology + 27 healthy)", size=8.6, fill=C_SUB, anchor="start", maxw=276))
-    p.append(t(34, cy + 172, "grounding pool: 1,339 images · 21,624 tooth boxes", size=8.6, fill=C_SUB, anchor="start", maxw=276))
+    _band_strip(p, _showcase()["deep_caries"], 34, cy + 128, 274, 62)
+    p.append(t(34, cy + 202, "contributes 705 corpus traces", size=9.4, weight="bold", fill=C_BLUE_D, anchor="start", maxw=276))
+    p.append(t(34, cy + 215, "(678 pathology + 27 healthy)", size=8.6, fill=C_SUB, anchor="start", maxw=276))
+    p.append(t(34, cy + 234, "grounding pool: 1,339 images · 21,624 tooth boxes", size=8.6, fill=C_SUB, anchor="start", maxw=276))
 
     # Tufts card
     tx = 330
-    p.append(R(tx, cy, 290, 184))
+    p.append(R(tx, cy, 290, 246))
     p.append(icon_db(tx + 12, cy + 10))
     p.append(t(tx + 36, cy + 24, "Tufts Dental Database", size=11.5, weight="bold", anchor="start", maxw=150))
     p.append(t(tx + 278, cy + 24, "1,000 images", size=9.2, fill=C_BLUE_D, anchor="end"))
@@ -943,12 +949,13 @@ def build_dataset_catalog(a):
     p.append(t(tx + 12, cy + 87, "no caries findings in this layer", size=8.6, fill=C_SUB, anchor="start", maxw=268))
     p.append(R(tx + 12, cy + 98, 190, 20, rx=10, fill=C_ORANGE_L, stroke="#F0B27A", sw=1.0))
     p.append(t(tx + 107, cy + 112, "loader: partial - 1 open question", size=8.8, weight="bold", fill=C_ORANGE_D, maxw=180))
-    p.append(t(tx + 12, cy + 140, "contributes 1,142 corpus traces", size=9.4, weight="bold", fill=C_BLUE_D, anchor="start", maxw=268))
-    p.append(t(tx + 12, cy + 153, "(202 overlap + 660 healthy + 280 all-diseases)", size=8.6, fill=C_SUB, anchor="start", maxw=268))
-    p.append(t(tx + 12, cy + 172, "grounding pool: 1,000 images · 25,184 boxes", size=8.6, fill=C_SUB, anchor="start", maxw=268))
+    _band_strip(p, _showcase()["tufts"], tx + 12, cy + 128, 266, 62)
+    p.append(t(tx + 12, cy + 202, "contributes 1,142 corpus traces", size=9.4, weight="bold", fill=C_BLUE_D, anchor="start", maxw=268))
+    p.append(t(tx + 12, cy + 215, "(202 overlap + 660 healthy + 280 all-diseases)", size=8.6, fill=C_SUB, anchor="start", maxw=268))
+    p.append(t(tx + 12, cy + 234, "grounding pool: 1,000 images · 25,184 boxes", size=8.6, fill=C_SUB, anchor="start", maxw=268))
 
     # ---- candidates ----
-    c0 = y0 + 232 + 12
+    c0 = y0 + 294 + 12
     ch = 38 + 4 * 66 + 44
     p.append(R(10, c0, 620, ch, fill="#FBFBFC", stroke="#CCCCCC", sw=1.2))
     p.append(R(22, c0 + 10, 124, 18, rx=9, fill=PILL_GREY, stroke="none", sw=0))
@@ -979,20 +986,9 @@ def build_dataset_catalog(a):
     p.append(t(22, ny + 6, "diagnosis-labeled: 1 of 8 (binary caries masks) · grounding-only: 7 of 8", size=8.8, anchor="start", maxw=596))
     p.append(t(22, ny + 20, "promotion rule: verified end-to-end annotation semantics, per dataset", size=8.8, anchor="start", maxw=596))
 
-    # ---- footer ----
-    f0 = c0 + ch + 12
-    p.append(R(10, f0, 620, 76, fill="#F7F8FA", stroke="#E3E3E3", sw=1.0))
-    foot = [
-        "catalog transcribed from a systematic review of 16 public dental imaging datasets",
-        "(Uribe et al. 2024) plus targeted follow-up search",
-        "the diagnosis-label vs grounding-only flag drives purpose: grounding candidates generalize",
-        "locate_tooth, diagnosis candidates feed trace generation",
-    ]
-    for i, line in enumerate(foot):
-        p.append(t(22, f0 + 16 + i * 13 + (6 if i >= 2 else 0), line, size=8.6, fill=C_SUB, anchor="start", maxw=596))
     if warn:
         print("  dataset_catalog text-fit warnings:\n   " + "\n   ".join(warn))
-    return svg(W, f0 + 88, "".join(p))
+    return svg(W, c0 + ch + 10, "".join(p))
 
 
 # ---------------------------------------------------------------------------
@@ -1212,12 +1208,17 @@ def build_pipeline(a):
     p.append(T(cx, y1 + 39, "frontier teacher via rate-limited provider pool", size=9.8))
     p.append(T(cx, y1 + 52, "ground-truth-directed agent loop", size=9.8))
     iy, ih = y1 + 62, 80
-    p.append(IMG(242, iy, 170, ih, a["opg"]))
-    p.append(R(242, iy, 170, ih, rx=0, stroke="#888888", sw=0.9, fill="none"))
-    p.append(IMG(420, iy, 54, ih, a["canon_crop"]))
-    p.append(R(420, iy, 54, ih, rx=0, stroke="#888888", sw=0.9, fill="none"))
-    p.append(IMG(482, iy, 106, ih, a["canon_compare"]))
-    p.append(R(482, iy, 106, ih, rx=0, stroke="#888888", sw=0.9, fill="none"))
+    pd_ = _showcase()["params_dentex"]
+    ow_, oh_ = _fit(*pd_["meta"]["image_size"], 170, ih)
+    p.append(IMG(242, iy + (ih - oh_) / 2, ow_, oh_, pd_["image"]))
+    p.append(R(242, iy + (ih - oh_) / 2, ow_, oh_, rx=0, stroke="#888888", sw=0.9, fill="none"))
+    tx_ = 242 + ow_ + 10
+    for ti in (0, 1, 5):  # zoom_crop, window_level(bone), enhance_contrast(1.8): real outputs
+        tl = pd_["tools"][ti]
+        tw_, th_ = _fit(tl["size"][0], tl["size"][1], 1000, ih)
+        p.append(IMG(tx_, iy, tw_, th_, tl["b64"]))
+        p.append(R(tx_, iy, tw_, th_, rx=0, stroke="#888888", sw=0.9, fill="none"))
+        tx_ += tw_ + 7
     p.append(T(cx, y1 + 160, "reasoning turns interleaved with real tool output", size=9.4, fill=C_SUB))
     p.append(T(cx, y1 + 176, "8 tools: zoom_crop - window_level - denoise - enhance_contrast -", size=9.4))
     p.append(T(cx, y1 + 189, "contralateral_compare - locate_tooth - fdi_label - nudge_crop", size=9.4))
@@ -1446,6 +1447,45 @@ def _gt_overlay(p, item, x, y, w, h, color="#2ca02c", sw=0.9, alpha_boxes=None):
         p.append(R(bx, by, bw, bh, rx=0, fill="none", stroke=color, sw=sw))
 
 
+def _region_b64(b64: str, frac_box: tuple) -> str:
+    """Crop a base64 image to a (x0, y0, x1, y1) fraction box."""
+    import base64
+    import io
+
+    from PIL import Image
+
+    im = Image.open(io.BytesIO(base64.b64decode(b64))).convert("RGB")
+    w, h = im.size
+    im = im.crop((round(frac_box[0] * w), round(frac_box[1] * h), round(frac_box[2] * w), round(frac_box[3] * h)))
+    buf = io.BytesIO()
+    im.save(buf, format="JPEG", quality=90)
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def _band_strip(p, sc_item, x, y, w, h, gt_color="#2ca02c"):
+    """A w x h strip of the dentition band of a radiograph, with the ground-truth boxes
+    that fall in it (clamped to the strip)."""
+    m = sc_item["meta"]
+    nw, nh = m["native_w"], m["native_h"]
+    rw = 0.9 * nw
+    rh = min(rw * h / w, nh)
+    cy0 = 0.54 * nh - rh / 2
+    ry0 = min(max(0.0, cy0), nh - rh)
+    rx0 = 0.05 * nw
+    region = (rx0, ry0, rx0 + rw, ry0 + rh)
+    frac = (region[0] / nw, region[1] / nh, region[2] / nw, region[3] / nh)
+    p.append(IMG(x, y, w, h, _region_b64(sc_item["image"], frac)))
+    for g in m["ground_truth"]:
+        bx, by, bw_, bh_ = g["bbox"]
+        ix0, iy0 = max(bx, region[0]), max(by, region[1])
+        ix1, iy1 = min(bx + bw_, region[2]), min(by + bh_, region[3])
+        if ix1 - ix0 < 0.5 * bw_ or iy1 - iy0 < 0.5 * bh_:
+            continue
+        dx0, dy0, dw, dh = native_box([ix0, iy0, ix1 - ix0, iy1 - iy0], m, x, y, w, h, region)
+        p.append(R(dx0, dy0, dw, dh, rx=0, fill="none", stroke=gt_color, sw=0.9))
+    p.append(R(x, y, w, h, rx=2, stroke="#666666", sw=1.0, fill="none"))
+
+
 def _tier(dx: float, dy: float) -> str:
     """Perturbation tier recovered from the box offset (as in the miner)."""
     m = max(abs(dx), abs(dy))
@@ -1484,7 +1524,7 @@ def build_gallery(a):
         ty = y0 + 40  # top of the tile area
         if f:
             p.append(t(x0 + 10, y0 + 17, f"({letter}) {dsname} image {m['image_id']} · FDI {f['fdi']} {f['diagnosis'].lower()}", size=9.2, weight="bold", anchor="start", maxw=cw_ - 20))
-            tier = _tier(f["dx_frac"], f["dy_frac"])
+            tier = f.get("logged_tier") or _tier(f["dx_frac"], f["dy_frac"])
             n = len(f["nudges"])
             p.append(t(x0 + 10, y0 + 30, f"{tier} offset · {n} nudge{'s' if n != 1 else ''} · IoU {f['iou_before']:.2f} → {f['iou_after']:.2f}", size=8.6, fill=C_SUB, anchor="start", maxw=cw_ - 20))
             region = tuple(f["context_region"])
@@ -1524,6 +1564,46 @@ def build_gallery(a):
     if warn:
         print("  gallery text-fit warnings:\n   " + "\n   ".join(warn))
     return svg(W, ly + 12, "".join(p))
+
+
+def build_tools(a):
+    """What the tools return: the project's own tool functions run with the arguments the
+    policy actually chose in two traces (rendered by prepare_showcase.py)."""
+    sc = _showcase()
+    W = 640
+    warn: list[str] = []
+    t = _checked(warn)
+    p = []
+
+    def row(pid, y, tile_h, title, sub, gap):
+        m = sc[pid]["meta"]
+        p.append(t(10, y + 12, title, size=9.6, weight="bold", anchor="start", maxw=620))
+        p.append(t(10, y + 25, sub, size=8.6, fill=C_SUB, anchor="start", maxw=620))
+        tiles = []
+        for tl in sc[pid]["tools"]:
+            w_, h_ = _fit(tl["size"][0], tl["size"][1], 1000, tile_h)
+            tiles.append((tl, w_, h_))
+        total = sum(w_ for _, w_, _ in tiles) + gap * (len(tiles) - 1)
+        x = 10 + (620 - total) / 2
+        ty = y + 36
+        for tl, w_, h_ in tiles:
+            p.append(IMG(x, ty, w_, h_, tl["b64"]))
+            p.append(R(x, ty, w_, h_, rx=1, stroke="#666666", sw=0.9, fill="none"))
+            lab_w = w_ + gap - 2
+            p.append(t(x + w_ / 2, ty + tile_h + 12, tl["tool"], size=8.2, weight="bold", maxw=max(lab_w, 60)))
+            for i, ln in enumerate(tl["lines"]):
+                p.append(t(x + w_ / 2, ty + tile_h + 23 + 10 * i, ln, size=7.9, fill=C_SUB, maxw=max(lab_w, 60)))
+            x += w_ + gap
+        return ty + tile_h + 23 + 10 * 2 + 8
+
+    y = 8
+    y = row("params_dentex", y, 144, f"(a) DENTEX image {sc['params_dentex']['meta']['image_id']} · an upper-right region",
+            "the same zoom crop passed through each tool, with the arguments the policy chose in this trace", 12)
+    y = row("params_tufts", y + 6, 116, f"(b) Tufts image {sc['params_tufts']['meta']['image_id']} · a periapical region",
+            "the same crop through other tools; contralateral_compare shows the region beside its mirror", 12)
+    if warn:
+        print("  tools text-fit warnings:\n   " + "\n   ".join(warn))
+    return svg(W, y, "".join(p))
 
 
 def build_design(a):
@@ -1721,6 +1801,7 @@ BUILDERS = {
     "fig_input_geometry.svg": build_input_geometry,
     "fig_concept.svg": build_concept,
     "fig_gallery.svg": build_gallery,
+    "fig_tools.svg": build_tools,
     "fig_design.svg": build_design,
     "fig_pipeline.svg": build_pipeline,
     "fig_perturbation_mechanism.svg": build_perturbation_mechanism,

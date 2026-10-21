@@ -53,7 +53,10 @@ evaluation layer (\cref{sec:eval}) whose probes feed model selection on a fixed 
   deliberately \emph{not} used: each would be promoted only after its annotation semantics are
   verified end-to-end, and two loaders currently stop at exactly one open question rather than
   guess. The diagnosis-label vs grounding-only flag drives purpose: grounding candidates
-  generalize \texttt{locate\_tooth}, diagnosis candidates would feed trace generation.}
+  generalize \texttt{locate\_tooth}, diagnosis candidates would feed trace generation. The
+  catalog is transcribed from a systematic review of 16 public dental imaging datasets
+  \citep{uribe2024systematic} plus a targeted follow-up search; the radiographs are real examples of
+  the two sources, with their expert boxes.}
   \label{fig:datasets}
 \end{figure}
 
@@ -116,7 +119,7 @@ metrics alike --- an indexing bug cannot recur independently in several subsyste
 \subsection{A tool suite with continuous parameters}
 \label{sec:tools}
 
-The registry exposes eight tools (\cref{tab:tools}). The deliberate design choice throughout is
+The registry exposes eight tools (\cref{tab:tools}; \cref{fig:tools} shows what they return). The deliberate design choice throughout is
 that tools expose \emph{how much} effect to apply as a continuous or overridable parameter, not
 just a fixed on/off call: denoising takes a continuous \texttt{strength}, windowing takes exact
 \texttt{center}/\texttt{width} values as an override on top of tissue presets, contrast takes a
@@ -147,6 +150,18 @@ on and to audit.
     \bottomrule
   \end{tabular}
 \end{table}
+
+\begin{figure}[tbp]
+  \centering
+  \includegraphics[width=\linewidth]{fig_tools}
+  \caption{What the tools return: the project's own tool functions, run with the arguments the
+  policy actually chose in two released traces, on the same zoom crop. (a) A DENTEX image: the
+  three \texttt{window\_level} presets, an exact center/width override, \texttt{enhance\_contrast}
+  and bilateral \texttt{denoise}. (b) A Tufts image: heavier denoising, two contrast factors, and
+  \texttt{contralateral\_compare}, which sets the region beside its mirror across the midline.
+  The tools were applied to the 1,800\,px copy of each radiograph resized to native geometry.}
+  \label{fig:tools}
+\end{figure}
 
 \subsection{Self-correcting grounding: \texttt{nudge\_crop}}
 \label{sec:nudge}
@@ -274,7 +289,7 @@ audit + verifier re-approval); the canonical corpus contains zero leaks.
   \caption{Trace synthesis, stage 1: generation. Provider family A runs a ground-truth-directed
   LangGraph loop (thought, tool call, observation, repeated every turn) with real tool execution;
   the tiered perturbation hook perturbs only the box shown to the teacher, and the zoom monitor
-  shows a real before/after nudge (DENTEX image 127). The unverified pool carries the real executed tool calls and
+  shows a real before/after nudge (DENTEX image 62). The unverified pool carries the real executed tool calls and
   corrective nudges and has no training value until verified.}
   \label{fig:tracegen}
 \end{figure}
