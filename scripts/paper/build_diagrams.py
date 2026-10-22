@@ -658,16 +658,22 @@ def build_architecture(a):
 
 
 def build_architecture_training(a):
-    """Offline stack: data layer -> trace synthesis -> SFT -> GRPO -> adapters."""
+    """Offline stack: data layer -> trace synthesis -> SFT -> GRPO -> adapters.
+
+    Every connector is drawn with connect() (edge-anchored, orthogonal); badges sit
+    beside the shafts, and the two stubs at the bottom stand for the agent-loop figure.
+    """
     W = 640
     warn: list[str] = []
     t = _checked(warn)
     p = []
     G = "#999999"
+    GR = "#7FA98B"
     # ---- row 1: data layer -> trace synthesis ----
-    y1, h1 = 10, 262
-    dx, dw = 10, 300
-    p.append(R(dx, y1, dw, h1))
+    y1, h1 = 10, 296
+    dx, dw = 10, 290
+    data = (dx, y1, dw, h1)
+    p.append(R(*data))
     p.append(icon_db(dx + 14, y1 + 12))
     p.append(t(dx + 38, y1 + 24, "Data layer", size=11.5, weight="bold", anchor="start"))
     tx = dx + 14
@@ -682,17 +688,18 @@ def build_architecture_training(a):
     p.append(R(tx, y1 + 110, tw_, th_, rx=2, stroke="#666666", sw=1.0, fill="none"))
     p.append(t(tx + 65, y1 + 185, "panoramic radiograph + per-tooth", size=8.4, fill=C_SUB, maxw=140))
     p.append(t(tx + 65, y1 + 196, "boxes + diagnoses", size=8.4, fill=C_SUB, maxw=140))
-    p.append(R(dx + 154, y1 + 110, 132, 61, fill="#F0F7F0", stroke=C_GREEN, sw=1.1))
-    p.append(t(dx + 220, y1 + 130, "multi-finding ground truth", size=8.4, weight="bold", fill=C_GREEN_D, maxw=124))
-    p.append(t(dx + 220, y1 + 146, "1-7 findings per image", size=8.6, fill=C_GREEN_D, maxw=124))
-    p.append(t(dx + 220, y1 + 160, "full set - never truncated", size=8.6, fill=C_GREEN_D, maxw=124))
-    p.append(R(tx, y1 + 218, dw - 28, 24, rx=12, fill="#EEF2FA", stroke=C_BLUE, sw=1.0))
-    p.append(t(dx + dw / 2, y1 + 234, "grounding model: YOLOv8m · 5-fold CV · mAP50 ~ 0.87", size=8.8, fill=C_BLUE_D, maxw=dw - 36))
+    p.append(R(dx + 152, y1 + 110, 126, 61, fill="#F0F7F0", stroke=C_GREEN, sw=1.1))
+    p.append(t(dx + 215, y1 + 130, "multi-finding ground truth", size=8.4, weight="bold", fill=C_GREEN_D, maxw=118))
+    p.append(t(dx + 215, y1 + 146, "1-7 findings per image", size=8.6, fill=C_GREEN_D, maxw=118))
+    p.append(t(dx + 215, y1 + 160, "full set - never truncated", size=8.6, fill=C_GREEN_D, maxw=118))
+    p.append(R(tx, y1 + h1 - 50, dw - 28, 24, rx=12, fill="#EEF2FA", stroke=C_BLUE, sw=1.0))
+    p.append(t(dx + dw / 2, y1 + h1 - 34, "grounding model: YOLOv8m · 5-fold CV · mAP50 ~ 0.87", size=8.8, fill=C_BLUE_D, maxw=dw - 36))
 
-    sx, sw_ = 330, 300
-    p.append(arrow([(dx + dw, y1 + h1 / 2), (sx - 1, y1 + h1 / 2)], color=G, sw=1.5))
-    p.append(badge(1, (dx + dw + sx) / 2, y1 + h1 / 2 - 14))
-    p.append(R(sx, y1, sw_, h1, rx=8, stroke=C_BLUE, sw=1.4))
+    sx, sw_ = 340, 290
+    synth = (sx, y1, sw_, h1)
+    p.append(connect(data, "r", synth, "l", color=G, sw=1.5))
+    p.append(badge(1, (dx + dw + sx) / 2, y1 + h1 / 2 - 16))
+    p.append(R(*synth, rx=8, stroke=C_BLUE, sw=1.4))
     p.append(icon_doc(sx + 14, y1 + 10))
     p.append(t(sx + 38, y1 + 22, "Trace synthesis (offline)", size=11.5, weight="bold", fill=C_BLUE_D, anchor="start"))
     flow = [
@@ -702,39 +709,48 @@ def build_architecture_training(a):
         (C_SAND_FILL, "#E5D9B8", C_SAND_D, "dual-gate decontamination", "regex sweep + re-verification"),
     ]
     fy = y1 + 34
-    for fill, stroke, col, l1, l2 in flow:
-        p.append(R(sx + 12, fy, sw_ - 24, 32, rx=6, fill=fill, stroke=stroke, sw=1.0))
+    STEP, CH = 48, 32
+    for k, (fill, stroke, col, l1, l2) in enumerate(flow):
+        card = (sx + 12, fy, sw_ - 24, CH)
+        p.append(R(*card, rx=6, fill=fill, stroke=stroke, sw=1.0))
         p.append(t(sx + sw_ / 2, fy + 14, l1, size=9.0, fill=col, maxw=sw_ - 34))
         p.append(t(sx + sw_ / 2, fy + 26, l2, size=8.4, fill=col, maxw=sw_ - 34))
-        p.append(arrow([(sx + sw_ / 2, fy + 32), (sx + sw_ / 2, fy + 42)], color=G, sw=1.2))
-        fy += 42
-    p.append(R(sx + 12, fy, sw_ - 24, 36, rx=6, fill="#EEF2FA", stroke=C_BLUE, sw=1.2))
+        nxt = (sx + 12, fy + STEP, sw_ - 24, 36 if k == len(flow) - 1 else CH)
+        p.append(connect(card, "b", nxt, "t", color=G, sw=1.3))
+        fy += STEP
+    corpus = (sx + 12, fy, sw_ - 24, 36)
+    p.append(R(*corpus, rx=6, fill="#EEF2FA", stroke=C_BLUE, sw=1.2))
     p.append(t(sx + sw_ / 2, fy + 15, "corpus: 1,847 + 1,847 · 3,694 traces", size=9.0, weight="bold", fill=C_BLUE_D, maxw=sw_ - 34))
     p.append(t(sx + sw_ / 2, fy + 28, "exact per-cohort parity", size=8.4, fill=C_BLUE_D, maxw=sw_ - 34))
-    p.append(t(sx + 14, y1 + h1 - 8, "details in the trace-synthesis figure (all quotes, boxes and stats are real)", size=8.0, fill=C_SUB, anchor="start", maxw=sw_ - 24))
+    p.append(t(sx + 14, y1 + h1 - 22, "details in the trace-synthesis figure", size=8.0, fill=C_SUB, anchor="start", maxw=sw_ - 24))
+    p.append(t(sx + 14, y1 + h1 - 10, "(all quotes, boxes and stats are real)", size=8.0, fill=C_SUB, anchor="start", maxw=sw_ - 24))
 
     # ---- row 2: training ----
-    y2 = y1 + h1 + 36
+    y2 = y1 + h1 + 44
     h2 = 214
-    p.append(R(10, y2, 620, h2, rx=8, stroke=C_BLUE, sw=1.4))
+    train = (10, y2, 620, h2)
+    p.append(R(*train, rx=8, stroke=C_BLUE, sw=1.4))
     p.append(icon_gear(32, y2 + 20))
     p.append(t(50, y2 + 24, "Training", size=11.5, weight="bold", fill=C_BLUE_D, anchor="start"))
-    # corpus -> SFT elbow
-    sfx = 22
-    p.append(arrow([(sx + sw_ / 2, y1 + h1), (sx + sw_ / 2, y1 + h1 + 14), (sfx + 90, y1 + h1 + 14), (sfx + 90, y2 + 36)], color="#7FA98B", sw=1.6))
-    p.append(badge(2, sx + sw_ / 2 - 70, y1 + h1 + 14))
     cy = y2 + 38
     ch2 = 110
-    sfw, gw, ow = 184, 248, 138
-    p.append(R(sfx, cy, sfw, ch2, rx=6, fill=C_BLUE_FILL, stroke="#C7D3E8", sw=1.0))
+    sfx, sfw, gw, ow = 22, 184, 236, 116
+    gx = sfx + sfw + 34
+    ox = gx + gw + 26
+    sft = (sfx, cy, sfw, ch2)
+    grpo = (gx, cy, gw, ch2)
+    outp = (ox, cy, ow, ch2)
+    # corpus -> SFT: one Z through the gutter between the rows; badge 2 beside the drop
+    p.append(connect(synth, "b", sft, "t", mid=y1 + h1 + 22, color=GR, sw=1.6))
+    p.append(badge(2, sfx + sfw / 2 + 16, y2 + 20))
+    p.append(R(*sft, rx=6, fill=C_BLUE_FILL, stroke="#C7D3E8", sw=1.0))
     p.append(t(sfx + 12, cy + 20, "1 · SFT on verified traces", size=9.4, weight="bold", fill=C_BLUE_D, anchor="start", maxw=sfw - 20))
     p.append(t(sfx + 12, cy + 38, "behavior cloning of the tool loop", size=8.6, fill=C_SUB, anchor="start", maxw=sfw - 20))
     p.append(t(sfx + 12, cy + 51, "(1,847 with-tools traces)", size=8.6, fill=C_SUB, anchor="start", maxw=sfw - 20))
-    gx = sfx + sfw + 26
-    p.append(arrow([(sfx + sfw, cy + ch2 / 2), (gx - 1, cy + ch2 / 2)], color=G, sw=1.3))
-    p.append(t(sfx + sfw + 13, cy + ch2 / 2 - 12, "then", size=8.4, fill=C_SUB, maxw=26))
-    p.append(badge(3, sfx + sfw + 13, cy + ch2 / 2 + 14, r=7.5))
-    p.append(R(gx, cy, gw, ch2, rx=6, fill=C_BLUE_FILL, stroke="#C7D3E8", sw=1.0))
+    p.append(connect(sft, "r", grpo, "l", color=G, sw=1.3))
+    p.append(t(sfx + sfw + 17, cy + ch2 / 2 - 9, "then", size=8.4, fill=C_SUB, maxw=30))
+    p.append(badge(3, sfx + sfw + 17, cy + ch2 / 2 + 17, r=7.5))
+    p.append(R(*grpo, rx=6, fill=C_BLUE_FILL, stroke="#C7D3E8", sw=1.0))
     p.append(t(gx + 12, cy + 20, "2 · GRPO on fresh rollouts", size=9.4, weight="bold", fill=C_BLUE_D, anchor="start", maxw=gw - 20))
     p.append(t(gx + 12, cy + 38, "same loop, live tool execution", size=8.6, fill=C_SUB, anchor="start", maxw=gw - 20))
     p.append(t(gx + 12, cy + 51, "group-relative advantage", size=8.6, fill=C_SUB, anchor="start", maxw=gw - 20))
@@ -744,32 +760,34 @@ def build_architecture_training(a):
         p.append(t(px + cw / 2, cy + 72, label, size=8.0, fill=C_BLUE_D, maxw=cw - 4))
         px += cw + 6
     p.append(t(gx + 12, cy + 94, "efficiency term exempts locate_tooth + nudge_crop", size=8.2, fill=C_ORANGE_D, anchor="start", maxw=gw - 20))
-    ox = gx + gw + 18
-    p.append(arrow([(gx + gw, cy + ch2 / 2), (ox - 1, cy + ch2 / 2)], color=G, sw=1.3))
-    p.append(R(ox, cy, ow, ch2, rx=6, fill="#F0F7F0", stroke=C_GREEN, sw=1.1))
+    p.append(connect(grpo, "r", outp, "l", color=G, sw=1.3))
+    p.append(R(*outp, rx=6, fill="#F0F7F0", stroke=C_GREEN, sw=1.1))
     p.append(t(ox + ow / 2, cy + 22, "output:", size=9.4, weight="bold", fill=C_GREEN_D, maxw=ow - 16))
     p.append(t(ox + ow / 2, cy + 36, "LoRA adapters", size=9.4, weight="bold", fill=C_GREEN_D, maxw=ow - 16))
     p.append(t(ox + ow / 2, cy + 56, "loaded by the policy", size=8.6, fill=C_SUB, maxw=ow - 16))
     p.append(t(ox + ow / 2, cy + 68, "at inference", size=8.6, fill=C_SUB, maxw=ow - 16))
     ny = cy + ch2 + 16
-    p.append(t(sfx, ny, "rollouts execute the real dispatcher - same code path as trace generation", size=8.4, fill=C_SUB, anchor="start", maxw=590))
-    p.append(t(sfx, ny + 12, "checkpoint selection on the dev split (test set evaluated once, at the end)", size=8.4, fill=C_SUB, anchor="start", maxw=590))
+    p.append(t(sfx, ny, "rollouts execute the real dispatcher - same code path as trace generation", size=8.4, fill=C_SUB, anchor="start", maxw=ox - sfx - 20))
+    p.append(t(sfx, ny + 12, "checkpoint selection on the dev split (test set evaluated once, at the end)", size=8.4, fill=C_SUB, anchor="start", maxw=ox - sfx - 20))
 
     # ---- row 3: stubs pointing at the agent-loop figure ----
-    y3 = y2 + h2 + 34
+    y3 = y2 + h2 + 40
     stub_h = 44
     ex, ew = 22, 270
-    p.append(R(ex, y3, ew, stub_h, rx=8, fill="#FAFAFA", stroke="#B5B5B5", sw=1.2))
+    qx, qw = 338, 280
+    ev = (ex, y3, ew, stub_h)
+    pol = (qx, y3, qw, stub_h)
+    p.append(R(*ev, rx=8, fill="#FAFAFA", stroke="#B5B5B5", sw=1.2))
     p.append(t(ex + ew / 2, y3 + 19, "Evaluation (agent-loop figure)", size=9.2, weight="bold", fill="#555555", maxw=ew - 16))
     p.append(t(ex + ew / 2, y3 + 33, "dev-split signal returns to training", size=8.4, fill=C_SUB, maxw=ew - 16))
-    p.append(arrow([(ex + ew / 2, y3), (ex + ew / 2, y2 + h2 + 1)], color=G, sw=1.4))
-    p.append(badge(6, ex + ew / 2, y3 - 17))
-    qx, qw = 338, 280
-    p.append(R(qx, y3, qw, stub_h, rx=8, fill="#FAFAFA", stroke="#B5B5B5", sw=1.2))
+    # arrow 6 runs up from the evaluation stub into the training frame
+    p.append(arrow([(ex + ew / 2, y3), (ex + ew / 2, y2 + h2)], color=G, sw=1.4))
+    p.append(badge(6, ex + ew / 2 + 16, y2 + h2 + 20))
+    p.append(R(*pol, rx=8, fill="#FAFAFA", stroke="#B5B5B5", sw=1.2))
     p.append(t(qx + qw / 2, y3 + 19, "Policy + tool loop (agent-loop figure)", size=9.2, weight="bold", fill="#555555", maxw=qw - 16))
     p.append(t(qx + qw / 2, y3 + 33, "adapters loaded, findings evaluated", size=8.4, fill=C_SUB, maxw=qw - 16))
-    p.append(arrow([(ox + ow / 2, cy + ch2), (ox + ow / 2, y3 - 1)], color="#7FA98B", sw=1.6))
-    p.append(badge(4, ox + ow / 2, y3 - 17))
+    p.append(connect(outp, "b", pol, "t", ob=ox + ow / 2 - qx, color=GR, sw=1.6))
+    p.append(badge(4, ox + ow / 2 + 16, y2 + h2 + 20))
     p.append(t(10, y3 + stub_h + 24, "numbered path: 1 data -> traces · 2 corpus -> SFT · 3 SFT -> GRPO · 4 adapters -> policy ·", size=8.4, fill=C_SUB, anchor="start", maxw=620))
     p.append(t(10, y3 + stub_h + 36, "5 findings -> eval (agent-loop figure) · 6 dev-split signal", size=8.4, fill=C_SUB, anchor="start", maxw=620))
     if warn:
@@ -780,6 +798,7 @@ def build_architecture_training(a):
 # ---------------------------------------------------------------------------
 # Figure 4: corpus composition (per-cohort, measured)
 # ---------------------------------------------------------------------------
+
 
 
 def _fmt_box(b, spaces=True):
