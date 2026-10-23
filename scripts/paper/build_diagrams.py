@@ -1255,8 +1255,9 @@ def build_pipeline(a):
     p.append(T(90, y1 + 154, "DENTEX + Tufts", size=10))
     p.append(T(90, y1 + 168, "expert labels (FDI)", size=10))
 
-    ym = y1 + h1 / 2
-    p.append(arrow([(170, ym), (196, ym)], color=G, sw=1.5))
+    ds_box = (10, y1, 160, h1)
+    loop_box = (200, y1, 430, h1)
+    p.append(connect(ds_box, "r", loop_box, "l", color=G, sw=1.5))
 
     # teacher loop (real tool-output pixels: full OPG, canonical crop, real
     # contralateral composite returned by tool_contralateral_compare)
@@ -1285,7 +1286,9 @@ def build_pipeline(a):
 
     # ---- row 2: verification -> verified corpus (right to left) -----------
     y2, h2 = y1 + h1 + 32, 128
-    p.append(arrow([(480, y1 + h1), (480, y2 - 2)], color=G, sw=1.5))
+    ver_box = (330, y2, 300, h2)
+    cor_box = (10, y2, 300, h2)
+    p.append(connect(loop_box, "b", ver_box, "t", oa=480 - loop_box[0], color=G, sw=1.5))
 
     p.append(R(330, y2, 300, h2, fill=C_GREEN_FILL, stroke=C_GREEN, sw=1.5))
     p.append(T(480, y2 + 24, "Verification", size=11.5, weight="bold"))
@@ -1296,7 +1299,7 @@ def build_pipeline(a):
     p.append(T(480, y2 + 108, "92 first-pass rejections,", size=9.4, fill=C_SUB))
     p.append(T(480, y2 + 120, "3 measured failure modes", size=9.4, fill=C_SUB))
 
-    p.append(arrow([(330, y2 + h2 / 2), (312, y2 + h2 / 2)], color=G, sw=1.5))
+    p.append(connect(ver_box, "l", cor_box, "r", color=G, sw=1.5))
 
     p.append(R(10, y2, 300, h2, fill=C_BLUE_FILL, stroke=C_BLUE, sw=1.5))
     p.append(T(160, y2 + 24, "Verified corpus", size=11.5, weight="bold"))
@@ -1308,19 +1311,22 @@ def build_pipeline(a):
 
     # ---- row 3: two-stage training -> policy -> eval ----------------------
     y3, h3 = y2 + h2 + 32, 148
-    p.append(arrow([(92, y2 + h2), (92, y3 - 2)], color=G, sw=1.5))
-    ym3 = y3 + h3 / 2
+    sft_box = (10, y3, 162, h3)
+    grpo_box = (194, y3, 214, h3)
+    pol_box = (430, y3, 90, h3)
+    eval_box = (542, y3, 88, h3)
+    p.append(connect(cor_box, "b", sft_box, "t", oa=sft_box[0] + sft_box[2] / 2 - cor_box[0], color=G, sw=1.5))
 
-    p.append(R(12, y3, 160, h3, fill=C_BLUE_FILL, stroke=C_BLUE, sw=1.5))
-    p.append(T(92, y3 + 24, "Stage 1 -- SFT", size=11.5, weight="bold"))
-    p.append(T(92, y3 + 44, "QLoRA on Qwen3.5-9B", size=10))
-    p.append(T(92, y3 + 66, "multi-turn trajectories", size=9.8))
-    p.append(T(92, y3 + 80, "interleave the real crops", size=9.8))
-    p.append(T(92, y3 + 94, "the tools produced;", size=9.8))
-    p.append(T(92, y3 + 108, "loss masked to", size=9.8))
-    p.append(T(92, y3 + 122, "assistant tokens", size=9.8))
+    p.append(R(*sft_box, fill=C_BLUE_FILL, stroke=C_BLUE, sw=1.5))
+    p.append(T(91, y3 + 24, "Stage 1 -- SFT", size=11.5, weight="bold"))
+    p.append(T(91, y3 + 44, "QLoRA on Qwen3.5-9B", size=10))
+    p.append(T(91, y3 + 66, "multi-turn trajectories", size=9.8))
+    p.append(T(91, y3 + 80, "interleave the real crops", size=9.8))
+    p.append(T(91, y3 + 94, "the tools produced;", size=9.8))
+    p.append(T(91, y3 + 108, "loss masked to", size=9.8))
+    p.append(T(91, y3 + 122, "assistant tokens", size=9.8))
 
-    p.append(arrow([(172, ym3), (192, ym3)], color=G, sw=1.5))
+    p.append(connect(sft_box, "r", grpo_box, "l", color=G, sw=1.5))
 
     p.append(R(194, y3, 214, h3, rx=8, fill="#FBF6F0", stroke="#DD8452", sw=1.5))
     p.append(T(301, y3 + 24, "Stage 2 -- GRPO", size=11.5, weight="bold"))
@@ -1332,7 +1338,7 @@ def build_pipeline(a):
     p.append(T(301, y3 + 122, "locate_tooth and nudge_crop", size=9.5, weight="bold", fill=C_RED))
     p.append(T(301, y3 + 135, "exempt from call cost", size=9.5, weight="bold", fill=C_RED))
 
-    p.append(arrow([(408, ym3), (428, ym3)], color=G, sw=1.5))
+    p.append(connect(grpo_box, "r", pol_box, "l", color=G, sw=1.5))
 
     p.append(R(430, y3, 90, h3, fill=C_GREEN_FILL, stroke=C_GREEN, sw=1.5))
     p.append(T(475, y3 + 24, "Policy", size=11.5, weight="bold"))
@@ -1340,7 +1346,7 @@ def build_pipeline(a):
     p.append(T(475, y3 + 62, "tool-use", size=9.6))
     p.append(T(475, y3 + 76, "agent", size=9.6))
 
-    p.append(arrow([(520, ym3), (540, ym3)], color=G, sw=1.5))
+    p.append(connect(pol_box, "r", eval_box, "l", color=G, sw=1.5))
 
     p.append(R(542, y3, 88, h3, fill=C_BLUE_FILL, stroke=C_BLUE, sw=1.5))
     p.append(T(586, y3 + 24, "Eval", size=11.5, weight="bold"))
