@@ -56,7 +56,7 @@ arguments the policy chose in those traces.
 | Script | Purpose |
 |---|---|
 | `generate_paper_assets.py` | Corpus stats, tool usage, nudge-vs-tier mechanism analysis, data figures, SVG→PDF conversion |
-| `build_diagrams.py` | Generates the eight composited diagrams (real radiograph assets embedded as base64 data URIs; canonical views rendered by `dental_agent.utils.canonical`; the real returned box trajectory from trace 624; corpus/dataset/grounding numbers from `assets_summary.json` and `docs/YOLO_CV_RESULTS.md`) and converts them to PDF; `--preview` also writes PNG renders to `scratch/preview` |
+| `build_diagrams.py` | Generates the sixteen composited diagrams (real radiograph assets embedded as base64 data URIs; canonical views rendered by `dental_agent.utils.canonical`; the real returned box trajectory from trace 624; corpus/dataset/grounding numbers from `assets_summary.json` and `docs/YOLO_CV_RESULTS.md`) and converts them to PDF; `--preview` also writes PNG renders to `scratch/preview` |
 | `audit_diagram_arrows.py` | Connector audit for the builder SVGs: every arrow must start and end on a box edge, stay orthogonal, and not cross text, cards or badges (diagram connectors are drawn with `connect()` in `diagram_common.py`); run after `build_diagrams.py` |
 | `verify_paper.py` | Static draft checks: labels, inputs, escaping, number consistency vs `assets_summary.json` |
 | `preview_figures.py` | PNG previews of every figure for visual verification (writes to `scratch/preview`) |
@@ -66,6 +66,98 @@ Requires the canonical trace files under `data/traces/` and the DENTEX/Tufts ima
 the example figure (paths default to this repo's layout). SVG→PDF conversion of the hand-authored
 diagram uses `svglib` (pip install svglib reportlab); matplotlib figures are emitted as both SVG
 and PDF directly.
+
+## Rebuilding the figures and the PDF
+
+Everything below is run from the **repository root** unless stated otherwise.
+
+### 1. One-time setup
+
+```bash
+pip install svglib reportlab pillow matplotlib numpy pypdfium2   # pypdfium2: only for PNG previews
+```
+
+A LaTeX distribution with `pdflatex` and `bibtex` is needed for step 4 (see *Compile* below).
+
+### 2. Rebuild every diagram (no private data needed)
+
+```bash
+python scripts/paper/build_diagrams.py            # SVG -> paper/figures/svg, PDF -> paper/figures/pdf
+python scripts/paper/build_diagrams.py --preview  # same, plus PNG renders in scratch/preview/
+```
+
+The sixteen diagrams are drawn by one builder function each (the `BUILDERS` dict in
+`scripts/paper/build_diagrams.py`) from the committed showcase assets
+(`figures/assets/showcase/`) and `assets_summary.json`; nothing is read from `data/`. The build
+is deterministic: running it on a clean checkout leaves the SVGs unchanged (the PDFs differ
+only by an embedded timestamp).
+
+### 3. Check them
+
+```bash
+python scripts/paper/audit_diagram_arrows.py   # connectors: edge-anchored, orthogonal, no crossings
+python scripts/paper/audit_diagram_text.py     # no label overflows its box or the canvas
+python scripts/paper/verify_paper.py           # labels, refs, numbers vs assets_summary.json
+```
+
+All three must be clean. `audit_diagram_arrows.py [fig_name ...]` accepts a substring to check
+one figure; `--strict` makes warnings fail too. It flags: arrow tips or tails off a box edge,
+tips entering a card, diagonal segments, arrows crossing text or cards, badges touching a shaft,
+shafts too short to show behind the head, and overlapping connectors.
+
+### 4. Compile the paper
+
+```bash
+cd paper
+pdflatex main && bibtex main && pdflatex main && pdflatex main
+```
+
+Expect zero `Overfull \hbox` warnings and no `Float too large`. Figures stay in their own
+section and none may fall after the references.
+
+### 5. What to commit
+
+`build_diagrams.py` rewrites **all** figure PDFs, and most differ from the committed copy only
+by a timestamp. Stage only the figures you actually changed:
+
+```bash
+git status --short
+git add paper/figures/svg/fig_X.svg paper/figures/pdf/fig_X.pdf scripts/paper/build_diagrams.py
+```
+
+`main.aux/.bbl/.blg/.out/.pdf` are tracked too; commit them only when you want the compiled
+paper in git.
+
+### Editing or adding a diagram
+
+1. Edit (or add) the builder function in `scripts/paper/build_diagrams.py`; register a new one
+   in `BUILDERS`. Use the shared primitives from `scripts/paper/diagram_common.py`
+   (`R` rect, `T`/`t` text, `L` line, `IMG` image, `badge`, icons, the `C_*`/`PILL_*` colours).
+   Wrap text with the `_checked(warn)` helper so the build prints any label that is wider than
+   its box.
+2. **Connect boxes with `connect(box_a, side, box_b, side, ...)`** (boxes are `(x, y, w, h)`
+   tuples, sides `"l" "r" "t" "b"`), never with hand-typed arrow coordinates. It anchors both
+   ends exactly on the edges and routes straight, Z or L orthogonal paths; use `oa=`/`ob=`
+   (distance from the box's left/top edge) to leave or enter off-centre, and `mid=` to choose
+   the gutter coordinate of a Z. `svglib` drops SVG markers, so arrowheads are explicit polygons
+   made by `arrow()`; there are no dashed connectors.
+3. Conventions that the audit enforces or relies on: gutters of at least ~40 units between
+   boxes that carry an arrow plus label; labels and numbered badges sit **beside** a shaft, not on
+   it; an input that comes from outside the figure gets a small source/sink box (see the
+   "training" boxes in `fig_architecture`) instead of a free end; a fan-out may start on a drawn
+   bus line; a displacement vector inside a schematic is `arrow(..., free="vector")`.
+4. Rebuild, run the three checks, look at the PNG preview, and update the caption in
+   `sections/*.tex` if the figure's panels, colours or numbers changed (`verify_paper.py` checks
+   `\cref` pairs and numbers, not whether prose matches the picture).
+
+### Regenerating the inputs (needs data that is not in the repository)
+
+| What | Command | Needs |
+|---|---|---|
+| Showcase radiographs, crops, nudge chains, tool tiles | `python scripts/paper/prepare_showcase.py --pairs <send_to_claude dir> --traces <train_cot_traces.jsonl>` | the curated pairs and the training traces (see *Figure imagery*) |
+| Corpus tables, `assets_summary.json`, matplotlib plots (`fig_tool_usage`, `fig_nudge_tier`) | `python scripts/paper/generate_paper_assets.py --traces-dir data/traces` | `data/traces/` (add `--dentex-*`/`--tufts-radiographs` only for the perturbation example, which is no longer in the paper) |
+
+After either, rerun steps 2-4.
 
 ## Compile
 
@@ -77,8 +169,9 @@ cd paper
 pdflatex main && bibtex main && pdflatex main && pdflatex main
 ```
 
-Packages used are standard: `graphicx, booktabs, natbib, hyperref, cleveref, xcolor, enumitem,
-caption, microtype, placeins`.
+Packages used are standard (`lmodern, microtype, amsmath, graphicx, booktabs, multirow, xcolor,
+enumitem, caption, natbib, hyperref, cleveref, placeins`; on a minimal TeX Live install `lmodern`
+and `texlive-latex-extra` are the usual missing ones).
 
 ## Rules for editing
 
@@ -86,7 +179,8 @@ caption, microtype, placeins`.
    script instead. The sixteen composited diagrams are generated by `build_diagrams.py` (edit that
    script, then rerun it; it also refreshes the PDFs via `convert_diagrams`). Keep diagram
    canvases narrow (about 640-780 units) so labels print at 5-7 pt at `\linewidth`. After
-   editing a diagram run `python scripts/paper/audit_diagram_text.py` (exit 1 if any label overflows its box).
+   editing a diagram run `python scripts/paper/audit_diagram_text.py` (exit 1 if any label overflows its box)
+   and `python scripts/paper/audit_diagram_arrows.py` (exit 1 on any floating, diagonal or crossing connector).
 2. **Pending results** are marked with `\todo{...}` (red). Fill them from
    `scripts/aggregate_eval.py` outputs over `data/evaluations/*` only — never from `docs/*`
    dashboards, which may be stale.
