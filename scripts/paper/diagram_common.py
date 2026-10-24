@@ -95,7 +95,8 @@ def IMG(x, y, w, h, b64):
 def arrow(points, color="#666666", sw=1.5, dash=None, free=""):
     """Orthogonal polyline ending in an explicit triangular arrowhead.
 
-    ``free`` ("tail", "tip" or "both") marks an end that is deliberately not on a
+    ``free`` ("tail", "tip", "both", or "vector" for a displacement vector drawn inside
+    a schematic) marks an end that is deliberately not on a
     box (written as an SVG comment that audit_diagram_arrows.py reads); prefer a
     small source/sink box and connect() instead.
 

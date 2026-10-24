@@ -169,19 +169,21 @@ def build_traces_comparison(a):
     warn: list[str] = []
     t = _checked(warn)
     p = []
-    by0, bh = 10, 468
+    by0, bh = 10, 486
     # ---------------- left: no-tools trace ----------------
     bx0, bw = 10, 254
     bcx = bx0 + bw / 2
     p.append(R(bx0, by0, bw, bh, fill="#FBFBFB", stroke="#BBBBBB", sw=1.2))
     p.append(t(bcx, by0 + 22, "No-tools trace (baseline)", size=11.5, weight="bold", fill="#444444", maxw=bw - 16))
     p.append(t(bcx, by0 + 36, "1 turn · 0 tool calls · hindsight description", size=8.8, fill="#666666", maxw=bw - 16))
-    p.append(R(bx0 + 12, by0 + 46, bw - 24, 40, fill="#E8EEF7", stroke=C_BLUE, sw=1.1))
+    user_box = (bx0 + 12, by0 + 46, bw - 24, 40)
+    p.append(R(*user_box, fill="#E8EEF7", stroke=C_BLUE, sw=1.1))
     p.append(t(bcx, by0 + 62, "user: panoramic X-ray, tool-free prompt", size=9.0, weight="bold", fill=C_BLUE_D, maxw=bw - 36))
     p.append(t(bcx, by0 + 77, "“identify any abnormal teeth and diagnose”", size=8.6, fill="#444444", maxw=bw - 36))
-    p.append(arrow([(bcx, by0 + 86), (bcx, by0 + 98)], color="#888888", sw=1.3))
-    tb_y, tb_h = by0 + 100, 218
-    p.append(R(bx0 + 12, tb_y, bw - 24, tb_h, fill="#FFFFFF", stroke="#CCCCCC", sw=1.1))
+    tb_y, tb_h = by0 + 108, 218
+    thought_box = (bx0 + 12, tb_y, bw - 24, tb_h)
+    p.append(R(*thought_box, fill="#FFFFFF", stroke="#CCCCCC", sw=1.1))
+    p.append(connect(user_box, "b", thought_box, "t", color="#888888", sw=1.3))
     p.append(t(bcx, tb_y + 19, "thought (single turn)", size=9.8, weight="bold", maxw=bw - 36))
     paras = [
         "“On systematic review of this panoramic radiograph, I begin by orienting to the patient’s right and left sides as marked. The image shows a mixed dentition with multiple developing permanent teeth ...",
@@ -197,11 +199,12 @@ def build_traces_comparison(a):
     for ln in ("One-shot description from the full image:", "no crop, no second look, nothing checkable", "against the pixels it actually saw."):
         p.append(t(bx0 + 24, yy, ln, size=8.4, fill="#666666", anchor="start", style="italic", maxw=bw - 46))
         yy += 12
-    fy = tb_y + tb_h + 12
-    p.append(arrow([(bcx, tb_y + tb_h), (bcx, fy)], color="#888888", sw=1.3))
-    p.append(R(bx0 + 12, fy + 2, bw - 24, 42, fill="#F2F8F2", stroke=C_GREEN, sw=1.3))
-    p.append(t(bcx, fy + 19, "final answer", size=9.8, weight="bold", fill=C_GREEN_D, maxw=bw - 36))
-    p.append(t(bcx, fy + 35, "Q3T4 · Caries · confidence 0.82", size=9.0, fill="#333333", maxw=bw - 36))
+    fy = tb_y + tb_h + 22
+    ans_box = (bx0 + 12, fy, bw - 24, 42)
+    p.append(R(*ans_box, fill="#F2F8F2", stroke=C_GREEN, sw=1.3))
+    p.append(connect(thought_box, "b", ans_box, "t", color="#888888", sw=1.3))
+    p.append(t(bcx, fy + 17, "final answer", size=9.8, weight="bold", fill=C_GREEN_D, maxw=bw - 36))
+    p.append(t(bcx, fy + 33, "Q3T4 · Caries · confidence 0.82", size=9.0, fill="#333333", maxw=bw - 36))
     ty_ = fy + 54
     th_ = by0 + bh - ty_ - 12
     p.append(R(bx0 + 12, ty_, bw - 24, th_, fill="#FBF6F0", stroke="#DD8452", sw=1.1))
@@ -237,7 +240,7 @@ def build_traces_comparison(a):
         p.append(t(cx0 + 24, ry + 19, turn, size=8.8, weight="bold", fill=tcol, anchor="start", maxw=36))
         p.append(t(cx0 + 64, ry + 13, name, size=9.4, weight="bold", fill=C_TXT, anchor="start", maxw=cw0 - 88))
         p.append(t(cx0 + 64, ry + 25, sub, size=8.4, fill="#555555", anchor="start", maxw=cw0 - 88))
-        ry += 35
+        ry += 37
     fa = ry + 2
     p.append(R(cx0 + 12, fa, cw0 - 24, 44, rx=6, fill="#F2F8F2", stroke=C_GREEN, sw=1.4))
     p.append(t(ccx, fa + 19, "final answer (turn 22) · Q3T4 · Caries · conf 0.82", size=9.4, weight="bold", fill=C_GREEN_D, maxw=cw0 - 36))
@@ -307,7 +310,8 @@ def build_trace_generation(a):
     _band(p, t, ya, 34 + cha + 12 + 112, C_BLUE_FILL, "#C7D3E8", C_BLUE, "STAGE 1 · GENERATION", 176, "provider family A: generators", C_BLUE_D)
 
     ix, iw = 20, 142
-    p.append(R(ix, ca, iw, cha))
+    lab_box = (ix, ca, iw, cha)
+    p.append(R(*lab_box))
     _card_title(p, t, ix, ca, iw, icon_db(ix + 12, ca + 10), "Expert labels")
     fl_ = _showcase()["three_step"]
     fw_, fh_ = _fit(*fl_["meta"]["image_size"], 122, 62)
@@ -320,28 +324,30 @@ def build_trace_generation(a):
     p.append(t(ix + 71, ca + 161, "ground truth", size=8.6, weight="bold", fill=C_GREEN_D, maxw=112))
     p.append(t(ix + 71, ca + 173, "per image", size=8.6, weight="bold", fill=C_GREEN_D, maxw=112))
     p.append(t(ix + 71, ca + 186, f"FDI {fl_['meta']['focus']['fdi']} · {fl_['meta']['focus']['diagnosis']} · bbox", size=8.2, fill=C_GREEN_D, maxw=112))
-    p.append(arrow([(ix + iw, ca + 110), (ix + iw + 16, ca + 110)], color=G, sw=1.5))
-
-    lx, lw = ix + iw + 18, 440
-    p.append(R(lx, ca, lw, cha))
+    lx, lw = ix + iw + 22, 436
+    loop_box = (lx, ca, lw, cha)
+    p.append(R(*loop_box))
+    p.append(connect(lab_box, "r", loop_box, "l", oa=110, ob=110, color=G, sw=1.5))
     p.append(t(lx + 12, ca + 22, "Ground-truth-directed LangGraph loop", size=10.2, weight="bold", anchor="start", maxw=lw - 24))
     py = ca + 32
-    for off, wd, label in ((12, 58, "thought"), (82, 68, "tool call"), (162, 82, "observation")):
+    pills = []
+    for off, wd, label in ((12, 56, "thought"), (88, 66, "tool call"), (174, 78, "observation")):
+        pills.append((lx + off, py, wd, 22))
         p.append(R(lx + off, py, wd, 22, rx=11, fill="#EEF2FA", stroke="#C7D3E8", sw=1.0))
         p.append(t(lx + off + wd / 2, py + 15, label, size=8.6, fill=C_BLUE_D, maxw=wd - 8))
-    p.append(arrow([(lx + 71, py + 11), (lx + 81, py + 11)], color=G, sw=1.1))
-    p.append(arrow([(lx + 151, py + 11), (lx + 161, py + 11)], color=G, sw=1.1))
-    p.append(arrow([(lx + 203, py + 22), (lx + 203, py + 42), (lx + 41, py + 42), (lx + 41, py + 23)], color="#B9C6DC", sw=1.2))
+    p.append(connect(pills[0], "r", pills[1], "l", color=G, sw=1.1))
+    p.append(connect(pills[1], "r", pills[2], "l", color=G, sw=1.1))
+    p.append(connect(pills[2], "b", pills[0], "b", mid=py + 42, color="#B9C6DC", sw=1.2))
     p.append(t(lx + 122, py + 37, "repeat every turn", size=8.4, fill="#4F6690", maxw=140))
     # zoom monitor (right of the pills)
-    mx, my, mw, mh = lx + 252, ca + 30, 180, 94
+    mx, my, mw, mh = lx + 262, ca + 30, 170, 94
     cwid, chid = fl_["meta"]["focus"]["crop_before_size"]
     ctw = 64 * cwid / chid
     p.append(R(mx, my, mw, mh, rx=4, fill="#FAFBFD", stroke="#DDDDDD", sw=1.0))
     p.append(IMG(mx + 10, my + 8, ctw, 64, fl_["crop_before"]))
     p.append(R(mx + 10, my + 8, ctw, 64, rx=1, stroke="#888888", sw=0.8, fill="none"))
     p.append(t(mx + mw / 2, my + 32, "nudge", size=8.2, fill=C_ORANGE_D, maxw=44))
-    p.append(arrow([(mx + 10 + ctw + 8, my + 44), (mx + mw - 10 - ctw - 8, my + 44)], color=C_ORANGE, sw=1.6))
+    p.append(connect((mx + 10, my + 8, ctw, 64), "r", (mx + mw - 10 - ctw, my + 8, ctw, 64), "l", color=C_ORANGE, sw=1.6))
     p.append(IMG(mx + mw - 10 - ctw, my + 8, ctw, 64, fl_["crop_after"]))
     p.append(R(mx + mw - 10 - ctw, my + 8, ctw, 64, rx=1, stroke="#888888", sw=0.8, fill="none"))
     p.append(t(mx + mw / 2, my + 86, "before / after (real episode)", size=8.2, fill="#666666", maxw=mw - 8))
@@ -356,13 +362,14 @@ def build_trace_generation(a):
     qy = ca + 172
     p.append(R(lx + 12, qy, lw - 24, 40, rx=6, fill=C_ORANGE_L, stroke="#F0B27A", sw=1.1))
     p.append(t(lx + 22, qy + 16, "tiered display perturbation, independent of the true box:", size=8.6, fill=C_ORANGE_D, anchor="start", maxw=lw - 44))
-    p.append(t(lx + 22, qy + 30, "45% small · 25% big · 30% none - keeps accept-vs-nudge demonstrable", size=8.6, fill=C_ORANGE_D, anchor="start", maxw=lw - 44))
+    p.append(t(lx + 22, qy + 30, "45% none · 25% small · 30% big - keeps accept-vs-nudge demonstrable", size=8.6, fill=C_ORANGE_D, anchor="start", maxw=lw - 44))
 
     # unverified pool (row 2)
     uy = ca + cha + 26
     uh = 96
-    p.append(arrow([(lx + lw / 2, ca + cha), (lx + lw / 2, uy - 1)], color=G, sw=1.5))
-    p.append(R(20, uy, 600, uh))
+    pool_box = (20, uy, 600, uh)
+    p.append(R(*pool_box))
+    p.append(connect(loop_box, "b", pool_box, "t", ob=lx + lw / 2 - 20, color=G, sw=1.5))
     _card_title(p, t, 20, uy, 600, icon_doc(32, uy + 10), "Unverified trace pool")
     p.append(R(32, uy + 34, 300, 52, rx=4, fill="#F7F8FA", stroke="#E3E3E3", sw=1.0))
     f_ = fl_["meta"]["focus"]
@@ -1148,18 +1155,21 @@ def build_grounding_cv(a):
 def build_input_geometry(a):
     """Image-input geometry on a 640-unit canvas (labels print at ~6.3-7.5 pt).
 
-    TPU views sit in one row (FULL | CROP -> COMPARE) so the panel stays
-    short; the GPU branch is a dashed route down the left margin.
+    TPU views sit in one row (FULL | CROP -> COMPARE) so the panel stays short.
+    The GPU branch runs down a 12-unit left margin: panels start at x = 30 so that
+    route has two legs long enough to read as a deliberate elbow.
     """
     W = 640
     warn: list[str] = []
     t = _checked(warn)
     p = []
+    X0, XW = 30, 600  # left edge / width shared by the native image row, panels and the decision band
     p.append(TC(W / 2, 22, "Image-input geometry: two execution targets, one invariant", size=13, weight="bold"))
     p.append(t(W / 2, 38, "canonical views rendered by the project's own geometry module from DENTEX image 624; the target choice is deliberately open", size=8.8, fill=C_SUB, maxw=620))
 
     # native input
-    nx, ny, nw, nh = 16, 54, 270, 127
+    nx, ny, nw, nh = X0, 54, 270, 127
+    nat_box = (nx, ny, nw, nh)
     p.append(IMG(nx, ny, nw, nh, a["opg"]))
     p.append(R(nx, ny, nw, nh, rx=3, stroke="#666666", sw=1.2, fill="none"))
     sx, sy = nw / a["native_w"], nh / a["native_h"]
@@ -1167,63 +1177,69 @@ def build_input_geometry(a):
     my = ny + CROP_FINAL_REGION[1] * sy
     mw = (CROP_FINAL_REGION[2] - CROP_FINAL_REGION[0]) * sx
     mh = (CROP_FINAL_REGION[3] - CROP_FINAL_REGION[1]) * sy
-    p.append(R(mx, my, mw, mh, rx=0, fill="none", stroke=C_ORANGE, sw=1.6))
-    p.append(t(302, 90, "native · 2,808 × 1,316 px", size=9.8, weight="bold", anchor="start", maxw=320))
-    p.append(t(302, 105, "~17k visual tokens if fed as-is", size=8.8, fill=C_SUB, anchor="start", maxw=320))
+    mark_box = (mx, my, mw, mh)
+    p.append(R(*mark_box, rx=0, fill="none", stroke=C_ORANGE, sw=1.6))
+    p.append(t(nx + nw + 16, 90, "native · 2,808 × 1,316 px", size=9.8, weight="bold", anchor="start", maxw=300))
+    p.append(t(nx + nw + 16, 105, "~17k visual tokens if fed as-is", size=8.8, fill=C_SUB, anchor="start", maxw=300))
 
     # TPU panel (canonical + static slots)
     ty0, th = 210, 296
-    p.append(arrow([(nx + nw / 2, ny + nh), (nx + nw / 2, ty0 - 2)], color="#999999", sw=1.5))
-    p.append(R(16, ty0, 614, th, fill=C_BLUE_FILL, stroke="#C7D3E8", sw=1.2))
-    p.append(R(28, ty0 + 10, 92, 20, rx=10, fill=C_BLUE, stroke="none", sw=0))
-    p.append(t(74, ty0 + 24, "TPU v5e-8", size=9.0, weight="bold", fill="#FFFFFF"))
-    p.append(t(130, ty0 + 24, "canonical resizing + static slot padding (required)", size=8.6, fill=C_BLUE_D, anchor="start", maxw=240))
+    tpu_box = (X0, ty0, XW, th)
+    p.append(R(*tpu_box, fill=C_BLUE_FILL, stroke="#C7D3E8", sw=1.2))
+    p.append(connect(nat_box, "b", tpu_box, "t", oa=nw / 2, ob=nw / 2, color="#999999", sw=1.5))
+    ix0 = X0 + 12
+    p.append(R(ix0, ty0 + 10, 92, 20, rx=10, fill=C_BLUE, stroke="none", sw=0))
+    p.append(t(ix0 + 46, ty0 + 24, "TPU v5e-8", size=9.0, weight="bold", fill="#FFFFFF"))
+    p.append(t(ix0 + 102, ty0 + 24, "canonical resizing + static slot padding (required)", size=8.6, fill=C_BLUE_D, anchor="start", maxw=240))
 
     iy = ty0 + 62
-    p.append(t(28, iy - 6, "FULL · 1536 × 768 · 1,152 tokens", size=8.6, weight="bold", fill=C_BLUE_D, anchor="start", maxw=290))
-    p.append(IMG(28, iy, 280, 140, a["canon_full"]))
-    p.append(R(28, iy, 280, 140, rx=2, stroke="#666666", sw=1.0, fill="none"))
-    p.append(t(324, iy + 188, "CROP · 256 × 384 · 96 tokens", size=8.6, weight="bold", fill=C_BLUE_D, anchor="start", maxw=134))
-    p.append(IMG(324, iy, 116, 174, a["canon_crop"]))
-    p.append(R(324, iy, 116, 174, rx=2, stroke="#666666", sw=1.0, fill="none"))
-    p.append(t(462, iy - 6, "COMPARE · 512 × 384 · 192 tokens", size=8.6, weight="bold", fill=C_BLUE_D, anchor="start", maxw=160))
-    p.append(IMG(462, iy, 160, 120, a["canon_compare"]))
-    p.append(R(462, iy, 160, 120, rx=2, stroke="#666666", sw=1.0, fill="none"))
+    full_box = (ix0, iy, 272, 136)
+    crop_box = (ix0 + 288, iy, 116, 174)
+    cmp_box = (ix0 + 424, iy, 150, 112.5)
+    p.append(t(ix0, iy - 6, "FULL · 1536 × 768 · 1,152 tokens", size=8.6, weight="bold", fill=C_BLUE_D, anchor="start", maxw=270))
+    p.append(IMG(*full_box, a["canon_full"]))
+    p.append(R(*full_box, rx=2, stroke="#666666", sw=1.0, fill="none"))
+    p.append(t(crop_box[0], iy + 188, "CROP · 256 × 384 · 96 tokens", size=8.6, weight="bold", fill=C_BLUE_D, anchor="start", maxw=134))
+    p.append(IMG(*crop_box, a["canon_crop"]))
+    p.append(R(*crop_box, rx=2, stroke="#666666", sw=1.0, fill="none"))
+    p.append(t(cmp_box[0], iy - 6, "COMPARE · 512 × 384 · 192 tokens", size=8.6, weight="bold", fill=C_BLUE_D, anchor="start", maxw=150))
+    p.append(IMG(*cmp_box, a["canon_compare"]))
+    p.append(R(*cmp_box, rx=2, stroke="#666666", sw=1.0, fill="none"))
     # the CROP view feeds the COMPARE composite (real tool output)
-    p.append(arrow([(440, iy + 60), (460, iy + 60)], color="#999999", sw=1.3))
-    # leader: the marked crop on the native image feeds the CROP view
-    lx = 382
-    p.append(arrow([(mx + mw, my + mh / 2), (lx, my + mh / 2), (lx, iy - 1)], color=C_ORANGE, sw=1.3))
+    p.append(connect(crop_box, "r", cmp_box, "l", oa=56, ob=56, color="#999999", sw=1.3))
+    # leader: the marked crop on the native image feeds the CROP view (right out of the mark, then down)
+    p.append(connect(mark_box, "r", crop_box, "t", color=C_ORANGE, sw=1.3))
 
-    p.append(t(28, iy + 206, "static slots: 5 FULL + 10 CROP + 4 COMPARE = 19 slots = 7,488 vision tokens -", size=8.8, fill=C_BLUE_D, anchor="start", maxw=590))
-    p.append(t(28, iy + 219, "one XLA graph, no recompilation", size=8.8, fill=C_BLUE_D, anchor="start", maxw=590))
+    p.append(t(ix0, iy + 206, "static slots: 5 FULL + 10 CROP + 4 COMPARE = 19 slots = 7,488 vision tokens -", size=8.8, fill=C_BLUE_D, anchor="start", maxw=XW - 24))
+    p.append(t(ix0, iy + 219, "one XLA graph, no recompilation", size=8.8, fill=C_BLUE_D, anchor="start", maxw=XW - 24))
 
     # GPU panel
     gy0, gh = ty0 + th + 12, 108
-    p.append(R(16, gy0, 614, gh, fill="#F7F8FA", stroke="#BBBBBB", sw=1.2))
-    p.append(R(28, gy0 + 10, 56, 20, rx=10, fill=PILL_GREY, stroke="none", sw=0))
-    p.append(t(56, gy0 + 24, "GPU", size=9.0, weight="bold", fill="#FFFFFF"))
-    p.append(t(618, gy0 + 24, "runs so far: original images, dynamic shapes", size=8.6, fill="#555555", anchor="end", maxw=470))
-    p.append(t(28, gy0 + 48, "GPU runs so far feed native images with dynamic padding; a --canonical-resize flag", size=8.8, anchor="start", maxw=590))
-    p.append(t(28, gy0 + 61, "exists for the same views - the final choice is pending the first GPU run", size=8.8, anchor="start", maxw=590))
-    cx = 28
+    gpu_box = (X0, gy0, XW, gh)
+    p.append(R(*gpu_box, fill="#F7F8FA", stroke="#BBBBBB", sw=1.2))
+    p.append(R(ix0, gy0 + 10, 56, 20, rx=10, fill=PILL_GREY, stroke="none", sw=0))
+    p.append(t(ix0 + 28, gy0 + 24, "GPU", size=9.0, weight="bold", fill="#FFFFFF"))
+    p.append(t(X0 + XW - 12, gy0 + 24, "runs so far: original images, dynamic shapes", size=8.6, fill="#555555", anchor="end", maxw=470))
+    p.append(t(ix0, gy0 + 48, "GPU runs so far feed native images with dynamic padding; a --canonical-resize flag", size=8.8, anchor="start", maxw=XW - 24))
+    p.append(t(ix0, gy0 + 61, "exists for the same views - the final choice is pending the first GPU run", size=8.8, anchor="start", maxw=XW - 24))
+    cx = ix0
     for cw, label in ((126, "RTX 4090 · QLoRA"), (118, "RTX Pro 6000"), (100, "A100 · bf16")):
         p.append(R(cx, gy0 + 74, cw, 20, rx=10, fill="#FFFFFF", stroke="#BBBBBB", sw=1.0))
         p.append(t(cx + cw / 2, gy0 + 88, label, size=8.4, fill="#555555", maxw=cw - 8))
         cx += cw + 8
-    # branch to the GPU target runs down the left margin (dashed)
-    p.append(arrow([(nx, ny + nh / 2), (6, ny + nh / 2), (6, gy0 + gh / 2), (14, gy0 + gh / 2)], color="#999999", sw=1.5))
+    # branch to the GPU target: out of the native image's left edge, down the 12-unit margin, into the panel
+    p.append(connect(nat_box, "l", gpu_box, "l", ob=gh / 2, mid=12, color="#999999", sw=1.5))
 
     # decision band
     dy0 = gy0 + gh + 12
-    p.append(R(10, dy0, 620, 104, rx=8, fill=C_ORANGE_L, stroke="#F0B27A", sw=1.2))
-    dx = 22
-    p.append(t(dx, dy0 + 18, "OPEN DECISION - execution target: GPU (RTX 4090 / RTX Pro 6000 / A100) vs TPU v5e-8;", size=9.0, weight="bold", fill=C_ORANGE_D, anchor="start", maxw=596))
-    p.append(t(dx, dy0 + 30, "to be settled by the first GPU run", size=9.0, weight="bold", fill=C_ORANGE_D, anchor="start", maxw=596))
-    p.append(t(dx, dy0 + 50, "shared invariant: tools always execute on the native image · evaluation runs at original size ·", size=8.6, fill=C_ORANGE_D, anchor="start", maxw=596))
-    p.append(t(dx, dy0 + 62, "SFT, GRPO and evaluation use the same setting", size=8.6, fill=C_ORANGE_D, anchor="start", maxw=596))
-    p.append(t(dx, dy0 + 82, "TPU padding changes no gradients: the padded tail carries labels = -100 and attention_mask = 0", size=8.4, fill=C_ORANGE_D, anchor="start", maxw=596))
-    p.append(t(dx, dy0 + 94, "(verified against the reference implementation)", size=8.4, fill=C_ORANGE_D, anchor="start", maxw=596))
+    p.append(R(X0, dy0, XW, 104, rx=8, fill=C_ORANGE_L, stroke="#F0B27A", sw=1.2))
+    dx = X0 + 12
+    p.append(t(dx, dy0 + 18, "OPEN DECISION - execution target: GPU (RTX 4090 / RTX Pro 6000 / A100) vs TPU v5e-8;", size=9.0, weight="bold", fill=C_ORANGE_D, anchor="start", maxw=XW - 24))
+    p.append(t(dx, dy0 + 30, "to be settled by the first GPU run", size=9.0, weight="bold", fill=C_ORANGE_D, anchor="start", maxw=XW - 24))
+    p.append(t(dx, dy0 + 50, "shared invariant: tools always execute on the native image · evaluation runs at original size ·", size=8.6, fill=C_ORANGE_D, anchor="start", maxw=XW - 24))
+    p.append(t(dx, dy0 + 62, "SFT, GRPO and evaluation use the same setting", size=8.6, fill=C_ORANGE_D, anchor="start", maxw=XW - 24))
+    p.append(t(dx, dy0 + 82, "TPU padding changes no gradients: the padded tail carries labels = -100 and attention_mask = 0", size=8.4, fill=C_ORANGE_D, anchor="start", maxw=XW - 24))
+    p.append(t(dx, dy0 + 94, "(verified against the reference implementation)", size=8.4, fill=C_ORANGE_D, anchor="start", maxw=XW - 24))
 
     if warn:
         print("  input_geometry text-fit warnings:\n   " + "\n   ".join(warn))
@@ -1424,13 +1440,13 @@ def build_concept(a):
     cw_a = 128
     hh = context(22, iy, cw_a, False)
     p.append(t(22, iy + hh + 14, "returned box (blue), expert box (green)", size=8.2, fill=C_SUB, anchor="start", maxw=190))
-    p.append(arrow([(cw_a + 28, iy + hh / 2), (cw_a + 52, iy + hh / 2)], color=G, sw=1.5))
     x_c = cw_a + 58
     ww = crop(x_c, iy + 6, 120, "crop_before")
+    p.append(connect((22, iy, cw_a, hh), "r", (x_c, iy + 6, ww, 120), "l", ob=hh / 2 - 6, color=G, sw=1.5))
     p.append(t(x_c, iy + 148, "crop of the returned box", size=8.2, fill=C_SUB, anchor="start", maxw=150))
-    p.append(arrow([(x_c + ww + 8, iy + 66), (x_c + ww + 30, iy + 66)], color=G, sw=1.5))
     bx0 = x_c + ww + 36
     p.append(R(bx0, iy + 4, 618 - bx0, 128, rx=6, fill="#FFFFFF", stroke="#CCCCCC", sw=1.1))
+    p.append(connect((x_c, iy + 6, ww, 120), "r", (bx0, iy + 4, 618 - bx0, 128), "l", oa=60, ob=62, color=G, sw=1.5))
     tw = 618 - bx0 - 20
     p.append(t(bx0 + 12, iy + 26, "The crop looks authoritative.", size=9.6, weight="bold", anchor="start", maxw=tw))
     p.append(t(bx0 + 12, iy + 44, "Every later observation is built on", size=8.8, anchor="start", maxw=tw))
@@ -1447,23 +1463,23 @@ def build_concept(a):
     iy = yb + 36
     hh = context(22, iy, cw_a, True)
     p.append(t(22, iy + hh + 14, "same episode; box corrected (orange)", size=8.2, fill=C_SUB, anchor="start", maxw=190))
-    p.append(arrow([(cw_a + 28, iy + hh / 2), (cw_a + 52, iy + hh / 2)], color=G, sw=1.5))
     ch_ = 104
     w1 = crop(x_c, iy + 6, ch_, "crop_before")
+    p.append(connect((22, iy, cw_a, hh), "r", (x_c, iy + 6, w1, ch_), "l", ob=hh / 2 - 6, color=G, sw=1.5))
     p.append(t(x_c, iy + 126, "inspect: “... about one arch", size=8.2, fill=C_SUB, anchor="start", maxw=130))
     p.append(t(x_c, iy + 138, "too high”", size=8.2, fill=C_SUB, anchor="start", maxw=130))
-    ax0 = x_c + w1 + 8
-    x_f = ax0 + 104
-    p.append(arrow([(ax0, iy + 58), (x_f - 8, iy + 58)], color=C_ORANGE, sw=2.0))
-    p.append(t((ax0 + x_f - 8) / 2, iy + 40, "nudge_crop × 1", size=9.2, weight="bold", fill=C_ORANGE_D, maxw=x_f - 8 - ax0))
-    a0 = f["nudge_args"][0]
-    p.append(t((ax0 + x_f - 8) / 2, iy + 76, f"dx {a0['dx_frac']:+.2f} · dy {a0['dy_frac']:+.2f}".replace("-", "−"), size=8.4, fill=C_ORANGE_D, maxw=x_f - 8 - ax0))
-    p.append(t((ax0 + x_f - 8) / 2, iy + 94, f"IoU {f['iou_before']:.2f} → {f['iou_after']:.2f}", size=8.8, weight="bold", fill=C_GREEN_D, maxw=x_f - 8 - ax0))
+    ax0 = x_c + w1
+    x_f = ax0 + 112
     w2 = crop(x_f, iy + 6, ch_, "crop_after")
+    p.append(connect((x_c, iy + 6, w1, ch_), "r", (x_f, iy + 6, w2, ch_), "l", color=C_ORANGE, sw=2.0))
+    p.append(t((ax0 + x_f) / 2, iy + 40, "nudge_crop × 1", size=9.2, weight="bold", fill=C_ORANGE_D, maxw=x_f - ax0 - 6))
+    a0 = f["nudge_args"][0]
+    p.append(t((ax0 + x_f) / 2, iy + 76, f"dx {a0['dx_frac']:+.2f} · dy {a0['dy_frac']:+.2f}".replace("-", "−"), size=8.4, fill=C_ORANGE_D, maxw=x_f - ax0 - 6))
+    p.append(t((ax0 + x_f) / 2, iy + 94, f"IoU {f['iou_before']:.2f} → {f['iou_after']:.2f}", size=8.8, weight="bold", fill=C_GREEN_D, maxw=x_f - ax0 - 6))
     p.append(t(x_f, iy + 126, "re-inspect: after nudge_crop", size=8.2, fill=C_SUB, anchor="start", maxw=140))
-    p.append(arrow([(x_f + w2 + 8, iy + 58), (x_f + w2 + 26, iy + 58)], color=G, sw=1.5))
     qx = x_f + w2 + 32
     p.append(R(qx, iy + 14, 618 - qx, 92, rx=6, fill="#F2F8F2", stroke=C_GREEN, sw=1.3))
+    p.append(connect((x_f, iy + 6, w2, ch_), "r", (qx, iy + 14, 618 - qx, 92), "l", oa=52, ob=44, color=G, sw=1.5))
     qw = 618 - qx - 16
     fa = next(x for x in [{"q": 4, "pos": 8, "dx": "Impacted tooth", "conf": 0.92}])
     p.append(t(qx + 10, iy + 34, "final answer", size=9.4, weight="bold", fill=C_GREEN_D, anchor="start", maxw=qw))
@@ -1705,11 +1721,11 @@ def build_design(a):
     # H2 (RL) horizontal arrows, H1 (tools) vertical arrows
     for ry in (r1y, r2y):
         ymid = ry + ch / 2
-        p.append(arrow([(c1x + cw, ymid), (c2x - 2, ymid)], color=C_ORANGE, sw=1.8))
+        p.append(connect((c1x, ry, cw, ch), "r", (c2x, ry, cw, ch), "l", color=C_ORANGE, sw=1.8))
         p.append(t((c1x + cw + c2x) / 2, ymid - 7, "H2: RL", size=8.8, weight="bold", fill=C_ORANGE_D, maxw=62))
     for cx in (c1x, c2x):
         xm = cx + cw / 2
-        p.append(arrow([(xm, r1y + ch), (xm, r2y - 2)], color=C_BLUE, sw=1.8))
+        p.append(connect((cx, r1y, cw, ch), "b", (cx, r2y, cw, ch), "t", color=C_BLUE, sw=1.8))
         p.append(t(xm + 8, (r1y + ch + r2y) / 2 + 4, "H1: tools", size=8.8, weight="bold", fill=C_BLUE_D, anchor="start", maxw=70))
 
     # references (right)
@@ -1729,7 +1745,7 @@ def build_design(a):
     p.append(t(rx_ + rw_ / 2, r2y + 50, "AP 0.372 · AP50 0.601", size=8.8, maxw=rw_ - 12))
     p.append(t(rx_ + rw_ / 2, r2y + 63, "AR 0.653", size=8.8, maxw=rw_ - 12))
     p.append(t(rx_ + rw_ / 2, r2y + 78, "a fair test, not a sure win", size=8.2, fill=C_ORANGE_D, weight="bold", maxw=rw_ - 12))
-    p.append(arrow([(c2x + cw, r2y + ch / 2), (rx_ - 2, r2y + ch / 2)], color=G, sw=1.5))
+    p.append(connect((c2x, r2y, cw, ch), "r", (rx_, r2y, rw_, ch), "l", color=G, sw=1.5))
     p.append(t((c2x + cw + rx_) / 2, r2y + ch / 2 - 7, "H3", size=8.8, weight="bold", fill=C_SUB, maxw=34))
 
     # protocol band
@@ -1786,9 +1802,11 @@ def build_perturbation_mechanism(a):
 
     # ---- row 1: locate_tooth -> perturbation roll ----
     y1, h1 = 36, 62
+    loc_box = (10, y1, 285, h1)
+    roll_box = (323, y1, 307, h1)
     box(10, y1, 285, h1, BLUE_F, BLUE_S, "locate_tooth(FDI tooth)",
         ["returns a reference box (expert-verified box for", "annotated teeth; detector box otherwise)"])
-    p.append(arrow([(295, y1 + h1 / 2), (321, y1 + h1 / 2)], color=G, sw=1.5))
+    p.append(connect(loc_box, "r", roll_box, "l", color=G, sw=1.5))
     box(323, y1, 307, h1, ORA_F, ORA_S, "Perturbation roll (fixed rates)",
         ["applied to the box SHOWN to the policy,", "never to the logged reference box"])
 
@@ -1798,8 +1816,8 @@ def build_perturbation_mechanism(a):
     p.append(L(476.5, y1 + h1, 476.5, bus, color=G, sw=1.5))
     p.append(L(xs[0], bus, xs[2], bus, color=G, sw=1.5))
     y2, h2 = bus + 20, 100
-    for cx in xs:
-        p.append(arrow([(cx, bus), (cx, y2 - 1)], color=G, sw=1.5))
+    for cx, bx in zip(xs, (10, 220, 430)):  # bus -> tier boxes: tails on the bus, tips on the box tops
+        p.append(arrow([(cx, bus), (cx, y2)], color=G, sw=1.5))
     box(10, y2, 198, h2, "#F4F4F4", "#999999", "none - 45%",
         ["box unchanged", "clean accept-and-proceed", "demonstration"])
     box(220, y2, 198, h2, "#FDF3EA", ORA_S, "small - 25%",
@@ -1810,19 +1828,22 @@ def build_perturbation_mechanism(a):
 
     # ---- merge -> teacher -> nudge -> zoom ----
     mb = y2 + h2 + 16
+    # all three tiers feed the teacher: the middle tier drops straight in, the outer two join it
     for cx in (xs[0], xs[2]):
         p.append(L(cx, y2 + h2, cx, mb, color=G, sw=1.5))
-    p.append(L(xs[0], mb, xs[2], mb, color=G, sw=1.5))
+        p.append(L(cx, mb, xs[1], mb, color=G, sw=1.5))
     y3, h3 = mb + 18, 50
-    p.append(L(319, mb, 319, y3 - 10, color=G, sw=1.5))
-    p.append(arrow([(319, y3 - 12), (319, y3 - 1)], color=G, sw=1.5))
+    tiers_mid = (220, y2, 198, h2)
+    teach_box = (119, y3, 400, h3)
+    p.append(connect(tiers_mid, "b", teach_box, "t", color=G, sw=1.5))
     box(119, y3, 400, h3, BLUE_F, BLUE_S, "Teacher inspects the crop (zoom_crop)",
         ["and decides from the pixels alone whether the box is acceptable"])
     y4, h4 = y3 + h3 + 18, 44
-    p.append(arrow([(319, y3 + h3), (319, y4 - 1)], color=G, sw=1.5))
+    nudge_box = (169, y4, 300, h4)
+    p.append(connect(teach_box, "b", nudge_box, "t", color=G, sw=1.5))
     box(169, y4, 300, h4, GRN_F, GRN_S, "nudge_crop", ["dx_frac, dy_frac, scale"])
     y5, h5 = y4 + h4 + 18, 58
-    p.append(arrow([(319, y4 + h4), (319, y5 - 1)], color=G, sw=1.5))
+    p.append(connect(nudge_box, "b", (109, y5, 420, h5), "t", color=G, sw=1.5))
     box(109, y5, 420, h5, GRN_F, GRN_S, "zoom_crop on the corrected box - verify - commit finding",
         ["the same judgment the deployed policy faces at inference,", "with no ground truth available"],
         head_size=10.6)
@@ -1842,9 +1863,15 @@ def build_perturbation_mechanism(a):
     sx = 430
     p.append(R(sx, y6, 198, h6, rx=8, fill="#FAFAFA", stroke="#CCCCCC", sw=1.2))
     p.append(t(sx + 99, y6 + 17, "reference vs. shown box", size=9.0, fill=SUB, maxw=184))
-    p.append(R(sx + 44, y6 + 28, 66, 40, rx=0, fill="none", stroke="#2ca02c", sw=2))
-    p.append(R(sx + 70, y6 + 46, 66, 40 - 6, rx=0, fill="none", stroke="#d62728", sw=2, dash="6,3"))
-    p.append(arrow([(sx + 82, y6 + 50), (sx + 104, y6 + 66)], color="#444444", sw=1.2))
+    ref_b = (sx + 44, y6 + 28, 66, 40)
+    shn_b = (sx + 70, y6 + 46, 66, 34)
+    p.append(R(*ref_b, rx=0, fill="none", stroke="#2ca02c", sw=2))
+    p.append(R(*shn_b, rx=0, fill="none", stroke="#d62728", sw=2, dash="6,3"))
+    # displacement vector from the reference-box centre to the shown-box centre (a measurement, not routing)
+    c0_ = (ref_b[0] + ref_b[2] / 2, ref_b[1] + ref_b[3] / 2)
+    c1_ = (shn_b[0] + shn_b[2] / 2, shn_b[1] + shn_b[3] / 2)
+    p.append(f'<circle cx="{c0_[0]:.1f}" cy="{c0_[1]:.1f}" r="2.2" fill="#444444"/>')
+    p.append(arrow([c0_, c1_], color="#444444", sw=1.2, free="vector"))
     p.append(t(sx + 99, y6 + 94, "shift given in box-relative fractions", size=8.6, fill=SUB, maxw=190))
 
     if warn:

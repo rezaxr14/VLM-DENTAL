@@ -11,8 +11,9 @@ An arrow is the ``<polyline>`` + ``<polygon>`` pair written by
 
   tip-float      arrow tip is not within TOL of any box/image edge
   tip-inside     arrow tip lies inside a card by more than DEPTH (overshoot)
-  tail-float     arrow tail is not on a box edge (allowed only when the arrow was
-                 emitted with ``free="tail"`` -- an input that enters from outside)
+  tail-float     arrow tail is not on a box edge or on a drawn bus line (allowed only
+                 with ``free="tail"``); free="vector" skips the end checks for a
+                 displacement vector inside a schematic
   diagonal       a segment is neither horizontal nor vertical (also bare <line>s)
   crosses-text   a segment passes through a text label
   crosses-card   a segment crosses the border of a card it does not start/end on
@@ -211,6 +212,8 @@ class Fig:
             tag = f"arrow#{ai} ({pts[0][0]:.0f},{pts[0][1]:.0f})->({pts[-1][0]:.0f},{pts[-1][1]:.0f})"
             tip, tail = pts[-1], pts[0]
 
+            if ar["free"] == "vector":
+                continue  # a displacement vector inside a schematic, not a connector
             # tip
             dists = [(self.edge_dist(tip, r), r) for r in self.rects]
             dmin, rmin = min(dists, key=lambda t: t[0]) if dists else (99, None)
@@ -227,8 +230,14 @@ class Fig:
                         break
             # tail
             if ar["free"] not in ("tail", "both"):
-                if min((self.edge_dist(tail, r) for r in self.rects), default=99) > TOL:
-                    add("ERROR", "tail-float", f"{tag}: tail is not on a box edge")
+                on_box = min((self.edge_dist(tail, r) for r in self.rects), default=99) <= TOL
+                on_bus = any(
+                    self.seg_point_dist((x1, y1), (x2, y2), tail) <= TOL
+                    for x1, y1, x2, y2 in self.lines
+                    if math.hypot(x2 - x1, y2 - y1) >= 20 and (abs(x1 - x2) < 0.3 or abs(y1 - y2) < 0.3)
+                )  # a fan-out arrow may start on a drawn bus line
+                if not (on_box or on_bus):
+                    add("ERROR", "tail-float", f"{tag}: tail is not on a box edge or a bus line")
 
             touched = [i for i, r in enumerate(self.rects)
                        if self.edge_dist(tip, r) <= TOL or self.edge_dist(tail, r) <= TOL]
@@ -264,6 +273,8 @@ class Fig:
                 for i, r in enumerate(self.rects):
                     if i in touched or self.container[i]:
                         continue
+                    if self.inside(tail, r, 1.0) or self.inside(tip, r, 1.0):
+                        continue  # a leader leaving the image it starts on (or entering the one it ends on)
                     ts = [t for t in self.seg_border_crossings(a, b, r) if 0.02 < t < 0.98]
                     if ts and L * min(ts) > 2 and L * (1 - max(ts)) > 2:
                         add("ERROR", "crosses-card", f"{tag}: crosses the border of rect {tuple(round(v) for v in r)}")
