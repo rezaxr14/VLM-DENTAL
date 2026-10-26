@@ -320,6 +320,9 @@ def _check_resume(args: Any, pool: Any, out_dir: Path, rep: _Report) -> None:
 
 
 def _check_hub(args: Any, rep: _Report) -> None:
+    if getattr(args, "debug_steps", 0):
+        rep.add(INFO, "hub upload", "debug mode: no checkpoint saves or uploads")
+        return
     if not args.hf_repo:
         rep.add(WARN, "hub upload", "no --hf-repo: checkpoints stay on this machine only.")
         return
@@ -331,7 +334,7 @@ def _check_hub(args: Any, rep: _Report) -> None:
         except Exception:
             token = None
     if token:
-        rep.add(PASS, "hub token", f"present; checkpoints upload to {args.hf_repo} every {args.push_every_steps} steps")
+        rep.add(PASS, "hub token", f"present; checkpoints upload to {args.hf_repo}; " + (f"step interval {args.push_every_steps}" if args.push_every_steps else "step uploads disabled; epoch/preemption behavior follows save strategy"))
     else:
         rep.add(WARN, "hub token", f"none found: uploads to {args.hf_repo} will fail and only local checkpoints are kept. "
                 "Set HF_TOKEN before starting if the session may be reclaimed.")
@@ -517,6 +520,14 @@ def _check_manifest(files: list[Path], args: Any, rep: _Report) -> None:
             + ("" if args.pad_vision_to_slots else " (without it over-length traces are not filtered)"))
 
 
+def _cuda_available() -> bool:
+    try:
+        import torch
+        return bool(torch.cuda.is_available())
+    except Exception:
+        return False
+
+
 def _check_sft_flags(args: Any, rep: _Report) -> None:
     ok = True
     if args.pad_vision_to_slots and not args.canonical_resize:
@@ -532,6 +543,42 @@ def _check_sft_flags(args: Any, rep: _Report) -> None:
     if args.xla_spmd and importlib.util.find_spec("torch_xla") is not None and not args.fsdp:
         rep.add(FAIL, "fsdp", "--spmd shards the weights through FSDPv2; --no-fsdp would replicate 18 GB on every core.")
         ok = False
+    for name in ("load_cpu_threads", "load_traceback_seconds", "debug_steps"):
+        if int(getattr(args, name, 0) or 0) < 0:
+            rep.add(FAIL, name.replace("_", "-"), "must be nonnegative")
+            ok = False
+    if _cuda_available():
+        import torch
+        from dental_agent.training.gpu_runtime import resolve_compute_dtype, native_bf16
+        effective = resolve_compute_dtype(args.precision, getattr(args, "qlora_compute_dtype", "auto"))
+        if effective == torch.bfloat16 and not native_bf16():
+            rep.add(FAIL, "compute dtype", "Native BF16 requested on pre-Ampere CUDA; T4 needs QLoRA compute fp16")
+            ok = False
+        else:
+            rep.add(INFO, "compute dtype", str(effective))
+        if getattr(args, "attn_implementation", "auto") == "flash_attention_2" and any(torch.cuda.get_device_capability(i)[0] < 8 for i in range(torch.cuda.device_count())):
+            rep.add(FAIL, "attention", "This FlashAttention-2 path requires SM80+; T4 needs SDPA")
+            ok = False
+    if importlib.util.find_spec("torch_xla") is not None and not _cuda_available():
+        bad = (getattr(args, "loader_mode", "standard") != "standard" or
+               getattr(args, "load_cpu_threads", 0) or getattr(args, "load_traceback_seconds", 0) or
+               getattr(args, "sdpa_repeat_kv", "auto") == "on" or getattr(args, "require_efficient_sdpa", False) or
+               getattr(args, "debug_steps", 0) or getattr(args, "attn_implementation", "auto") == "flash_attention_2")
+        if bad:
+            rep.add(FAIL, "CUDA flags on TPU", "Use standard loading, no CPU/thread timer overrides, no CUDA SDPA guard or debug steps; attention sdpa")
+            ok = False
+    chunk = int(getattr(args, "loss_chunk_tokens", 0) or 0)
+    if chunk < 0:
+        rep.add(FAIL, "loss-chunk-tokens", "must be 0 or a positive number of tokens.")
+        ok = False
+    elif chunk and importlib.util.find_spec("torch_xla") is not None and not _cuda_available():
+        rep.add(FAIL, "loss-chunk-tokens", "GPU-only (data-dependent shapes recompile XLA); use 0 on TPU.")
+        ok = False
+    elif not chunk and _cuda_available():
+        rep.add(WARN, "loss-chunk-tokens", "0 uses full-sequence logits and loss workspaces: one FP32 array for 16,384 x 248,320 entries is 15.16 GiB. "
+                "Head output dtype and live buffers vary. Use explicit bounded chunks on GPUs with limited memory.")
+    elif chunk:
+        rep.add(INFO, "loss-chunk-tokens", f"loss on assistant tokens only, {chunk} at a time (same value, bounded memory)")
     if ok:
         rep.add(PASS, "flags", "combination is consistent")
     if args.max_seq_len != 16384:
@@ -585,7 +632,8 @@ def run_sft_preflight(args: Any, emit: Callable[[str], None] = print) -> int:
     out = _check_sft_output(args, rep)
 
     hub_view = Namespace(hf_repo=args.hf_repo, push_every_steps=args.push_every_steps, precision=args.precision,
-                         num_cores=args.num_cores, spmd=args.xla_spmd, pad_vision_to_slots=args.pad_vision_to_slots)
+                         num_cores=args.num_cores, spmd=args.xla_spmd, pad_vision_to_slots=args.pad_vision_to_slots,
+                         debug_steps=getattr(args, "debug_steps", 0))
     _check_hub(hub_view, rep)
     _check_hardware(hub_view, rep)
     _check_disk(out, rep)

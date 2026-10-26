@@ -97,6 +97,56 @@ def test_train_sft_without_letterbox_runs_end_to_end_and_records_it(tmp_path):
     assert "canonical_letterbox=False" in proc.stdout + proc.stderr
 
 
+def test_train_sft_with_chunked_loss_runs_end_to_end(tmp_path):
+    """GPU recipe: --loss-chunk-tokens computes the loss on assistant tokens only (bounded logits memory) and still trains and evaluates."""
+    traces = tmp_path / "traces.jsonl"
+    traces.write_text("\n".join(json.dumps(_trace(i)) for i in range(4)) + "\n")
+    work = tmp_path / "work"
+    proc = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "smoke_test_sft.py"), "--traces", str(traces), "--num-traces", "4",
+         "--work-dir", str(work), "--", "--canonical-resize", "--no-canonical-letterbox", "--max-seq-len", "8192",
+         "--loss-chunk-tokens", "16"],
+        capture_output=True, text=True, timeout=600,
+    )
+    tail = (proc.stdout + proc.stderr)[-2500:]
+    assert proc.returncode == 0, tail
+    assert "[SMOKE] PASSED" in proc.stdout, tail
+    assert (work / "out" / "adapter_config.json").exists()
+    meta = json.loads((work / "out" / "sft_run_meta.json").read_text())
+    assert meta["precision"] == "bf16" and meta["qlora_skip_modules"] is None
+    assert meta["compute_dtype"] == "torch.bfloat16" and meta["loss_chunk_tokens"] == 16
+    assert meta["attention_implementation"] == "sdpa"
+    assert "versions" in meta["runtime"]
+    debug_out = work / "debug"
+    debug = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "train_sft.py"),
+         "--model-id", str(work / "model"), "--track", "with_tools",
+         "--dataset-path", str(work / "data" / "smoke_traces.jsonl"),
+         "--data-dir", str(work / "data"), "--output-dir", str(debug_out),
+         "--canonical-resize", "--no-canonical-letterbox", "--max-seq-len", "8192",
+         "--lora-r", "4", "--lora-alpha", "8", "--precision", "bf16",
+         "--loss-chunk-tokens", "16", "--debug-steps", "2", "--gradient-accumulation-steps", "1",
+         "--loader-mode", "staged", "--load-cpu-threads", "1", "--sdpa-repeat-kv", "on"],
+        capture_output=True, text=True, timeout=600,
+    )
+    assert debug.returncode == 0, (debug.stdout + debug.stderr)[-4000:]
+    for marker in ("[DEBUG COMPLETE]", "[HEAD]", "[GRAD]", "[UPDATE]"):
+        assert marker in debug.stdout, debug.stdout[-4000:]
+    assert not (debug_out / "adapter_config.json").exists()
+
+
+def test_negative_loss_chunk_tokens_is_rejected(tmp_path):
+    traces = tmp_path / "traces.jsonl"
+    traces.write_text("\n".join(json.dumps(_trace(i)) for i in range(2)) + "\n")
+    proc = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "smoke_test_sft.py"), "--traces", str(traces), "--num-traces", "2",
+         "--work-dir", str(tmp_path / "work"), "--", "--canonical-resize", "--loss-chunk-tokens", "-1"],
+        capture_output=True, text=True, timeout=600,
+    )
+    assert proc.returncode != 0
+    assert "--loss-chunk-tokens" in proc.stdout + proc.stderr
+
+
 def test_pad_vision_to_slots_without_letterbox_is_rejected(tmp_path):
     traces = tmp_path / "traces.jsonl"
     traces.write_text("\n".join(json.dumps(_trace(i)) for i in range(2)) + "\n")

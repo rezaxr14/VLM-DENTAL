@@ -124,23 +124,33 @@ def is_vision_param_name(name: str) -> bool:
 
 
 def prepare_qlora_model(model: Any, **kwargs: Any) -> Any:
-    """``peft.prepare_model_for_kbit_training`` that does not change the vision tower's dtype.
+    """``peft.prepare_model_for_kbit_training`` that keeps frozen 16-bit weights in the dtype they were loaded in.
 
-    peft upcasts every non-4-bit 16-bit parameter to fp32. Before the skip list that only touched embeddings, norms and lm_head
-    (the ViT was 4-bit); now it would also upcast the whole ViT (about +0.9 GB and an fp32 vision forward). The vision tower is
-    put back to the dtype it was loaded in. Nothing else changes, and no precision is chosen here."""
+    peft upcasts every non-4-bit 16-bit parameter to fp32. For this model that is wasteful in two places, both frozen:
+      * the vision tower (about +0.9 GB and an fp32 vision forward);
+      * the token embedding and lm_head (248,320 x 4,096 each: 3.8 GiB apiece in fp32, 1.9 GiB in bf16). An fp32 embedding also
+        makes the whole residual stream fp32 (transformers then logs "Casting fp32 inputs back to torch.bfloat16 for flash-attn"),
+        which doubles every activation and every checkpointed layer input; the bf16 path and the TPU path run a bf16 stream.
+    All three are put back to the dtype they were loaded in (the bf16 values are exact; only the arithmetic precision of the
+    residual adds and the head matmul differs, as in the bf16 path). Norm weights stay fp32, which is what peft's upcast is for.
+    No precision is chosen here."""
     from peft import prepare_model_for_kbit_training
 
+    heavy = {id(m.weight) for m in (model.get_input_embeddings(), model.get_output_embeddings()) if m is not None and hasattr(m, "weight")}
     before = {n: p.dtype for n, p in model.named_parameters() if is_vision_param_name(n)}
+    before_heavy = {n: p.dtype for n, p in model.named_parameters() if id(p) in heavy}
     model = prepare_model_for_kbit_training(model, **kwargs)
-    restored = 0
+    restored = restored_heavy = 0
     for n, p in model.named_parameters():
-        want = before.get(n)
+        want = before.get(n) or before_heavy.get(n)
         if want is not None and p.dtype != want:
             p.data = p.data.to(want)
-            restored += 1
+            restored += n in before
+            restored_heavy += n in before_heavy
     if restored:
         print(f"[QLORA] Vision tower kept in {next(iter(set(before.values())))} ({restored} tensors not upcast to fp32).")
+    if restored_heavy:
+        print(f"[QLORA] Token embedding and lm_head kept in {next(iter(set(before_heavy.values())))} ({restored_heavy} tensors not upcast to fp32; norms stay fp32).")
     return model
 
 

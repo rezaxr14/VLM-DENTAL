@@ -196,14 +196,16 @@ def test_grpo_dual_adapters_on_the_skip_list_base_reference_frozen_policy_starts
 # ---------------------------------------------------------------------------------------------------------------------
 # prepare_model_for_kbit_training must not upcast the (now 16-bit) vision tower
 # ---------------------------------------------------------------------------------------------------------------------
-def test_prepare_qlora_model_keeps_the_vision_tower_dtype_and_upcasts_the_rest_as_before():
+def test_prepare_qlora_model_keeps_vision_embedding_and_head_dtype_and_upcasts_the_norms():
     m = tiny().to(torch.bfloat16)
     m.is_loaded_in_4bit = True                                                               # what bitsandbytes loading sets
     out = prepare_qlora_model(m, use_gradient_checkpointing=False)
     vis = {p.dtype for n, p in out.named_parameters() if is_vision_param_name(n)}
     rest = {p.dtype for n, p in out.named_parameters() if not is_vision_param_name(n) and p.ndim <= 2}
     assert vis == {torch.bfloat16}                                                           # peft alone would give float32
-    assert torch.float32 in rest                                                             # embeddings / norms / lm_head: peft's upcast unchanged
+    assert torch.float32 in rest                                                             # norms: peft's upcast unchanged
+    assert out.get_input_embeddings().weight.dtype == torch.bfloat16                         # frozen embedding stays as loaded: a bf16 residual stream
+    assert out.get_output_embeddings().weight.dtype == torch.bfloat16                        # frozen lm_head stays as loaded
     assert not any(p.requires_grad for p in out.parameters())
 
     m2 = tiny().to(torch.bfloat16)
@@ -245,3 +247,21 @@ def test_preflight_warns_on_a_different_skip_list_and_on_qlora_vs_bf16(tmp_path)
     rows = preflight_rows(tmp_path, {"precision": "bf16"}, "qlora")
     assert rows["precision vs SFT"][0] == "WARN"
     assert "precision vs SFT" not in preflight_rows(tmp_path, {"precision": "bf16"}, "bf16")             # bf16 on both: nothing to say
+
+
+def test_after_prepare_the_residual_stream_is_bf16_not_fp32():
+    """The fp32 embedding that peft leaves behind makes every hidden state fp32 (twice the activation memory)."""
+    m = tiny().to(torch.bfloat16)
+    m.is_loaded_in_4bit = True
+    seen = []
+    plain_m = tiny().to(torch.bfloat16)
+    plain_m.is_loaded_in_4bit = True
+    from peft import prepare_model_for_kbit_training
+    plain = prepare_model_for_kbit_training(plain_m, use_gradient_checkpointing=False)
+    out = prepare_qlora_model(m, use_gradient_checkpointing=False)
+    for model, tag in ((plain, "plain"), (out, "ours")):
+        model.get_input_embeddings().register_forward_hook(lambda mod, i, o, tag=tag: seen.append((tag, o.dtype)))
+        ids = torch.randint(5, 100, (1, 12))
+        with torch.no_grad():
+            model.get_input_embeddings()(ids)
+    assert ("plain", torch.float32) in seen and ("ours", torch.bfloat16) in seen

@@ -16,6 +16,7 @@ Supports:
 """
 
 import argparse
+import contextlib
 import json
 import os
 import signal
@@ -81,6 +82,10 @@ from dental_agent.model.backbone import (
 from dental_agent.config import QLORA_SKIP_MODULES
 from dental_agent.utils.canonical import SLOT_BUDGET, add_letterbox_arg, check_gpu_image_policy, parse_slot_budget, set_letterbox, slot_totals
 from dental_agent.data.dev_split import load_dev_keys
+from dental_agent.training.chunked_loss import causal_lm_loss
+from dental_agent.training.gpu_debug import gpu_memory, gpu_forward_context, gpu_attention_context, check_adapter_gradients, check_adapter_update
+from dental_agent.training.gpu_runtime import (native_bf16, resolve_compute_dtype, select_attention_backend,
+                                               model_loading_context, sdpa_gqa_policy, runtime_metadata)
 from dental_agent.training.run_meta import keys_fingerprint, write_sft_run_meta
 
 
@@ -229,7 +234,32 @@ def parse_args():
              "letterboxed by default, see --canonical-letterbox); tools still run on the native image. Default: off "
              "(native resolution: the full image, only rounded to the processor's 32-pixel grid).",
     )
+    parser.add_argument("--debug-steps", type=int, default=0,
+                        help="Stop after N optimizer windows, check finite gradients and adapter updates, log all GPUs; no checkpoint/upload. 0 disables.")
+    parser.add_argument("--require-efficient-sdpa", action="store_true",
+                        help="CUDA: disallow the quadratic SDPA math fallback; fail with kernel diagnostics if no efficient backend supports the inputs.")
+    parser.add_argument("--qlora-compute-dtype", choices=["auto", "bf16", "fp16"], default="auto",
+                        help="NF4 storage is unchanged; select QLoRA arithmetic explicitly (BF16 on 4090, FP16 on T4).")
+    parser.add_argument("--attn-implementation", choices=["auto", "sdpa", "flash_attention_2"], default="auto",
+                        help="auto prefers an importable CUDA FlashAttention-2 on SM80+, otherwise SDPA. Probe actual kernels separately.")
+    parser.add_argument("--sdpa-repeat-kv", choices=["auto", "on", "off"], default="auto",
+                        help="auto repeats KV heads on pre-Ampere CUDA only; modern GPUs retain native GQA.")
+    parser.add_argument("--loader-mode", choices=["standard", "staged"], default="standard",
+                        help="staged separates CPU dtype conversion and device copy (observed Kaggle T4 workaround).")
+    parser.add_argument("--load-cpu-threads", type=int, default=0,
+                        help="0 preserves thread count; 1 was used for T4 loading. Restored after loading.")
+    parser.add_argument("--load-traceback-seconds", type=int, default=0,
+                        help="Periodic stack dumps during loading only; 0 disables. A dump is diagnostic, not a timeout kill.")
     add_letterbox_arg(parser)
+    parser.add_argument(
+        "--loss-chunk-tokens",
+        type=int,
+        default=0,
+        help="GPU memory: compute the loss only on the supervised (assistant) tokens, this many at a time, instead of building "
+             "logits for every position (an 8.5k-token sample x 248,320 vocab x 4 B = 7.9 GiB, which does not fit a 24 GB card). "
+             "Same loss value. 0 (default) = the stock HuggingFace loss, which the TPU path needs (static shapes); "
+             "128 is verified on dual T4; larger chunks trade memory for throughput. Not supported on TPU.",
+    )
     parser.add_argument(
         "--pad-vision-to-slots",
         action=argparse.BooleanOptionalAction,
@@ -345,7 +375,7 @@ def get_xla_world_size(is_tpu: bool = False) -> int:
     return 1
 
 
-def setup_hardware(precision: str, rank: int = 0, xla_pallas: bool = True, xla_spmd: bool = False):
+def setup_hardware(precision: str, rank: int = 0, xla_pallas: bool = True, xla_spmd: bool = False, qlora_compute_dtype: str = "auto"):
     """Detect hardware backend: Cloud TPU v5e-8 vs CUDA GPU vs CPU."""
     is_tpu = False
     device = None
@@ -399,17 +429,10 @@ def setup_hardware(precision: str, rank: int = 0, xla_pallas: bool = True, xla_s
     if is_tpu and precision == "qlora":
         raise SystemExit("--precision qlora is not supported on TPU/XLA (bitsandbytes is CUDA-only). Use --precision bf16.")
 
-    # Never switch the requested precision silently: suggest, then run exactly what was asked for.
-    if not is_tpu and torch.cuda.is_available() and precision == "bf16" and not torch.cuda.is_bf16_supported():
-        print(f"[HINT] {torch.cuda.get_device_name(device)} has no native BF16; consider --precision fp16. "
-              "Continuing with bf16 as requested.")
-
-    if precision == "bf16":
-        dtype = torch.bfloat16
-    elif precision in ("fp16", "qlora"):
-        dtype = torch.bfloat16 if (torch.cuda.is_available() and torch.cuda.is_bf16_supported()) else torch.float16
-    else:
-        dtype = torch.float32
+    dtype = resolve_compute_dtype(precision, qlora_compute_dtype)
+    if not is_tpu and torch.cuda.is_available() and dtype == torch.bfloat16 and not native_bf16():
+        raise SystemExit("Native BF16 requested on a pre-Ampere GPU. Use --precision qlora --qlora-compute-dtype fp16 on T4.")
+    print(f"[PRECISION] weights={precision}; compute={dtype}; QLoRA compute request={qlora_compute_dtype}", flush=True)
     return is_tpu, device, dtype, precision
 
 
@@ -495,7 +518,19 @@ def apply_spmd_input_sharding(inputs: Dict[str, Any], spmd_mesh: Any, num_cores:
             xs.mark_sharding(image_grid_thw, spmd_mesh, (None, None))
 
 
-def evaluate_loss(model: torch.nn.Module, val_loader: DataLoader, device: torch.device, is_tpu: bool, spmd_mesh: Any = None, num_cores: int = 8) -> float:
+@contextlib.contextmanager
+def report_gpu_oom(input_ids: torch.Tensor, what: str):
+    """On a CUDA out-of-memory (PyTorch's, or Triton's 'Triton Error [CUDA]: out of memory') say which sample and how much memory."""
+    try:
+        yield
+    except RuntimeError as e:
+        if "out of memory" in str(e).lower() and torch.cuda.is_available():
+            print(f"[OOM] during {what}: batch={input_ids.shape[0]} sequence={input_ids.shape[-1]}", flush=True)
+            gpu_memory(f"OOM {what}")
+        raise
+
+
+def evaluate_loss(model: torch.nn.Module, val_loader: DataLoader, device: torch.device, is_tpu: bool, spmd_mesh: Any = None, num_cores: int = 8, loss_chunk_tokens: int = 0, compute_dtype: Any = None, require_efficient_sdpa: bool = False) -> float:
     """Compute validation loss on held-out 5% validation set."""
     model.eval()
     total_val_loss = 0.0
@@ -505,8 +540,9 @@ def evaluate_loss(model: torch.nn.Module, val_loader: DataLoader, device: torch.
             inputs = {k: v.to(device) for k, v in batch.items()}
             if spmd_mesh is not None:
                 apply_spmd_input_sharding(inputs, spmd_mesh, num_cores=num_cores)
-            outputs = model(**inputs)
-            total_val_loss += outputs.loss.item()
+            with gpu_forward_context(not is_tpu and device.type == "cuda", compute_dtype, require_efficient_sdpa):
+                with report_gpu_oom(inputs["input_ids"], "validation"):
+                    total_val_loss += causal_lm_loss(model, inputs, loss_chunk_tokens).item()
             val_batches += 1
             if val_batches >= 20:  # Fast validation cap
                 break
@@ -582,6 +618,13 @@ def resolve_xla_cache_dir(cache_arg: str | None) -> tuple[Path | None, bool]:
 
 
 def run_training(index: int, args: argparse.Namespace):
+    # Keep the SDPA policy active during forward, checkpoint recomputation,
+    # backward and evaluation; restore even on exceptions/early debug return.
+    with sdpa_gqa_policy(getattr(args, "sdpa_repeat_kv", "auto")):
+        return _run_training(index, args)
+
+
+def _run_training(index: int, args: argparse.Namespace):
     """Worker function executed per core/device."""
     # Resolve stage-specific traces and default output directory
     resolved_traces: List[str] = []
@@ -606,6 +649,7 @@ def run_training(index: int, args: argparse.Namespace):
         rank=index,
         xla_pallas=getattr(args, "xla_pallas", True),
         xla_spmd=getattr(args, "xla_spmd", False),
+        qlora_compute_dtype=args.qlora_compute_dtype,
     )
 
     is_master = True
@@ -621,6 +665,18 @@ def run_training(index: int, args: argparse.Namespace):
     static_vision_tokens = slot_totals(slot_budget)["tokens"]
     if pad_vision_to_slots and not is_tpu:
         raise SystemExit("--pad-vision-to-slots is TPU-only (static shapes avoid XLA recompilation). GPU/CPU runs pad dynamically; remove the flag.")
+    if args.load_cpu_threads < 0 or args.load_traceback_seconds < 0:
+        raise SystemExit("Loading thread count and traceback interval must be nonnegative")
+    if is_tpu and (args.loader_mode != "standard" or args.load_cpu_threads or args.load_traceback_seconds or args.sdpa_repeat_kv == "on" or args.require_efficient_sdpa):
+        raise SystemExit("TPU requires standard loader, no CPU thread override/traceback timer, no forced KV repetition and no CUDA SDPA guard")
+    if args.debug_steps < 0:
+        raise SystemExit("--debug-steps must be nonnegative")
+    if args.debug_steps and is_tpu:
+        raise SystemExit("--debug-steps is CUDA/CPU-only; TPU pipeline is unchanged")
+    if args.loss_chunk_tokens < 0:
+        raise SystemExit("--loss-chunk-tokens must be 0 (stock loss) or a positive number of tokens.")
+    if args.loss_chunk_tokens and is_tpu:
+        raise SystemExit("--loss-chunk-tokens is GPU-only (it selects a data-dependent set of positions, which would recompile XLA). Use 0 on TPU.")
     if pad_vision_to_slots and not canonical_resize:
         raise SystemExit("--pad-vision-to-slots requires --canonical-resize (static slots assume canonical image sizes).")
     if pad_vision_to_slots and not args.canonical_letterbox:
@@ -639,7 +695,7 @@ def run_training(index: int, args: argparse.Namespace):
     if is_master:
         text_capacity = args.max_seq_len - static_vision_tokens if pad_vision_to_slots else args.max_seq_len
         print("[CONFIG] "
-              f"spmd={args.xla_spmd} fsdp={args.fsdp} canonical_resize={canonical_resize} "
+              f"spmd={bool(is_tpu and args.xla_spmd)} fsdp={bool(is_tpu and args.fsdp)} canonical_resize={canonical_resize} "
               + (f"canonical_letterbox={args.canonical_letterbox} " if canonical_resize else "")
               + f"pad_vision_to_slots={pad_vision_to_slots} "
               + (f"vision_slots={args.vision_slots} static_vision_tokens={static_vision_tokens} text_capacity={text_capacity} "
@@ -707,22 +763,15 @@ def run_training(index: int, args: argparse.Namespace):
     if processor.tokenizer.pad_token_id is None:
         processor.tokenizer.pad_token = processor.tokenizer.eos_token
 
+    if args.debug_steps:
+        torch.manual_seed(42)
     ModelClass = get_model_classes()
 
     # PyTorch/XLA FSDP strictly requires master parameters in torch.float32 for sharding.
     # Under SPMD, model stays in compute_dtype (bfloat16, ~18 GB, avoiding 36 GB float32 allocation).
     load_dtype = torch.float32 if (is_tpu and args.fsdp and args.num_cores > 1 and not use_spmd) else compute_dtype
 
-    # Select attention implementation: FlashAttention-2 if CUDA Ampere+, otherwise sdpa
-    attn_impl = "sdpa"
-    if not is_tpu and torch.cuda.is_available():
-        try:
-            if torch.cuda.get_device_capability()[0] >= 8:
-                import flash_attn
-                attn_impl = "flash_attention_2"
-        except Exception as e:
-            print(f"\n\n[ATTN WARNING] flash_attn unavailable ({e!r}); falling back to sdpa\n\n")
-            attn_impl = "sdpa"
+    attn_impl = select_attention_backend(args.attn_implementation, is_tpu=is_tpu)
     print(f"\n[ATTN] Using attn_implementation={attn_impl}")
 
     load_kwargs: Dict[str, Any] = {
@@ -734,7 +783,7 @@ def run_training(index: int, args: argparse.Namespace):
 
     if active_precision == "qlora":
         # On Turing (T4), Pascal (P100), and older GPUs without native BF16, use float16 compute dtype
-        bnb_compute_dtype = torch.bfloat16 if (torch.cuda.is_available() and torch.cuda.is_bf16_supported()) else torch.float16
+        bnb_compute_dtype = compute_dtype
         # NF4 + double quantization + this compute dtype; the vision tower (projector included) and lm_head stay 16-bit
         # (QLORA_SKIP_MODULES), the same list GRPO / evaluation / inference load with.
         load_kwargs["quantization_config"] = qlora_bnb_config(bnb_compute_dtype)
@@ -747,12 +796,17 @@ def run_training(index: int, args: argparse.Namespace):
             print(f"[MODEL] Loading {args.model_id} (master weights: float32 for FSDP sharding across {args.num_cores} cores, compute: bfloat16)...")
         else:
             print(f"[MODEL] Loading {args.model_id}...")
-    try:
-        model = ModelClass.from_pretrained(args.model_id, **load_kwargs)
-    except TypeError:
-        # Fallback for older transformers (<4.48) that only accept torch_dtype
-        load_kwargs["torch_dtype"] = load_kwargs.pop("dtype")
-        model = ModelClass.from_pretrained(args.model_id, **load_kwargs)
+    with model_loading_context(args.loader_mode, args.load_cpu_threads, args.load_traceback_seconds):
+        try:
+            model = ModelClass.from_pretrained(args.model_id, **load_kwargs)
+        except TypeError as exc:
+            # Only retry an unsupported dtype keyword; never repeat a partial
+            # 9B load for an unrelated TypeError raised inside the loader.
+            if "dtype" not in str(exc) or "unexpected keyword" not in str(exc):
+                raise
+            load_kwargs["torch_dtype"] = load_kwargs.pop("dtype")
+            model = ModelClass.from_pretrained(args.model_id, **load_kwargs)
+    print("[LOAD] Model loading finished; loader hooks and CPU thread count restored.", flush=True)
 
     # Define LoRA Target Modules (Language Model + optional Vision Projector)
     target_modules = lora_target_modules(
@@ -790,7 +844,8 @@ def run_training(index: int, args: argparse.Namespace):
                 print("[QLORA] Prepared 4-bit model for k-bit training (FP32 layernorms active).")
         except Exception as e:
             if is_master:
-                print(f"[QLORA WARNING] prepare_model_for_kbit_training failed ({e}); proceeding directly.")
+                print(f"[QLORA ERROR] prepare_model_for_kbit_training failed ({e})")
+            raise
 
     peft_config = LoraConfig(
         r=args.lora_r,
@@ -838,10 +893,32 @@ def run_training(index: int, args: argparse.Namespace):
             is_master=is_master,
         )
 
+    if not is_tpu and torch.cuda.is_available():
+        base = model.get_base_model()
+        placement = getattr(base, "hf_device_map", {})
+        print(f"[PLACEMENT] {placement}", flush=True)
+        if any(str(v) in {"cpu", "disk"} for v in placement.values()):
+            raise RuntimeError("Training requires GPU-resident weights; device_map offloaded layers to CPU/disk.")
+        print(f"[LOSS] chunk_tokens={args.loss_chunk_tokens}; compute_dtype={compute_dtype}; "
+              f"embedding={base.get_input_embeddings().weight.dtype}; head={base.get_output_embeddings().weight.dtype}", flush=True)
+        gpu_memory("model + adapters")
+    if args.debug_steps and args.loss_chunk_tokens:
+        def check_head_rows(module, values):
+            h = values[0]
+            rows = h.numel() // h.shape[-1]
+            if rows > args.loss_chunk_tokens:
+                raise RuntimeError(f"[HEAD] full logits path detected: {rows} > {args.loss_chunk_tokens}")
+            if not getattr(check_head_rows, "reported", False):
+                print(f"[HEAD] rows={rows} <= {args.loss_chunk_tokens}; device={h.device}; dtype={h.dtype}", flush=True)
+                check_head_rows.reported = True
+        model.get_base_model().get_output_embeddings().register_forward_pre_hook(check_head_rows)
+    if args.debug_steps:
+        print(f"[DEBUG] {args.debug_steps} optimizer windows, no saves/uploads; full sequence limit={args.max_seq_len}", flush=True)
+
     log_xla_memory("Post-Model Initialization & Sharding", is_master=is_master)
     if is_master and not is_tpu and torch.cuda.is_available():
-        # Measured, not estimated: with --precision qlora, prepare_model_for_kbit_training upcasts every non-4-bit parameter
-        # (embeddings, lm_head, norms; the vision tower is restored to its loaded dtype) to fp32, which can be several GiB more than the 4-bit weights alone.
+        # With --precision qlora, prepare_model_for_kbit_training upcasts every non-4-bit parameter to fp32; prepare_qlora_model puts the vision tower,
+        # the token embedding and lm_head back to their loaded dtype, so only the norms are fp32 (a bf16 residual stream, as in the bf16 path).
         _dev = torch.device("cuda:0")
         print(f"[MEMORY] CUDA after model load + LoRA: allocated {torch.cuda.memory_allocated(_dev) / 2**30:.1f} GiB, "
               f"reserved {torch.cuda.memory_reserved(_dev) / 2**30:.1f} GiB of {torch.cuda.get_device_properties(_dev).total_memory / 2**30:.1f} GiB "
@@ -888,6 +965,15 @@ def run_training(index: int, args: argparse.Namespace):
             stage=args.stage,
             precision=args.precision,
             qlora_skip_modules=list(QLORA_SKIP_MODULES) if args.precision == "qlora" else None,
+            compute_dtype=str(compute_dtype),
+            loss_chunk_tokens=args.loss_chunk_tokens,
+            loss_reduction="shifted supervised-token mean",
+            attention_implementation=attn_impl,
+            require_efficient_sdpa=bool(args.require_efficient_sdpa),
+            sdpa_repeat_kv=args.sdpa_repeat_kv,
+            loader_mode=args.loader_mode,
+            load_cpu_threads=args.load_cpu_threads,
+            runtime=runtime_metadata(),
             canonical_resize=bool(canonical_resize),
             canonical_letterbox=bool(args.canonical_letterbox),
             pad_vision_to_slots=bool(pad_vision_to_slots),
@@ -967,6 +1053,13 @@ def run_training(index: int, args: argparse.Namespace):
         weight_decay=0.01,
     )
 
+    cuda_run = not is_tpu and device.type == "cuda"
+    scaler = torch.amp.GradScaler("cuda", enabled=cuda_run and compute_dtype == torch.float16, init_scale=128.0)
+    # Keep the token-summed loss bounded before FP16 backward, then restore the
+    # exact token mean at the optimizer boundary. Summing thousands of token
+    # losses unscaled can overflow FP16 even when the final mean is finite.
+    loss_divisor = float(args.max_seq_len * args.batch_size) if cuda_run and compute_dtype == torch.float16 else 1.0
+
     # the loop also updates at the last batch of an epoch, so a partial accumulation window counts as a step (ceil)
     total_update_steps = -(-len(train_dataloader) // args.gradient_accumulation_steps) * args.epochs
     num_warmup_steps = max(int(total_update_steps * args.warmup_ratio), 1)
@@ -984,7 +1077,7 @@ def run_training(index: int, args: argparse.Namespace):
 
     # Resume capability from HF Hub or local checkpoint
     state_file = out_path / "training_state.json"
-    if args.resume_hf and is_master:
+    if args.resume_hf and is_master and not args.debug_steps:
         print(f"[RESUME] Checking HF Hub for latest checkpoint in {args.resume_hf} (subfolder={path_in_repo})...")
         try:
             from huggingface_hub import snapshot_download
@@ -1019,6 +1112,8 @@ def run_training(index: int, args: argparse.Namespace):
                     restored = restore_sft_checkpoint(out_path, model, optimizer, scheduler)
                 except Exception as e:
                     raise SystemExit(f"[RESUME FAILED] {out_path} holds a checkpoint that cannot be restored: {e}") from e
+                if scaler.is_enabled() and (out_path / "scaler.pt").exists():
+                    scaler.load_state_dict(torch.load(out_path / "scaler.pt", map_location="cpu", weights_only=True))
                 total_steps = restored["step"]
                 start_epoch = restored["epoch"]
                 best_val_loss = restored["best_val_loss"]
@@ -1037,6 +1132,8 @@ def run_training(index: int, args: argparse.Namespace):
     progress = {"epoch": start_epoch, "epoch_start_step": total_steps}
 
     def save_sft_checkpoint(epoch_num: int, is_preemption: bool = False, mid_epoch: bool = False):
+        if args.debug_steps:
+            return
         state_data = {
             "step": total_steps,
             "epoch": epoch_num,
@@ -1061,6 +1158,8 @@ def run_training(index: int, args: argparse.Namespace):
             unwrap_peft_model(model).save_pretrained(str(out_path))
             torch.save(optimizer.state_dict(), out_path / "optimizer.pt")
             torch.save(scheduler.state_dict(), out_path / "scheduler.pt")
+            if scaler.is_enabled():
+                torch.save(scaler.state_dict(), out_path / "scaler.pt")
             with open(state_file, "w") as f:
                 json.dump(state_data, f)
             if args.hf_repo:
@@ -1101,7 +1200,7 @@ def run_training(index: int, args: argparse.Namespace):
             # Count valid tokens directly on CPU tensor before moving to device.
             # This completely eliminates premature TPU-CPU synchronization barriers
             # before backward, keeping lazy tensor graph execution clean.
-            num_valid = int((batch["labels"] != -100).sum().item())
+            num_valid = int((batch["labels"][:, 1:] != -100).sum().item())
             inputs = {k: v.to(device) for k, v in batch.items()}
             if use_spmd and spmd_mesh is not None:
                 apply_spmd_input_sharding(inputs, spmd_mesh, num_cores=args.num_cores)
@@ -1109,25 +1208,41 @@ def run_training(index: int, args: argparse.Namespace):
             if is_master and step == 0:
                 log_xla_memory("Step 0 Pre-Forward", device=device, is_master=is_master)
 
-            outputs = model(**inputs)
+            if args.debug_steps:
+                print(f"[BATCH] epoch={epoch} batch={step} sequence={inputs['input_ids'].shape[-1]} supervised={num_valid}", flush=True)
+                gpu_memory("pre-forward")
+            with gpu_forward_context(cuda_run, compute_dtype, args.require_efficient_sdpa):
+                with report_gpu_oom(inputs["input_ids"], "forward"):
+                    loss_out = causal_lm_loss(model, inputs, args.loss_chunk_tokens)   # stock HF loss when --loss-chunk-tokens is 0
 
             if is_master and step == 0:
                 log_xla_memory("Step 0 Post-Forward", device=device, is_master=is_master)
 
+            if args.debug_steps:
+                gpu_memory("post-forward")
             if num_valid > 0:
-                batch_loss = outputs.loss
-                del outputs  # Free logits lazy tensor handle immediately
+                if not is_tpu and not torch.isfinite(loss_out).item():
+                    raise RuntimeError("Nonfinite forward loss; see batch and device diagnostics above")
+                batch_loss = loss_out
+                del loss_out  # Free the forward handle immediately
                 batch_loss_sum = batch_loss * num_valid
-                batch_loss_sum.backward()
+                with gpu_attention_context(cuda_run, args.require_efficient_sdpa), report_gpu_oom(inputs["input_ids"], "backward"):
+                    scaler.scale(batch_loss_sum / loss_divisor).backward()
                 accum_loss_sum += batch_loss_sum.item()
                 accum_valid_tokens += num_valid
+                if args.debug_steps:
+                    gpu_memory("post-backward")
 
                 if is_master and step == 0:
                     log_xla_memory("Step 0 Post-Backward", device=device, is_master=is_master)
             else:
-                del outputs
+                del loss_out
 
             if (step + 1) % args.gradient_accumulation_steps == 0 or (step + 1) == len(train_dataloader):
+                if accum_valid_tokens == 0 and not is_tpu:
+                    optimizer.zero_grad(set_to_none=True)
+                    continue
+                scaler.unscale_(optimizer)
                 # Normalize accumulated gradients by total valid tokens across the window
                 if accum_valid_tokens > 0:
                     if use_spmd:
@@ -1142,8 +1257,9 @@ def run_training(index: int, args: argparse.Namespace):
 
                     for p in model.parameters():
                         if p.grad is not None:
-                            p.grad.mul_(scale)
+                            p.grad.mul_(scale * loss_divisor)
 
+                probe = check_adapter_gradients(model) if args.debug_steps and accum_valid_tokens else None
                 if hasattr(model, "clip_grad_norm_"):
                     model.clip_grad_norm_(args.max_grad_norm)
                 else:
@@ -1156,8 +1272,20 @@ def run_training(index: int, args: argparse.Namespace):
                     else:
                         xm.optimizer_step(optimizer)
                 else:
-                    optimizer.step()
+                    with report_gpu_oom(inputs["input_ids"], "optimizer"):
+                        previous_scale = scaler.get_scale()
+                        scaler.step(optimizer)
+                        scaler.update()
+                        if scaler.is_enabled() and scaler.get_scale() < previous_scale:
+                            print("[AMP] Nonfinite gradients: optimizer update skipped; scheduler unchanged", flush=True)
+                            optimizer.zero_grad(set_to_none=True)
+                            accum_loss_sum = 0.0
+                            accum_valid_tokens = 0
+                            continue
 
+                if probe is not None:
+                    check_adapter_update(probe, allow_unchanged=scheduler.get_last_lr()[0] == 0)
+                    gpu_memory("post-optimizer")
                 scheduler.step()
                 optimizer.zero_grad()
                 total_steps += 1
@@ -1171,7 +1299,7 @@ def run_training(index: int, args: argparse.Namespace):
                     if hasattr(pbar, "set_postfix"):
                         postfix = {"loss": f"{step_loss:.4f}", "lr": f"{lr_current:.2e}"}
                         if torch.cuda.is_available():
-                            postfix["peak_gib"] = f"{torch.cuda.max_memory_allocated() / 2**30:.1f}"
+                            postfix["peak_gib"] = "/".join(f"{torch.cuda.max_memory_allocated(i) / 2**30:.1f}" for i in range(torch.cuda.device_count()))
                         pbar.set_postfix(postfix)
 
                     log_entry = {
@@ -1182,11 +1310,16 @@ def run_training(index: int, args: argparse.Namespace):
                     }
                     if torch.cuda.is_available():
                         log_entry["peak_gib"] = round(torch.cuda.max_memory_allocated() / 2**30, 2)
+                        log_entry["peak_gib_per_device"] = {str(i): round(torch.cuda.max_memory_allocated(i) / 2**30, 3) for i in range(torch.cuda.device_count())}
+
+                    if args.debug_steps and total_steps >= args.debug_steps:
+                        print(f"[DEBUG COMPLETE] {total_steps} optimizer windows; finite loss/gradients and adapter updates checked. No checkpoint/upload.", flush=True)
+                        return
 
                     # Step-interval evaluation on held-out validation set
                     eval_at_steps = args.eval_strategy in ("steps", "both")
-                    if eval_at_steps and val_dataloader and args.eval_every_steps > 0 and total_steps % args.eval_every_steps == 0:
-                        val_loss = evaluate_loss(model, val_dataloader, device, is_tpu, spmd_mesh=spmd_mesh)
+                    if not args.debug_steps and eval_at_steps and val_dataloader and args.eval_every_steps > 0 and total_steps % args.eval_every_steps == 0:
+                        val_loss = evaluate_loss(model, val_dataloader, device, is_tpu, spmd_mesh=spmd_mesh, loss_chunk_tokens=args.loss_chunk_tokens, compute_dtype=compute_dtype, require_efficient_sdpa=args.require_efficient_sdpa)
                         log_entry["val_loss"] = val_loss
                         if val_loss < best_val_loss:
                             best_val_loss = val_loss
@@ -1199,14 +1332,17 @@ def run_training(index: int, args: argparse.Namespace):
 
                     # Step-interval checkpoint push to HF Hub
                     save_at_steps = args.save_strategy in ("steps", "both")
-                    if save_at_steps and args.hf_repo and args.push_every_steps > 0 and total_steps % args.push_every_steps == 0:
+                    if not args.debug_steps and save_at_steps and args.hf_repo and args.push_every_steps > 0 and total_steps % args.push_every_steps == 0:
                         save_sft_checkpoint(epoch, mid_epoch=True)
+
+        if args.debug_steps:
+            continue
 
         # ── Epoch-End: Guaranteed Validation & Checkpoint ──
         # Evaluate validation loss at every epoch boundary regardless of step-interval,
         # ensuring best_adapter is always compared at the true epoch completion point.
-        if is_master and val_dataloader and args.eval_strategy in ("epoch", "both"):
-            val_loss = evaluate_loss(model, val_dataloader, device, is_tpu, spmd_mesh=spmd_mesh)
+        if not args.debug_steps and is_master and val_dataloader and args.eval_strategy in ("epoch", "both"):
+            val_loss = evaluate_loss(model, val_dataloader, device, is_tpu, spmd_mesh=spmd_mesh, loss_chunk_tokens=args.loss_chunk_tokens, compute_dtype=compute_dtype, require_efficient_sdpa=args.require_efficient_sdpa)
             print(f"\n[EPOCH {epoch} EVALUATION] val_loss = {val_loss:.4f} (previous best = {best_val_loss:.4f})")
             epoch_log = {"epoch": epoch, "step": total_steps, "epoch_end_val_loss": val_loss}
             if val_loss < best_val_loss:
@@ -1226,6 +1362,9 @@ def run_training(index: int, args: argparse.Namespace):
         if is_tpu and args.num_cores > 1 and not use_spmd:
             import torch_xla.core.xla_model as xm
             xm.rendezvous(f"epoch_end_{epoch}")
+
+    if args.debug_steps:
+        raise RuntimeError("[DEBUG INCOMPLETE] Not enough optimizer windows; increase epochs or supply more traces")
 
     if is_master:
         print(f"\n[COMPLETE] Stage 1 SFT ({args.stage}) finished! Final checkpoint saved to {out_path}.")
