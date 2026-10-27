@@ -740,17 +740,14 @@ def upload_checkpoint_to_hf(
 ) -> None:
     """Upload lightweight LoRA checkpoint (~760 MB) to Hugging Face Hub under structured subfolder."""
     try:
-        from huggingface_hub import HfApi
-        api = HfApi()
+        from dental_agent.model.hub_artifacts import upload_adapter_folder
         target_path = path_in_repo or f"grpo/{Path(checkpoint_dir).name}"
         commit_msg = f"VLM-DENTAL GRPO Checkpoint: {Path(checkpoint_dir).name} (Step {step})"
         print(f"[HF-HUB] Uploading GRPO checkpoint from {checkpoint_dir} to {hf_repo} ({target_path})...")
-        api.upload_folder(
-            folder_path=str(checkpoint_dir),
-            repo_id=hf_repo,
+        upload_adapter_folder(
+            checkpoint_dir, hf_repo,
             path_in_repo=target_path,
             commit_message=commit_msg,
-            ignore_patterns=["*.tmp", "*.lock"],
         )
         print(f"[HF-HUB] GRPO checkpoint successfully uploaded to {hf_repo} under {target_path}.")
     except Exception as e:

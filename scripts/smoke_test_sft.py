@@ -156,6 +156,7 @@ def main() -> int:
         "--epochs", "1", "--batch-size", "1", "--gradient-accumulation-steps", "2",
         "--lora-r", "4", "--lora-alpha", "8", "--learning-rate", "1e-3", "--precision", "bf16",
         *passthrough,
+        "--hf-repo", "",  # Synthetic smoke artefacts must never be uploaded.
     ]
     print("[SMOKE] " + " ".join(cmd))
     env = dict(os.environ, HF_HUB_OFFLINE="1")

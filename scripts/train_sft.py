@@ -204,6 +204,12 @@ def parse_args():
         default=os.environ.get("HF_ARTIFACT_REPO", "Reza-Nadimi/vlm-dental-models"),
         help="Hugging Face Hub repository for checkpoint sync (default: Reza-Nadimi/vlm-dental-models)",
     )
+    parser.add_argument("--hub-base-model-id", default=None,
+                        help="Hub model ID for saved metadata, e.g. Qwen/Qwen3.5-9B. Never changes local weight loading.")
+    parser.add_argument("--hf-run-tag", default=None,
+                        help="Optional single-name suffix to keep runs of the same stage/precision separate on the Hub.")
+    parser.add_argument("--hf-upload-check", action=argparse.BooleanOptionalAction, default=True,
+                        help="Before weight loading, verify upload access with a tiny upload_check.json. --preflight stays read-only.")
     parser.add_argument("--push-every-steps", type=int, default=0, help="Frequency of HF checkpoint upload in steps (0 = epoch-boundary only; only active when --save-strategy includes 'steps')")
     parser.add_argument("--resume-hf", type=str, default=None, help="Hugging Face repo to resume latest checkpoint from")
     parser.add_argument(
@@ -439,23 +445,15 @@ def setup_hardware(precision: str, rank: int = 0, xla_pallas: bool = True, xla_s
     return is_tpu, device, dtype, precision
 
 
-def upload_checkpoint_to_hf(checkpoint_dir: Path, hf_repo: str, step: int, epoch: int, path_in_repo: Optional[str] = None):
+def upload_checkpoint_to_hf(checkpoint_dir: Path, hf_repo: str, step: int, epoch: int, path_in_repo: Optional[str] = None, hub_base_model_id: Optional[str] = None):
     """Upload lightweight LoRA checkpoint (~760 MB) to Hugging Face Hub under structured path_in_repo."""
     try:
-        from huggingface_hub import HfApi
-        api = HfApi()
+        from dental_agent.model.hub_artifacts import upload_adapter_folder
         commit_msg = f"VLM-DENTAL SFT Checkpoint: Step {step} (Epoch {epoch})"
         target_path_str = f" to {hf_repo}/{path_in_repo}" if path_in_repo else f" to {hf_repo}"
         print(f"[HF-HUB] Uploading checkpoint from {checkpoint_dir}{target_path_str}...")
-        kwargs: Dict[str, Any] = {
-            "folder_path": str(checkpoint_dir),
-            "repo_id": hf_repo,
-            "commit_message": commit_msg,
-            "ignore_patterns": ["*.tmp", "*.lock"],
-        }
-        if path_in_repo:
-            kwargs["path_in_repo"] = path_in_repo
-        api.upload_folder(**kwargs)
+        upload_adapter_folder(checkpoint_dir, hf_repo, path_in_repo,
+                              base_model_id=hub_base_model_id, commit_message=commit_msg)
         print(f"[HF-HUB] Checkpoint successfully uploaded{target_path_str}.")
     except Exception as e:
         print(f"[HF-HUB WARNING] Failed to upload checkpoint to {hf_repo}: {e}")
@@ -645,7 +643,9 @@ def _run_training(index: int, args: argparse.Namespace):
     out_path = Path(args.output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
     best_adapter_path = out_path / "best_adapter"
-    path_in_repo = f"sft/{out_path.name}"
+    from dental_agent.model.hub_artifacts import sft_hub_subfolder, validate_base_model_id
+    path_in_repo = sft_hub_subfolder(args.track, args.stage, args.precision, args.hf_run_tag)
+    hub_base_model_id = validate_base_model_id(args.hub_base_model_id) if args.hub_base_model_id else None
 
     is_tpu, device, compute_dtype, active_precision = setup_hardware(
         args.precision,
@@ -698,6 +698,14 @@ def _run_training(index: int, args: argparse.Namespace):
     if is_tpu and args.xla_spmd and not args.fsdp:
         raise SystemExit("--spmd shards the weights through FSDPv2; --no-fsdp would replicate 18 GB on every core. "
                          "Use --spmd --fsdp, or --no-spmd for the legacy path.")
+    if is_master and args.hf_repo and not args.debug_steps and args.hf_upload_check:
+        from dental_agent.model.hub_artifacts import check_hub_write_access
+        check_hub_write_access(args.hf_repo, path_in_repo, metadata={
+            "track": args.track, "stage": args.stage, "precision": args.precision,
+            "compute_dtype": str(compute_dtype), "base_model": hub_base_model_id,
+            "run_tag": args.hf_run_tag,
+        })
+        print(f"[HF-HUB PRECHECK] Upload access verified: {args.hf_repo}/{path_in_repo}", flush=True)
     if args.triangular_shim:
         from dental_agent.training.xla_patches import install_xla_solve_triangular_shim
         install_xla_solve_triangular_shim()
@@ -976,6 +984,9 @@ def _run_training(index: int, args: argparse.Namespace):
             track=args.track,
             stage=args.stage,
             precision=args.precision,
+            hub_base_model_id=hub_base_model_id,
+            hf_path_in_repo=path_in_repo,
+            hf_run_tag=args.hf_run_tag,
             qlora_skip_modules=list(QLORA_SKIP_MODULES) if args.precision == "qlora" else None,
             compute_dtype=str(compute_dtype),
             loss_chunk_tokens=args.loss_chunk_tokens,
@@ -1170,7 +1181,7 @@ def _run_training(index: int, args: argparse.Namespace):
             xm.save(optimizer.state_dict(), out_path / "optimizer.pt")
             xm.save(scheduler.state_dict(), out_path / "scheduler.pt")
             if args.hf_repo and xm.is_master_ordinal():
-                upload_checkpoint_to_hf(out_path, args.hf_repo, total_steps, epoch_num, path_in_repo=path_in_repo)
+                upload_checkpoint_to_hf(out_path, args.hf_repo, total_steps, epoch_num, path_in_repo=path_in_repo, hub_base_model_id=hub_base_model_id)
         else:
             unwrap_peft_model(model).save_pretrained(str(out_path))
             torch.save(optimizer.state_dict(), out_path / "optimizer.pt")
@@ -1180,7 +1191,7 @@ def _run_training(index: int, args: argparse.Namespace):
             with open(state_file, "w") as f:
                 json.dump(state_data, f)
             if args.hf_repo:
-                upload_checkpoint_to_hf(out_path, args.hf_repo, total_steps, epoch_num, path_in_repo=path_in_repo)
+                upload_checkpoint_to_hf(out_path, args.hf_repo, total_steps, epoch_num, path_in_repo=path_in_repo, hub_base_model_id=hub_base_model_id)
 
     # Emergency SIGTERM handler for Kaggle 9-hour session preemption
     def sigterm_handler(signum, frame):

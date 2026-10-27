@@ -577,6 +577,16 @@ def _check_sft_flags(args: Any, rep: _Report) -> None:
             ok = False
         else:
             rep.add(INFO, "tpu-loss-chunk-tokens", f"fixed positions per row={args.tpu_loss_chunk_tokens}; XLA loop probe still required")
+    from dental_agent.model.hub_artifacts import sft_hub_subfolder, validate_base_model_id
+    try:
+        destination = sft_hub_subfolder(args.track, args.stage, args.precision, getattr(args, "hf_run_tag", None))
+        if getattr(args, "hub_base_model_id", None):
+            validate_base_model_id(args.hub_base_model_id)
+        if getattr(args, "hf_repo", None):
+            rep.add(INFO, "Hub destination", f"{args.hf_repo}/{destination}; write access checked only on actual launch")
+    except ValueError as exc:
+        rep.add(FAIL, "Hub metadata/path", str(exc))
+        ok = False
     chunk = int(getattr(args, "loss_chunk_tokens", 0) or 0)
     if chunk < 0:
         rep.add(FAIL, "loss-chunk-tokens", "must be 0 or a positive number of tokens.")
@@ -604,14 +614,19 @@ def _check_sft_output(args: Any, rep: _Report) -> Path:
             rep.add(WARN, "output folder", f"{out} already holds an adapter; this run (no --resume-hf) starts at step 1 and overwrites it.")
     else:
         rep.add(PASS, "output folder", f"{out}")
+    from dental_agent.model.hub_artifacts import sft_hub_subfolder
+    try:
+        hub_path = sft_hub_subfolder(args.track, args.stage, args.precision, getattr(args, "hf_run_tag", None))
+    except ValueError:
+        return out  # The flags check already reports an invalid destination.
     if args.resume_hf:
-        present, err = inp.hub_probe(args.resume_hf, "model", [f"sft/{out.name}/training_state.json"])
+        present, err = inp.hub_probe(args.resume_hf, "model", [f"{hub_path}/training_state.json"])
         if present:
-            rep.add(PASS, "resume", f"{args.resume_hf}/sft/{out.name} holds a checkpoint to continue from")
+            rep.add(PASS, "resume", f"{args.resume_hf}/{hub_path} holds a checkpoint to continue from")
         elif err:
             rep.add(WARN, "resume", f"the Hub could not be checked ({err}).")
         else:
-            rep.add(WARN, "resume", f"{args.resume_hf} has no sft/{out.name}/training_state.json: the run starts at step 1.")
+            rep.add(WARN, "resume", f"{args.resume_hf} has no {hub_path}/training_state.json: the run starts at step 1.")
     return out
 
 

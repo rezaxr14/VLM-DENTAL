@@ -44,15 +44,12 @@ from dental_agent.utils.canonical import SLOT_BUDGET, add_letterbox_arg, check_g
 def upload_checkpoint_to_hf(checkpoint_dir: Path, hf_repo: str, step: int):
     """Upload lightweight LoRA checkpoint (~760 MB) to Hugging Face Hub."""
     try:
-        from huggingface_hub import HfApi
-        api = HfApi()
+        from dental_agent.model.hub_artifacts import upload_adapter_folder
         commit_msg = f"VLM-DENTAL GRPO Checkpoint: Step {step}"
         print(f"[HF-HUB] Uploading GRPO checkpoint from {checkpoint_dir} to {hf_repo}...")
-        api.upload_folder(
-            folder_path=str(checkpoint_dir),
-            repo_id=hf_repo,
+        upload_adapter_folder(
+            checkpoint_dir, hf_repo,
             commit_message=commit_msg,
-            ignore_patterns=["*.tmp", "*.lock"],
         )
         print(f"[HF-HUB] GRPO checkpoint successfully uploaded to {hf_repo}.")
     except Exception as e:
