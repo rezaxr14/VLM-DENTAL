@@ -251,6 +251,9 @@ def parse_args():
     parser.add_argument("--load-traceback-seconds", type=int, default=0,
                         help="Periodic stack dumps during loading only; 0 disables. A dump is diagnostic, not a timeout kill.")
     add_letterbox_arg(parser)
+    parser.add_argument("--tpu-loss-chunk-tokens", type=int, default=0,
+                        help="Opt-in TPU/SPMD fixed-shape loss chunks with recomputed backward; "
+                             "0 keeps stock TPU loss. Separate from GPU --loss-chunk-tokens.")
     parser.add_argument(
         "--loss-chunk-tokens",
         type=int,
@@ -673,6 +676,12 @@ def _run_training(index: int, args: argparse.Namespace):
         raise SystemExit("--debug-steps must be nonnegative")
     if args.debug_steps and is_tpu:
         raise SystemExit("--debug-steps is CUDA/CPU-only; TPU pipeline is unchanged")
+    if args.tpu_loss_chunk_tokens < 0:
+        raise SystemExit("--tpu-loss-chunk-tokens must be nonnegative")
+    if args.tpu_loss_chunk_tokens:
+        from dental_agent.training.tpu_chunked_loss import validate_tpu_loss_args, require_xla_loop
+        validate_tpu_loss_args(args, is_tpu=is_tpu)
+        require_xla_loop()  # Fail before loading weights; never substitute an unrolled graph.
     if args.loss_chunk_tokens < 0:
         raise SystemExit("--loss-chunk-tokens must be 0 (stock loss) or a positive number of tokens.")
     if args.loss_chunk_tokens and is_tpu:
@@ -883,6 +892,9 @@ def _run_training(index: int, args: argparse.Namespace):
     spmd_mesh = None
     if use_spmd and args.fsdp:
         spmd_mesh = setup_spmd_mesh(num_cores=args.num_cores)
+        if is_tpu and args.tpu_loss_chunk_tokens:
+            from dental_agent.training.tpu_chunked_loss import install_tpu_chunked_loss
+            install_tpu_chunked_loss(model, args.tpu_loss_chunk_tokens, mesh=spmd_mesh)
         model = wrap_spmd_model(model, mesh=spmd_mesh, is_master=is_master)
     else:
         model = wrap_distributed_model(
@@ -982,6 +994,11 @@ def _run_training(index: int, args: argparse.Namespace):
             dev_split=args.dev_split,
             dev_split_fingerprint=keys_fingerprint(load_dev_keys(args.dev_split)),
             n_records=len(full_dataset),
+            **({"tpu_loss": {
+                "chunk_tokens": args.tpu_loss_chunk_tokens,
+                "implementation": "xla-while-frozen-head-ce-v1",
+                "normalization": "global shifted supervised-token mean",
+            }} if is_tpu and args.tpu_loss_chunk_tokens else {}),
         )
 
     if val_size > 0:

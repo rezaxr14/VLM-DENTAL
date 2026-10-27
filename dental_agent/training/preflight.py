@@ -567,6 +567,16 @@ def _check_sft_flags(args: Any, rep: _Report) -> None:
         if bad:
             rep.add(FAIL, "CUDA flags on TPU", "Use standard loading, no CPU/thread timer overrides, no CUDA SDPA guard or debug steps; attention sdpa")
             ok = False
+    if getattr(args, "tpu_loss_chunk_tokens", 0):
+        from dental_agent.training.tpu_chunked_loss import validate_tpu_loss_args, require_xla_loop
+        try:
+            validate_tpu_loss_args(args, is_tpu=importlib.util.find_spec("torch_xla") is not None and not _cuda_available())
+            require_xla_loop()
+        except (ValueError, RuntimeError) as exc:
+            rep.add(FAIL, "tpu-loss-chunk-tokens", str(exc))
+            ok = False
+        else:
+            rep.add(INFO, "tpu-loss-chunk-tokens", f"fixed positions per row={args.tpu_loss_chunk_tokens}; XLA loop probe still required")
     chunk = int(getattr(args, "loss_chunk_tokens", 0) or 0)
     if chunk < 0:
         rep.add(FAIL, "loss-chunk-tokens", "must be 0 or a positive number of tokens.")

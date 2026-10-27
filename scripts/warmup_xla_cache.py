@@ -218,6 +218,12 @@ def run_warmup_worker(index: int, args: argparse.Namespace):
             import torch_xla.core.xla_model as xm
             is_master = xm.is_master_ordinal()
 
+        if args.tpu_loss_chunk_tokens < 0:
+            raise ValueError("--tpu-loss-chunk-tokens must be nonnegative")
+        if args.tpu_loss_chunk_tokens:
+            from dental_agent.training.tpu_chunked_loss import validate_tpu_loss_args, require_xla_loop
+            validate_tpu_loss_args(args, is_tpu=is_tpu)
+            require_xla_loop()
         pad_vision_to_slots = args.pad_vision_to_slots
         slot_budget = parse_slot_budget(*args.vision_slots)
         static_vision_tokens = slot_totals(slot_budget)["tokens"]
@@ -349,6 +355,9 @@ def run_warmup_worker(index: int, args: argparse.Namespace):
         spmd_mesh = None
         if use_spmd and args.fsdp:
             spmd_mesh = setup_spmd_mesh(num_cores=args.num_cores)
+            if is_tpu and args.tpu_loss_chunk_tokens:
+                from dental_agent.training.tpu_chunked_loss import install_tpu_chunked_loss
+                install_tpu_chunked_loss(model, args.tpu_loss_chunk_tokens, mesh=spmd_mesh)
             model = wrap_spmd_model(model, mesh=spmd_mesh, is_master=is_master)
         else:
             model = wrap_distributed_model(
@@ -496,6 +505,14 @@ def run_warmup_worker(index: int, args: argparse.Namespace):
             for r in results:
                 print(f"  - Bucket {r['bucket']:5d} tokens: {r['compile_seconds']}s")
 
+            if args.tpu_loss_chunk_tokens:
+                (cache_base / "tpu_loss_config.json").write_text(json.dumps({
+                    "chunk_tokens": args.tpu_loss_chunk_tokens,
+                    "implementation": "xla-while-frozen-head-ce-v1",
+                    "model_id": str(args.model_id), "precision": args.precision,
+                    "buckets": target_buckets, "vision_slots": list(args.vision_slots),
+                }, indent=2))
+
             # Generate dataset-metadata.json for Kaggle upload
             meta = {
                 "title": "VLM-DENTAL SFT XLA Persistent Cache",
@@ -591,6 +608,9 @@ def parse_args() -> argparse.Namespace:
         choices=["sdpa", "eager"],
         help="Attention implementation to compile: 'sdpa' (fused) or 'eager'",
     )
+    parser.add_argument("--tpu-loss-chunk-tokens", type=int, default=0,
+                        help="Opt-in TPU/SPMD fixed-shape loss chunks with recomputed backward; "
+                             "0 keeps stock TPU loss. Separate from GPU --loss-chunk-tokens.")
     parser.add_argument("--precision", type=str, default="bf16", choices=["bf16", "fp16", "fp32"])
     parser.add_argument("--lora-target-vision", type=str, default="projector", choices=["projector", "none"])
     parser.add_argument("--lora-linear-attn", action=argparse.BooleanOptionalAction, default=True,
