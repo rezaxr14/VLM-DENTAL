@@ -117,6 +117,9 @@ def parse_args():
         default=False,
         help="Roll out with canonical views; must match the SFT stage's --canonical-resize setting.",
     )
+    from dental_agent.model.local_runtime import add_runtime_args
+    add_runtime_args(parser,scoring=True)
+    parser.add_argument("--gradient-checkpointing", action=argparse.BooleanOptionalAction, default=True)
     add_letterbox_arg(parser)
     parser.add_argument("--max-new-tokens", type=int, default=2048,
                         help="Token cap of ONE assistant turn during rollouts (same as run_grpo.py).")
@@ -226,6 +229,7 @@ def main():
             except Exception as e:
                 print(f"[RESUME WARNING] K={k}: could not restore from the Hub: {e}")
 
+        from dental_agent.model.local_runtime import runtime_from_args
         final_ckpt = train_grpo(
             images_df=images_df,
             annots_df=annots_df,
@@ -252,7 +256,9 @@ def main():
             pad_vision_to_slots=args.pad_vision_to_slots,
             slot_budget=parse_slot_budget(*args.vision_slots),
             max_new_tokens=args.max_new_tokens,
-            log_path=f"{ckpt_dir}/grpo_training_log.jsonl",  # one log per K (they used to share one file)
+            log_path=f"{ckpt_dir}/grpo_training_log.jsonl",  # one log per K
+            runtime_options=runtime_from_args(args),
+            gradient_checkpointing=args.gradient_checkpointing,
         )
 
         elapsed = time.time() - start_time

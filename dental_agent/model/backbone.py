@@ -34,6 +34,8 @@ def get_model_classes():
 def load_model(
     config: ProjectConfig | ModelConfig | None = None,
     device_map: str = "auto",
+    runtime_options: Any = None,
+    is_tpu: bool = False,
 ) -> Tuple[Any, Any]:
     """Load multimodal backbone and processor with 4-bit NF4 quantization.
 
@@ -45,14 +47,15 @@ def load_model(
     model_cfg = config.model if isinstance(config, ProjectConfig) else (config or ModelConfig())
     ModelClass = get_model_classes()
 
-    bnb_config = None
-    if model_cfg.load_in_4bit and torch.cuda.is_available():
-        compute_dtype = (
-            torch.bfloat16
-            if model_cfg.bnb_compute_dtype == "bfloat16"
-            else torch.float16
-        )
-        bnb_config = qlora_bnb_config(compute_dtype, quant_type=model_cfg.bnb_quant_type, double_quant=model_cfg.bnb_double_quant)
+    from dental_agent.model.local_runtime import resolve_options, configure_model
+    from dental_agent.training.gpu_runtime import model_loading_context
+    if runtime_options is None and model_cfg.bnb_compute_dtype in {'float16','fp16'}:
+        from dental_agent.model.local_runtime import LocalRuntime
+        runtime_options = LocalRuntime(qlora_compute_dtype='fp16')
+    opts, precision, compute_dtype, backend, loader, threads = resolve_options(
+        runtime_options, load_in_4bit=model_cfg.load_in_4bit, is_tpu=is_tpu)
+    bnb_config = qlora_bnb_config(compute_dtype, quant_type=model_cfg.bnb_quant_type,
+                                 double_quant=model_cfg.bnb_double_quant) if precision == "qlora" else None
 
     try:
         processor = AutoProcessor.from_pretrained(model_cfg.name, trust_remote_code=True)
@@ -68,30 +71,18 @@ def load_model(
         if processor.tokenizer.pad_token_id is None:
             processor.tokenizer.pad_token = processor.tokenizer.eos_token
 
-    if torch.cuda.is_available():
-        # On Turing sm_75 (Tesla T4) and above, enable PyTorch native SDPA Memory-Efficient Attention
-        # (Cutlass backend) to eliminate the O(N^2) dense attention allocation on high-resolution images.
-        if hasattr(torch.backends.cuda, "enable_mem_efficient_sdp"):
-            torch.backends.cuda.enable_mem_efficient_sdp(True)
-        major_cap = torch.cuda.get_device_capability()[0]
-        if major_cap < 8 and hasattr(torch.backends.cuda, "enable_flash_sdp"):
-            torch.backends.cuda.enable_flash_sdp(False)
-
     model_kwargs: dict[str, Any] = {
-        "device_map": device_map if torch.cuda.is_available() else None,
+        "device_map": device_map if torch.cuda.is_available() and not is_tpu else None,
         "trust_remote_code": True,
+        "dtype": compute_dtype,
+        "attn_implementation": backend,
     }
-    if torch.cuda.is_available():
-        model_kwargs["attn_implementation"] = "sdpa"
-        if bnb_config is not None:
-            model_kwargs["quantization_config"] = bnb_config
-        else:
-            model_kwargs["torch_dtype"] = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-    else:
-        model_kwargs["torch_dtype"] = torch.float32
+    if bnb_config is not None:
+        model_kwargs["quantization_config"] = bnb_config
 
     try:
-        model = ModelClass.from_pretrained(model_cfg.name, **model_kwargs)
+        with model_loading_context(loader, threads, opts.load_traceback_seconds):
+            model = ModelClass.from_pretrained(model_cfg.name, **model_kwargs)
     except Exception as e:
         if "does not recognize this architecture" in str(e) or "qwen3_5" in str(e):
             raise RuntimeError(
@@ -99,6 +90,7 @@ def load_model(
                 f"Please run `pip install --upgrade transformers>=5.0.0` and restart the session. Original error: {e}"
             ) from e
         raise
+    configure_model(model, opts, compute_dtype, backend)
     return model, processor
 
 

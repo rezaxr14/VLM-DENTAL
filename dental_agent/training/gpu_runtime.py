@@ -62,7 +62,7 @@ def select_attention_backend(requested: str, is_tpu: bool = False) -> str:
 
 
 @contextlib.contextmanager
-def sdpa_gqa_policy(mode: str = "auto"):
+def sdpa_gqa_policy(mode: str = "auto", *, report: bool = True):
     """Repeat KV via HF's existing branch on pre-Ampere CUDA; restore on exit.
 
     'on' forces repetition (also useful for a CPU equivalence test); 'off'
@@ -88,7 +88,8 @@ def sdpa_gqa_policy(mode: str = "auto"):
         return original(attention_mask, key, value)
 
     sdpa.use_gqa_in_sdpa = choose
-    print(f"[SDPA] KV repetition policy={mode}; built-in repeat_kv branch; math fallback policy unchanged", flush=True)
+    if report:
+        print(f"[SDPA] KV repetition policy={mode}; built-in repeat_kv branch; math fallback policy unchanged", flush=True)
     try:
         yield
     finally:

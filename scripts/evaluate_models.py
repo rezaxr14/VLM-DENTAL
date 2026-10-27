@@ -93,7 +93,7 @@ DEFAULT_OUTPUT_DIR = "data/evaluations"
 # Hardware Setup
 # ---------------------------------------------------------------------------
 
-def setup_eval_hardware(precision: str = "bf16"):
+def setup_eval_hardware(precision: str = "bf16", qlora_compute_dtype: str = "auto"):
     """Detect hardware: TPU / CUDA / CPU and return (device, dtype)."""
     import torch
     is_tpu = False
@@ -110,7 +110,10 @@ def setup_eval_hardware(precision: str = "bf16"):
             device = torch.device("cpu")
             print("[HARDWARE] Running on CPU.")
 
-    dtype = torch.bfloat16 if precision in ("bf16", "qlora") else (torch.float16 if precision == "fp16" else torch.float32)
+    from dental_agent.training.gpu_runtime import resolve_compute_dtype
+    if is_tpu and precision == 'qlora':
+        raise ValueError('QLoRA is CUDA-only')
+    dtype = torch.float32 if precision == 'fp32' else resolve_compute_dtype(precision, qlora_compute_dtype)
     return device, dtype, is_tpu
 
 
@@ -118,40 +121,20 @@ def setup_eval_hardware(precision: str = "bf16"):
 # Model Loading
 # ---------------------------------------------------------------------------
 
-def load_eval_model(model_id: str, adapter_path: str | None, device, dtype, condition: str, quantize_4bit: bool = False):
+def load_eval_model(model_id: str, adapter_path: str | None, device, dtype, condition: str, quantize_4bit: bool = False, runtime_options: Any = None):
     """Load base model and optionally attach LoRA adapter for SFT/GRPO conditions.
 
     Returns (model, processor).
     """
     import torch
-    from transformers import AutoProcessor
-    from dental_agent.model.backbone import get_model_classes
-
-    processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
-    if processor.tokenizer.pad_token_id is None:
-        processor.tokenizer.pad_token = processor.tokenizer.eos_token
-
-    ModelClass = get_model_classes()
-
-    load_kwargs: dict[str, Any] = {
-        "trust_remote_code": True,
-        "torch_dtype": dtype,
-        "low_cpu_mem_usage": True,
-    }
-    if torch.cuda.is_available():
-        load_kwargs["device_map"] = "auto"
-    if quantize_4bit:
-        from dental_agent.model.backbone import qlora_bnb_config
-        # Same NF4 config and skip list (vision tower + lm_head stay 16-bit) the adapter was trained under.
-        load_kwargs["quantization_config"] = qlora_bnb_config(dtype)
-
-    print(f"[MODEL] Loading base model: {model_id} (dtype={dtype}, 4-bit={quantize_4bit})...")
-    try:
-        model = ModelClass.from_pretrained(model_id, **load_kwargs)
-    except TypeError:
-        # Fallback for older transformers that use 'dtype' instead of 'torch_dtype'
-        load_kwargs["dtype"] = load_kwargs.pop("torch_dtype")
-        model = ModelClass.from_pretrained(model_id, **load_kwargs)
+    from dental_agent.model.backbone import load_model
+    from dental_agent.model.local_runtime import LocalRuntime
+    from dental_agent.config import ModelConfig
+    if runtime_options is None:
+        precision = 'qlora' if quantize_4bit else {torch.bfloat16:'bf16',torch.float16:'fp16',torch.float32:'fp32'}[dtype]
+        runtime_options = LocalRuntime(precision=precision, qlora_compute_dtype='bf16' if dtype == torch.bfloat16 else 'fp16')
+    model, processor = load_model(ModelConfig(name=model_id,load_in_4bit=quantize_4bit),
+                                  runtime_options=runtime_options, is_tpu=getattr(device,'type',None) == 'xla')
 
     # Attach LoRA adapter for SFT / GRPO conditions
     if adapter_path and condition.startswith(("sft_", "grpo_")):
@@ -703,8 +686,10 @@ def evaluate_condition(
 
     # Load model (unless the caller already did)
     if loaded is None:
-        device, dtype, is_tpu = setup_eval_hardware(args.precision)
-        model, processor = load_eval_model(args.model_id, adapter_path, device, dtype, condition, quantize_4bit=args.precision == "qlora")
+        device, dtype, is_tpu = setup_eval_hardware(args.precision, getattr(args,"qlora_compute_dtype","auto"))
+        from dental_agent.model.local_runtime import runtime_from_args
+        model, processor = load_eval_model(args.model_id, adapter_path, device, dtype, condition, quantize_4bit=args.precision == "qlora",
+                                            runtime_options=runtime_from_args(args))
     else:
         model, processor = loaded
 
@@ -923,6 +908,8 @@ def parse_args() -> argparse.Namespace:
              "COMPARE 512x384, black-bar padded unless --no-canonical-letterbox). Pass exactly what the evaluated checkpoint "
              "was trained with.",
     )
+    from dental_agent.model.local_runtime import add_runtime_args
+    add_runtime_args(parser)
     add_letterbox_arg(parser)
     return parser.parse_args()
 

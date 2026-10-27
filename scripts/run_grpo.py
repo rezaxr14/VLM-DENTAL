@@ -254,6 +254,9 @@ def main() -> None:
              "match the SFT run that produced --sft-stage (train_sft.py --canonical-resize), otherwise the policy is "
              "optimised on a different image distribution than it was fine-tuned on.",
     )
+    from dental_agent.model.local_runtime import add_runtime_args
+    add_runtime_args(parser, scoring=True)
+    parser.add_argument('--gradient-checkpointing', action=argparse.BooleanOptionalAction, default=True)
     add_letterbox_arg(parser)
     parser.add_argument(
         "--max-new-tokens",
@@ -424,9 +427,10 @@ def run_worker(index: int, args: argparse.Namespace):
         print(f"* Dataset     : {args.dataset} ({len(images_df)} training images; dev split: {args.dev_split or 'none'})")
         print(f"* KL Beta     : {args.kl_beta}")
         print(f"* Learning Rate: {args.lr}")
-        print(f"* Replicas    : {args.num_cores} device cores ({'SPMD single process' if args.spmd else 'xmp.spawn'})")
+        print(f"* Replicas    : {args.num_cores if is_tpu else 1} device replicas ({'SPMD single process' if is_tpu and args.spmd else ('xmp.spawn' if is_tpu else 'CUDA/CPU single-process layer placement')})")
         print("======================================================================")
 
+    from dental_agent.model.local_runtime import runtime_from_args
     train_grpo(
         images_df=images_df,
         annots_df=annots_df,
@@ -454,6 +458,8 @@ def run_worker(index: int, args: argparse.Namespace):
         resume=args.resume,
         max_new_tokens=args.max_new_tokens,
         log_path=args.log_path,
+        runtime_options=runtime_from_args(args),
+        gradient_checkpointing=args.gradient_checkpointing,
     )
 
 

@@ -98,43 +98,39 @@ def compute_token_log_probs(
     model: Any,
     enc: dict[str, torch.Tensor],
     use_reference: bool = False,
+    logprob_chunk_tokens: int | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Per-token log-probs + loss mask for current policy vs frozen reference policy.
+    """FP32 token log-probs; respect outer no_grad and restore policy before backward.
 
-    Toggles between 'reference' (frozen SFT adapter) and 'grpo_policy' (trainable RL adapter).
+    Old/reference scoring must not build graphs. Policy checkpoint recomputation
+    must see the same active adapter as its forward, even after reference scoring.
     """
-    labels = enc["labels"]
-    model_inputs = {k: v for k, v in enc.items() if k != "labels"}
-
-    # Toggle dual-adapter mechanism
+    from dental_agent.model.local_runtime import local_context, runtime_for
+    from dental_agent.training.chunked_log_probs import token_log_probs
     peft_m = unwrap_peft_model(model)
-    if use_reference:
-        if hasattr(peft_m, "set_adapter"):
-            peft_m.set_adapter("reference")
-        elif hasattr(peft_m, "disable_adapter"):
-            peft_m.disable_adapter()
-    else:
-        if hasattr(peft_m, "set_adapter"):
-            peft_m.set_adapter("grpo_policy")
-        elif hasattr(peft_m, "enable_adapter"):
-            peft_m.enable_adapter()
-
-    with torch.set_grad_enabled(not use_reference):
-        outputs = model(**model_inputs)
-
-    # Revert to grpo_policy just in case
-    if use_reference:
-        if hasattr(peft_m, "set_adapter"):
-            peft_m.set_adapter("grpo_policy")
-        elif hasattr(peft_m, "enable_adapter"):
-            peft_m.enable_adapter()
-
-    logits = outputs.logits[:, :-1, :]
-    shift_labels = labels[:, 1:].to(logits.device)
-    log_probs = torch.log_softmax(logits, dim=-1)
-    token_log_probs = torch.gather(log_probs, 2, shift_labels.clamp(min=0).unsqueeze(-1)).squeeze(-1)
-    mask = (shift_labels != -100).float()
-    return token_log_probs, mask
+    configs = getattr(peft_m, 'peft_config', {})
+    policy = 'grpo_policy' if not configs or 'grpo_policy' in configs else next(iter(configs))
+    use_named_reference = not configs or 'reference' in configs
+    def activate(name):
+        if hasattr(peft_m, 'set_adapter'):
+            peft_m.set_adapter(name)
+        # Never permit the frozen reference to join optimizer parameters.
+        for name, p in peft_m.named_parameters():
+            if '.reference.' in name:
+                p.requires_grad_(False)
+    opts = runtime_for(model)
+    chunk = logprob_chunk_tokens if logprob_chunk_tokens is not None else (opts.logprob_chunk_tokens if opts else 0)
+    grad_enabled = torch.is_grad_enabled() and not use_reference
+    try:
+        if use_reference and use_named_reference:
+            activate('reference')
+        else:
+            activate(policy)
+        adapter_context = peft_m.disable_adapter() if use_reference and not use_named_reference and hasattr(peft_m,'disable_adapter') else contextlib.nullcontext()
+        with adapter_context, torch.set_grad_enabled(grad_enabled), local_context(model):
+            return token_log_probs(model, enc, chunk)
+    finally:
+        activate(policy)
 
 
 def build_full_trajectory_labels(
@@ -238,7 +234,7 @@ def collect_grpo_group_batched_no_tools(
 
     # Batch K copies together across batch dimension
     batched_inputs = {
-        k: v.repeat_interleave(group_size, dim=0).to(model.device) if isinstance(v, torch.Tensor) else v
+        k: (v.repeat((group_size,) + (1,) * (v.ndim - 1)) if k in {"pixel_values", "pixel_values_videos"} else v.repeat_interleave(group_size, dim=0)).to(model.device) if isinstance(v, torch.Tensor) else v
         for k, v in single_enc.items()
     }
 
@@ -250,8 +246,8 @@ def collect_grpo_group_batched_no_tools(
     }
 
     model.eval()
-    with torch.no_grad():
-        gen_out = model.generate(**batched_inputs, **gen_kwargs)
+    from dental_agent.model.local_runtime import generate_local
+    gen_out = generate_local(model, **batched_inputs, **gen_kwargs)
 
     trajectories, rewards, old_log_probs_list, masks_list = [], [], [], []
 
@@ -343,8 +339,7 @@ def collect_grpo_group_batched_with_tools(
             old_log_probs_list.append(None)  # computed later in the static-shape update path
             masks_list.append(None)
 
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        # Retain allocator blocks between rollout candidates.
 
     return trajectories, rewards, old_log_probs_list, masks_list
 
@@ -456,6 +451,7 @@ def static_policy_epoch(
     kl_beta: float,
     n_total_rollouts: int,
     to_device: Any,
+    grad_scaler: Any = None,
 ) -> tuple[float, int]:
     """One PPO-clip/k3-KL pass over micro-batches of ``rows`` trajectories with static shapes.
 
@@ -490,7 +486,10 @@ def static_policy_epoch(
                 kl_n += n
 
             per_row = (per_token_loss * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1)
-            (per_row.sum() / n_total_rollouts).backward()
+            from dental_agent.model.local_runtime import local_context
+            loss = per_row.sum() / n_total_rollouts
+            with local_context(model, autocast=False):
+                (grad_scaler.scale(loss) if grad_scaler is not None else loss).backward()
     return kl_sum, kl_n
 
 
@@ -520,6 +519,7 @@ def grpo_step(
     use_spmd: bool = False,
     temperature: float = 0.7,
     max_new_tokens: int = 2048,
+    grad_scaler: Any = None,
 ) -> tuple[dict[str, Any], float]:
     """One GRPO update cycle over on-policy sampled groups.
 
@@ -628,7 +628,7 @@ def grpo_step(
         if train_collator is not None:
             ks, kn = static_policy_epoch(
                 model, train_collator, rows_per_forward, groups_static,
-                clip_eps, kl_beta, n_total_rollouts, _to_device,
+                clip_eps, kl_beta, n_total_rollouts, _to_device, grad_scaler,
             )
             total_kl += ks
             kl_count += kn
@@ -639,8 +639,9 @@ def grpo_step(
                     enc = {k: v.to(model.device) if hasattr(v, "to") else v for k, v in enc.items()}
                     new_lp, _ = compute_token_log_probs(model, enc, use_reference=False)
 
-                    ratio = torch.exp(new_lp - old_lp.to(model.device))
-                    adv = advantage.to(model.device)
+                    ratio = torch.exp(new_lp - old_lp.to(new_lp.device))
+                    adv = advantage.to(new_lp.device)
+                    mask = mask.to(new_lp.device)
                     unclipped = ratio * adv
                     clipped = torch.clamp(ratio, 1.0 - clip_eps, 1.0 + clip_eps) * adv
                     per_token_loss = -torch.min(unclipped, clipped)
@@ -658,10 +659,11 @@ def grpo_step(
                         kl_count += 1
 
                     loss = (per_token_loss * mask).sum() / mask.sum().clamp(min=1) / n_total_rollouts
-                    loss.backward()
-
-                    if torch.cuda.is_available():
-                        torch.cuda.empty_cache()
+                    from dental_agent.model.local_runtime import local_context
+                    if not torch.isfinite(loss).item():
+                        raise RuntimeError('Nonfinite GRPO loss; policy/reference log probabilities must be finite')
+                    with local_context(model, autocast=False):
+                        (grad_scaler.scale(loss) if grad_scaler is not None else loss).backward()
 
         is_tpu = False
         try:
@@ -676,7 +678,11 @@ def grpo_step(
         elif is_tpu:
             xm.optimizer_step(optimizer)
         else:
-            optimizer.step()
+            if grad_scaler is not None:
+                grad_scaler.step(optimizer)
+                grad_scaler.update()
+            else:
+                optimizer.step()
 
     model.eval()
     if is_tpu:
@@ -832,6 +838,8 @@ def train_grpo(
     resume: bool = False,
     max_new_tokens: int = 2048,
     log_path: str | Path = "data/grpo_training_log.jsonl",
+    runtime_options: Any = None,
+    gradient_checkpointing: bool = True,
 ) -> str:
     """Execute Stage 2 GRPO policy optimization with dual-adapter reference and group advantage normalization."""
     from peft import PeftModel, LoraConfig
@@ -844,7 +852,21 @@ def train_grpo(
 
     print(f"--- Starting Stage 2 GRPO Training (Track={track}, GroupSize={G}, KLBeta={beta}, LR={lr}) ---")
 
-    model, processor = load_model(config)
+    import importlib.util
+    is_tpu = importlib.util.find_spec('torch_xla') is not None and not torch.cuda.is_available()
+    if runtime_options is None:
+        model, processor = load_model(config)  # preserve legacy stand-in loaders in tests/callers
+    else:
+        model, processor = load_model(config, runtime_options=runtime_options, is_tpu=is_tpu)
+    from dental_agent.model.local_runtime import configure_model, runtime_for, runtime_record
+    opts = runtime_for(model)
+    runtime_dtype = getattr(model, '_dental_compute_dtype', None)
+    runtime_backend = getattr(model, '_dental_attention_backend', None)
+    if opts and opts.allow_cpu_offload:
+        raise ValueError('CPU/disk offload is inference-only and forbidden for GRPO training')
+    if getattr(model, 'is_loaded_in_4bit', False):
+        from dental_agent.model.backbone import prepare_qlora_model
+        model = prepare_qlora_model(model, use_gradient_checkpointing=False)
 
     # Dual-adapter setup
     if sft_model_dir and os.path.exists(sft_model_dir):
@@ -866,6 +888,25 @@ def train_grpo(
     else:
         print(f"WARNING: No SFT model found at {sft_model_dir}. Applying fresh LoRA adapter.")
         model = apply_lora(model, config)
+
+    if opts:
+        configure_model(model, opts, runtime_dtype, runtime_backend)
+    if torch.cuda.is_available():
+        from dental_agent.training.sft import freeze_and_guard_vision_tower
+        train_merger = any(p.requires_grad and '.visual.' in n and 'merger' in n for n,p in model.named_parameters())
+        freeze_and_guard_vision_tower(model, train_merger=train_merger)
+        if gradient_checkpointing:
+            model.enable_input_require_grads()
+            model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={'use_reentrant': False})
+            print('[GRPO] Non-reentrant gradient checkpointing enabled; rollout generate explicitly uses cache', flush=True)
+    # Training scores request use_cache=False; rollout generation requests True.
+    cuda_fp16 = torch.cuda.is_available() and runtime_dtype == torch.float16
+    grad_scaler = torch.amp.GradScaler('cuda', enabled=cuda_fp16, init_scale=128.0)
+    if opts:
+        from dental_agent.training.gpu_runtime import runtime_metadata
+        Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
+        with open(Path(checkpoint_dir) / 'grpo_runtime.json', 'w') as f:
+            json.dump({'local_runtime': runtime_record(model), 'environment': runtime_metadata()}, f, indent=2)
 
     # Resume: reload the trained policy adapter and skip the images already trained on (before any TPU/FSDP wrapping).
     pool_fp = pool_fingerprint(images_df.dropna(subset=["local_path"])["id"])
@@ -989,11 +1030,12 @@ def train_grpo(
             use_spmd=bool(use_spmd and is_tpu),
             temperature=temperature,
             max_new_tokens=max_new_tokens,
+            grad_scaler=grad_scaler,
         )
         log_grpo_step(stats, log_path=log_path, extra={"step": step, "image_id": int(img_id)})
         print(f"[GRPO Step {step}/{total_steps}] mean_reward={stats['mean_reward']:.3f} kl={stats['kl_divergence']:.4f}")
 
-        if step % push_every_steps == 0 or step == total_steps:
+        if (push_every_steps > 0 and step % push_every_steps == 0) or step == total_steps:
             step_tag = f"grpo-{track}-step-{step}"
             ckpt_path = save_checkpoint(
                 model=unwrap_peft_model(model),

@@ -255,9 +255,9 @@ def runner(tmp_path, monkeypatch):
     for p in imgs["local_path"]:
         Image.new("RGB", (4, 4)).save(p)
     log = SimpleNamespace(loads=[], cells=[])
-    monkeypatch.setattr(ev, "setup_eval_hardware", lambda precision: ("cpu", None, False))
+    monkeypatch.setattr(ev, "setup_eval_hardware", lambda precision, qlora_compute_dtype="auto": ("cpu", None, False))
 
-    def fake_load(model_id, adapter, device, dtype, condition, quantize_4bit=False):
+    def fake_load(model_id, adapter, device, dtype, condition, quantize_4bit=False, runtime_options=None):
         log.loads.append(adapter)
         return ("model", "proc")
 

@@ -164,7 +164,7 @@ class APISessionPool:
 
     def __init__(self) -> None:
         self._compat_clients: dict[str, Any] = {}
-        self._transformers_pipelines: dict[str, tuple[Any, Any]] = {}
+        self._transformers_pipelines: dict[tuple, tuple[Any, Any]] = {}
 
     def get_openai_compatible(self, provider: str) -> Any:
         if provider in self._compat_clients:
@@ -194,33 +194,36 @@ class APISessionPool:
         self._compat_clients[provider] = client
         return client
 
-    def get_transformers_pipeline(self, model_name: str) -> tuple[Any, Any]:
+    def get_transformers_pipeline(self, model_name: str, runtime_options: Any = None) -> tuple[Any, Any]:
         """Lazily load and memoize in-process PyTorch model and processor."""
-        if model_name in self._transformers_pipelines:
-            return self._transformers_pipelines[model_name]
+        from dataclasses import asdict
+        from dental_agent.model.local_runtime import LocalRuntime
+        load_4bit = os.environ.get("TRANSFORMERS_LOAD_IN_4BIT", "false").lower() == "true"
+        from dental_agent.utils.inputs import local_model_alias
+        load_name = local_model_alias(model_name)
+        options = runtime_options if isinstance(runtime_options,LocalRuntime) else LocalRuntime(**(runtime_options or {}))
+        key = (model_name, load_name, load_4bit, tuple(sorted(asdict(options).items())))
+        if key in self._transformers_pipelines:
+            return self._transformers_pipelines[key]
 
         import torch
         from dental_agent.model.backbone import load_model
         from dental_agent.config import ModelConfig
 
-        from dental_agent.utils.inputs import local_model_alias
-
-        load_4bit = os.environ.get("TRANSFORMERS_LOAD_IN_4BIT", "false").lower() == "true"
-        # QWEN35_9B_LOCAL_DIR: "Qwen/Qwen3.5-9B" loads from that folder; the model name (outputs, records) stays the Hub id.
-        load_name = local_model_alias(model_name)
+        # Cache identity includes the resolved local weight folder and every runtime control.
         if load_name != model_name:
             print(f"[MODEL] {model_name}: weights from local folder {load_name} (QWEN35_9B_LOCAL_DIR), no download.", flush=True)
         cfg = ModelConfig(name=load_name, load_in_4bit=load_4bit)
 
         print(f"Loading native Transformers model '{model_name}' (device_map='auto', 4bit={load_4bit})...", flush=True)
-        model, processor = load_model(cfg, device_map="auto")
+        model, processor = load_model(cfg, device_map="auto", runtime_options=options)
         if hasattr(model, "hf_device_map"):
             devices_used = set(model.hf_device_map.values())
             print(f"Model sharded across devices: {devices_used}", flush=True)
             if "cpu" in devices_used or "disk" in devices_used:
                 print("⚠️ WARNING: Part of model was placed on CPU/disk! Inference will be slow.", flush=True)
         model.eval()
-        self._transformers_pipelines[model_name] = (model, processor)
+        self._transformers_pipelines[key] = (model, processor)
         return model, processor
 
 _POOL = APISessionPool()
@@ -513,7 +516,7 @@ def _call_llm_once(
         elif provider in ("transformers", "local_hf"):
             import torch
             import time
-            model_obj, processor = _POOL.get_transformers_pipeline(model)
+            model_obj, processor = _POOL.get_transformers_pipeline(model, kwargs.get("local_runtime"))
             prefix = provider.upper()
             max_dim_str = os.environ.get(f"{prefix}_IMAGE_MAX_DIM")
             max_dim = int(max_dim_str) if max_dim_str is not None else 0
@@ -552,44 +555,17 @@ def _call_llm_once(
                 user_parts.append({"type": "text", "text": user_content})
                 messages.append({"role": "user", "content": user_parts})
 
-            # Process input using qwen_vl_utils if available or native AutoProcessor
+            # Qwen3.5 uses a 16-pixel patch grid. Preserve existing PIL views
+            # instead of qwen_vl_utils' legacy default patch=14 double-resize.
             t_pre_0 = time.time()
-            prompt_tokens_count = 0
-            inputs = None
-            try:
-                from qwen_vl_utils import process_vision_info
-                text_prompt = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-                vision_res = process_vision_info(messages)
-                image_inputs = vision_res[0] if isinstance(vision_res, (tuple, list)) and len(vision_res) > 0 else None
-                video_inputs = vision_res[1] if isinstance(vision_res, (tuple, list)) and len(vision_res) > 1 else None
-                proc_kwargs: dict[str, Any] = {
-                    "text": [text_prompt],
-                    "padding": True,
-                    "return_tensors": "pt",
-                }
-                if image_inputs is not None:
-                    proc_kwargs["images"] = image_inputs
-                if video_inputs is not None:
-                    proc_kwargs["videos"] = video_inputs
-                inputs = processor(**proc_kwargs)
-            except Exception:
-                if hasattr(processor, "apply_chat_template"):
-                    text_prompt = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-                else:
-                    text_prompt = f"{system_prompt}\n\n{user_content}" if system_prompt else str(user_content)
-                img_arg = [scaled_img] if scaled_img is not None else None
-                try:
-                    inputs = processor(text=[text_prompt], images=img_arg, padding=True, return_tensors="pt")
-                except Exception:
-                    inputs = processor(text=[text_prompt], padding=True, return_tensors="pt")
+            from dental_agent.model.backbone import safe_process_vision_info
+            text_prompt = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            image_inputs, video_inputs = safe_process_vision_info(messages)
+            inputs = processor(text=[text_prompt], images=image_inputs, videos=video_inputs,
+                               padding=True, return_tensors="pt")
 
-            # Move inputs to model device (first parameter device or cuda)
-            target_device = getattr(model_obj, "device", None)
-            if target_device is None or str(target_device) == "meta":
-                try:
-                    target_device = next(model_obj.parameters()).device
-                except Exception:
-                    target_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            from dental_agent.model.local_runtime import input_device
+            target_device = input_device(model_obj)
 
             inputs = {k: v.to(target_device) if hasattr(v, "to") else v for k, v in inputs.items()}
             prompt_tokens_count = inputs.get("input_ids", torch.empty((1, 0))).shape[-1]
@@ -631,7 +607,8 @@ def _call_llm_once(
                 if temperature > 0.0:
                     gen_kwargs["temperature"] = temperature
 
-                generated_ids = model_obj.generate(**inputs, **gen_kwargs)
+                from dental_agent.model.local_runtime import generate_local, runtime_record
+                generated_ids = generate_local(model_obj, **inputs, **gen_kwargs)
                 in_len = inputs["input_ids"].shape[1]
                 generated_ids_trimmed = [out_ids[in_len:] for out_ids in generated_ids]
                 full_text = processor.batch_decode(
@@ -645,16 +622,16 @@ def _call_llm_once(
             speed = comp_tokens / max(gen_elapsed, 0.001)
             print(f"\n  • Generation complete: {comp_tokens} tokens in {gen_elapsed:.1f}s ({speed:.1f} tok/s)\n", flush=True)
 
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-
+            # Keep the CUDA allocator warm between local requests.
             usage_dict = {
                 "prompt_tokens": int(prompt_tokens_count),
                 "completion_tokens": int(comp_tokens),
                 "total_tokens": int(prompt_tokens_count + comp_tokens),
             }
             if kwargs.get("return_metadata", False):
-                return full_text, {"finish_reason": "stop", "usage": usage_dict}
+                return full_text, {"finish_reason": "stop", "usage": usage_dict,
+                                   "local_runtime": runtime_record(model_obj),
+                                   "timing": {"preprocess_s": pre_elapsed, "generate_s": gen_elapsed, "tokens_per_s": speed}}
             return full_text
 
         else:

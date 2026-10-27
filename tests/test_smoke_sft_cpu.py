@@ -71,7 +71,7 @@ def test_run_grpo_with_tools_runs_end_to_end_on_cpu(tmp_path):
     work = tmp_path / "grpo"
     proc = subprocess.run(
         [sys.executable, str(ROOT / "scripts" / "smoke_test_grpo.py"), "--traces", str(traces), "--track", "with_tools",
-         "--work-dir", str(work), "--", "--canonical-resize"],
+         "--work-dir", str(work), "--", "--canonical-resize", "--logprob-chunk-tokens", "16"],
         capture_output=True, text=True, timeout=900,
     )
     tail = (proc.stdout + proc.stderr)[-2500:]

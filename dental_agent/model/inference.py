@@ -65,130 +65,73 @@ def generate_agent_reply(
         If True, returns updated (past_key_values, cache_state) alongside reply and IDs.
     """
     import torch
+    from dental_agent.model.local_runtime import generate_local, input_device
 
-    # Determine if we can attempt delta KV-cache generation
-    attempt_cache_reuse = (
-        past_key_values is not None
-        and cache_state is not None
-        and "total_len" in cache_state
-        and "last_msg_count" in cache_state
-        and len(messages) > cache_state["last_msg_count"]
-    )
-
-    if attempt_cache_reuse:
-        try:
-            last_count = cache_state["last_msg_count"]
-            delta_messages = messages[last_count:]
-
-            # Check if delta messages contain any new images
-            has_new_images = any(
-                isinstance(m.get("content"), list)
-                and any(c.get("type") == "image" for c in m["content"] if isinstance(c, dict))
-                for m in delta_messages
-            )
-
-            # Format delta text
-            delta_text = processor.apply_chat_template(delta_messages, tokenize=False, add_generation_prompt=True)
-
-            if not has_new_images:
-                # Text-only delta: Bypass vision encoder entirely!
-                delta_inputs = processor.tokenizer(delta_text, return_tensors="pt")
-                delta_inputs = {k: v.to(model.device) for k, v in delta_inputs.items()}
-                delta_len = delta_inputs["input_ids"].shape[1]
-                total_len = cache_state["total_len"] + delta_len
-
-                # Build full attention mask covering cached + delta tokens
-                attention_mask = torch.ones((1, total_len), dtype=torch.long, device=model.device)
-
-                gen_kwargs: dict[str, Any] = {
-                    "max_new_tokens": max_new_tokens,
-                    "pad_token_id": getattr(processor.tokenizer, "pad_token_id", None) or getattr(processor.tokenizer, "eos_token_id", None),
-                    "use_cache": True,
-                    "return_dict_in_generate": True,
-                }
-                if temperature > 0:
-                    gen_kwargs["do_sample"] = True
-                    gen_kwargs["temperature"] = temperature
-                else:
-                    gen_kwargs["do_sample"] = False
-
-                with torch.no_grad():
-                    gen_out = model.generate(
-                        input_ids=delta_inputs["input_ids"],
-                        attention_mask=attention_mask,
-                        past_key_values=past_key_values,
-                        **gen_kwargs,
-                    )
-
-                new_ids = gen_out.sequences[:, delta_len:]
-                new_pkv = getattr(gen_out, "past_key_values", None)
-                reply = processor.batch_decode(new_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
-
-                updated_cache_state = {
-                    "total_len": total_len + new_ids.shape[1],
-                    "last_msg_count": len(messages),
-                }
-
-                gen_ids_list = new_ids[0].tolist()
-                if return_cache:
-                    return reply.strip(), delta_len, gen_ids_list, new_pkv, updated_cache_state
-                if return_ids:
-                    return reply.strip(), delta_len, gen_ids_list
-                return reply.strip()
-
-        except Exception as e:
-            # Self-healing fallback: smoothly revert to full prefill on any mismatch
-            import logging
-            logging.getLogger(__name__).debug("KV-cache delta prefill fallback triggered: %s", e)
-
-    # Standard full prefill (Turn 1 or cache fallback)
+    # Build the exact full prompt first. Cross-turn reuse is safe only if its
+    # token prefix matches the cached sequence; raw chat-template deltas can
+    # shift BPE boundaries, omit a final sampled token or alter M-RoPE positions.
     text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     image_inputs, video_inputs = safe_process_vision_info(messages)
-
-    inputs = processor(
-        text=[text],
-        images=image_inputs,
-        videos=video_inputs,
-        padding=True,
-        return_tensors="pt",
-    )
-    inputs = {k: v.to(model.device) for k, v in inputs.items()}
-    prompt_len = inputs["input_ids"].shape[1]
-
-    gen_kwargs: dict[str, Any] = {
-        "max_new_tokens": max_new_tokens,
-        "pad_token_id": getattr(processor.tokenizer, "pad_token_id", None) or getattr(processor.tokenizer, "eos_token_id", None),
-        "use_cache": True,
-        "return_dict_in_generate": True,
+    inputs = dict(processor(text=[text], images=image_inputs, videos=video_inputs,
+                            padding=True, return_tensors="pt"))
+    device = input_device(model)
+    inputs = {k:v.to(device) if hasattr(v,'to') else v for k,v in inputs.items()}
+    prompt_len = inputs['input_ids'].shape[1]
+    gen_kwargs = {
+        'max_new_tokens': max_new_tokens,
+        'pad_token_id': (getattr(processor.tokenizer,'pad_token_id',None)
+                         if getattr(processor.tokenizer,'pad_token_id',None) is not None
+                         else getattr(processor.tokenizer,'eos_token_id',None)),
+        'return_dict_in_generate': True,
+        'do_sample': temperature > 0,
     }
     if temperature > 0:
-        gen_kwargs["do_sample"] = True
-        gen_kwargs["temperature"] = temperature
-    else:
-        gen_kwargs["do_sample"] = False
-
-    with torch.no_grad():
-        gen_out = model.generate(**inputs, **gen_kwargs)
-
-    if hasattr(gen_out, "sequences"):
-        generated_ids = gen_out.sequences
-        new_pkv = getattr(gen_out, "past_key_values", None)
-    else:
-        generated_ids = gen_out
-        new_pkv = None
-
-    new_ids = generated_ids[:, prompt_len:]
-    reply = processor.batch_decode(new_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
+        gen_kwargs['temperature'] = temperature
+    reused = False
+    generation_inputs = inputs
+    generated_prompt_len = prompt_len
+    if past_key_values is not None and cache_state and 'cached_input_ids' in cache_state:
+        last_count = cache_state.get('last_msg_count', len(messages))
+        delta = messages[last_count:]
+        has_new_images = any(isinstance(m.get('content'),list) and any(
+            isinstance(c,dict) and c.get('type') in {'image','video'} for c in m['content']) for m in delta)
+        length_fn = getattr(past_key_values,'get_seq_length',None)
+        if delta and not has_new_images and callable(length_fn):
+            cached_len = int(length_fn())
+            previous = cache_state['cached_input_ids']
+            prefix_matches = (0 < cached_len < prompt_len and previous.shape[1] >= cached_len and
+                              torch.equal(inputs['input_ids'][:, :cached_len].cpu(), previous[:, :cached_len]))
+            if prefix_matches:
+                generation_inputs = {'input_ids':inputs['input_ids'][:,cached_len:],
+                                     'attention_mask':inputs['attention_mask'], 'past_key_values':past_key_values}
+                if 'mm_token_type_ids' in inputs:
+                    generation_inputs['mm_token_type_ids'] = inputs['mm_token_type_ids'][:,cached_len:]
+                generated_prompt_len = prompt_len - cached_len
+                reused = True
+    try:
+        gen_out = generate_local(model, **generation_inputs, **gen_kwargs)
+    except (ValueError, RuntimeError) as exc:
+        if not reused or 'out of memory' in str(exc).lower():
+            raise
+        # Cache/multimodal incompatibility: retry the exact full prompt, never
+        # remove its images or lower its generation budget.
+        import logging
+        logging.getLogger(__name__).warning('Validated cache reuse failed; full prefill: %s', exc)
+        generated_prompt_len = prompt_len
+        gen_out = generate_local(model, **inputs, **gen_kwargs)
+    generated_ids = gen_out.sequences if hasattr(gen_out,'sequences') else gen_out
+    new_ids = generated_ids[:, generated_prompt_len:]
+    new_pkv = getattr(gen_out,'past_key_values',None)
+    reply = processor.batch_decode(new_ids,skip_special_tokens=True,clean_up_tokenization_spaces=False)[0].strip()
     gen_ids_list = new_ids[0].tolist()
-
     new_cache_state = {
-        "total_len": prompt_len + new_ids.shape[1],
-        "last_msg_count": len(messages),
+        'total_len':prompt_len+new_ids.shape[1], 'last_msg_count':len(messages),
+        'cached_input_ids':torch.cat([inputs['input_ids'],new_ids.to(device)],dim=1).detach().cpu(),
     }
-
+    # Full prompt offsets are essential for GRPO assistant-token span labels,
+    # even if generate() was called with a shorter cache delta.
     if return_cache:
-        return reply.strip(), prompt_len, gen_ids_list, new_pkv, new_cache_state
+        return reply,prompt_len,gen_ids_list,new_pkv,new_cache_state
     if return_ids:
-        return reply.strip(), prompt_len, gen_ids_list
-    return reply.strip()
-
+        return reply,prompt_len,gen_ids_list
+    return reply

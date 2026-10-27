@@ -493,6 +493,10 @@ def _run_zero_shot_for_target(
                 tokens_to_use = default_max_tokens.get(prefix, 4096)
 
             # Call VLM with ZERO_SHOT_PROMPT (with reasoning & multi-finding guidelines)
+            local_kwargs = {}
+            if provider in {'transformers','local_hf'}:
+                from dental_agent.model.local_runtime import runtime_from_args
+                local_kwargs['local_runtime'] = runtime_from_args(args,precision_attr='local_precision')
             resp_out = call_llm(
                 provider=provider,
                 model=model,
@@ -503,6 +507,7 @@ def _run_zero_shot_for_target(
                 max_tokens=tokens_to_use,
                 return_metadata=True,
                 repetition_penalty=getattr(args, "repetition_penalty", None),
+                **local_kwargs,
             )
 
             if isinstance(resp_out, tuple):
@@ -602,6 +607,10 @@ def _run_zero_shot_for_target(
                 "confidence": confidence,
                 "timestamp": time.time(),
             })
+
+            if provider in {'transformers','local_hf'}:
+                record['local_runtime'] = meta.get('local_runtime', {})
+                record['local_timing'] = meta.get('timing', {})
 
             # Save to JSONL atomically (replaces in-place if image_id was already present)
             save_evaluation_record_atomic(output_path, record)
@@ -772,6 +781,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-majority-baseline", action="store_true", help="Also compute majority-class baseline floor on cohort")
     parser.add_argument("--generate-report", action="store_true", default=True, help="Write markdown/LaTeX report in experiments/")
 
+    from dental_agent.model.local_runtime import add_runtime_args
+    add_runtime_args(parser, precision_flag='--local-precision')
     return parser
 
 

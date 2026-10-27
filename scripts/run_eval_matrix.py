@@ -70,6 +70,8 @@ def parse_args(argv=None) -> argparse.Namespace:
                         "kept, settings must match) or overwrite.")
     p.add_argument("--n-boot", type=int, default=2000, help="Bootstrap resamples for the intervals.")
     p.add_argument("--seed", type=int, default=0, help="Bootstrap seed.")
+    from dental_agent.model.local_runtime import add_runtime_args
+    add_runtime_args(p)
     add_letterbox_arg(p)   # applies to the 'canonical' size cells only; 'original' cells show the full image
     return p.parse_args(argv)
 
@@ -143,8 +145,10 @@ def run_matrix(args: argparse.Namespace, imgs_df, annots_df, cats_df) -> dict[st
                     results[matrix.cell_name(cond, size)] = list(done.values())
                     continue
             if loaded is None:
-                device, dtype, _ = ev.setup_eval_hardware(args.precision)
-                loaded = ev.load_eval_model(args.model_id, adapter, device, dtype, cond, quantize_4bit=args.precision == "qlora")
+                device, dtype, _ = ev.setup_eval_hardware(args.precision, getattr(args,"qlora_compute_dtype","auto"))
+                from dental_agent.model.local_runtime import runtime_from_args
+                loaded = ev.load_eval_model(args.model_id, adapter, device, dtype, cond, quantize_4bit=args.precision == "qlora",
+                                            runtime_options=runtime_from_args(args))
             results[matrix.cell_name(cond, size)] = ev.evaluate_condition(cond, ns, imgs_df, annots_df, cats_df, loaded=loaded)
         if loaded is not None:
             del loaded
