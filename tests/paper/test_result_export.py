@@ -1,0 +1,102 @@
+"""Paper-only tests use synthetic records, never clinical/test-split inputs."""
+import copy
+import importlib.util
+import json
+from pathlib import Path
+import sys
+import xml.etree.ElementTree as ET
+import pytest
+
+SCRIPTS=Path(__file__).resolve().parents[2]/'scripts/paper'
+sys.path.insert(0,str(SCRIPTS))
+
+
+def module(name):
+    spec=importlib.util.spec_from_file_location(name,SCRIPTS/(name+'.py'))
+    value=importlib.util.module_from_spec(spec);spec.loader.exec_module(value);return value
+
+
+assets=module('generate_harness_assets')
+
+
+def episode():
+    return dict(image_id='synthetic-a',exact_tp=1,exact_fp=1,exact_fn=0,format_ok=True,
+                turns=[dict(raw_output='synthetic answer',tool_calls=[])],final_answer={'synthetic':True},
+                measurements=dict(wall_seconds=4,request_wall_seconds=2,generated_tokens=10,
+                                  accepted_tokens=3,drafted_tokens=6,prefill_seconds=None,decode_seconds=None))
+
+
+def result(kind):
+    record_key='records' if kind=='harness' else 'episodes'
+    names=['baseline','rules_only'] if kind=='harness' else ['baseline','mtp_1']
+    return dict(schema_version=1,status='complete',split='dev',settings={'split':'dev'},
+                dev_split_sha256='synthetic-fingerprint',image_ids=['synthetic-a'],
+                conditions={k:{'status':'complete',record_key:[episode()]} for k in names},
+                gates={'mtp_1':{'passed':True,'exact_f1_unchanged':True,'divergences':[]}})
+
+
+def test_pending_is_not_zero():
+    assert r'\todo{pending}' in assets.render_harness()
+    assert r'\todo{pending}' in assets.render_serving()
+    assert '0.000' not in assets.render_serving()
+
+
+def test_harness_recomputes_counts():
+    data=result('harness');data['conditions']['baseline']['summary']={'pooled_exact_f1':99}
+    assert '0.667' in assets.render_harness(data)
+    assert '0.500' in assets.render_harness(data)
+
+
+@pytest.mark.parametrize('kind',['harness','serving'])
+@pytest.mark.parametrize('failure',['test','duplicate','unpaired','nan','negative'])
+def test_invalid_evidence_rejected(kind,failure):
+    data=result(kind);key='records' if kind=='harness' else 'episodes'
+    if failure=='test': data['split']='test';data['settings']['split']='test'
+    elif failure=='duplicate': data['image_ids']*=2
+    elif failure=='unpaired':data['conditions']['baseline'][key][0]['image_id']='other'
+    elif failure=='nan':data['conditions']['baseline'][key][0]['exact_tp']=float('nan')
+    elif failure=='negative':data['conditions']['baseline'][key][0]['exact_fp']=-1
+    with pytest.raises(ValueError):
+        (assets.render_harness if kind=='harness' else assets.render_serving)(data)
+
+
+def test_serving_rates_and_missing_counters():
+    text=assets.render_serving(result('serving'))
+    assert '5.000' in text  # tokens / request wall time, not episode time
+    assert '0.500' in text
+    assert 'pass' in text
+    assert r'\todo{pending}' in text  # prefill cannot be inferred from TTFT
+
+
+@pytest.mark.parametrize('field',['text','final','gate','score','format'])
+def test_divergent_conditions_have_no_speedup(field):
+    data=result('serving');candidate=data['conditions']['mtp_1']['episodes'][0]
+    if field=='text': candidate['turns'][0]['raw_output']='different'
+    elif field=='final':candidate['final_answer']={}
+    elif field=='score':candidate['exact_tp']=0
+    elif field=='format':candidate['format_ok']=False
+    else:data['gates']['mtp_1']['passed']=False
+    data['status']='failed_or_divergent'
+    text=assets.render_serving(data)
+    row=next(r for r in text.splitlines() if r.startswith('MTP, 1'))
+    assert 'FAIL' in row and row.count(r'\todo{pending}')==5
+
+
+def test_no_argument_build_preserves_measured_tables(tmp_path):
+    source=tmp_path/'input.json';source.write_text(json.dumps(result('harness')))
+    out=tmp_path/'generated';assets.generate(out,harness_path=source)
+    before=(out/'table_harness_dev.tex').read_bytes()
+    assets.generate(out)
+    assert (out/'table_harness_dev.tex').read_bytes()==before
+    assert json.loads((out/'harness_evidence.json').read_text())['harness']['status']=='result_file'
+
+
+def test_failed_batch_does_not_partially_replace_tables(tmp_path):
+    assets.generate(tmp_path)
+    before=(tmp_path/'table_harness_dev.tex').read_bytes()
+    good=tmp_path/'good.json';good.write_text(json.dumps(result('harness')))
+    bad=tmp_path/'bad.json';bad.write_text('{}')
+    with pytest.raises(ValueError):assets.generate(tmp_path,good,bad)
+    assert (tmp_path/'table_harness_dev.tex').read_bytes()==before
+
+
