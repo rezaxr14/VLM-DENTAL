@@ -1,0 +1,164 @@
+[
+  {
+    "skill": "box-verification",
+    "claim": 1,
+    "text": "Treat the locate_tooth box as a starting hypothesis, not a guarantee. Inspect its zoom_crop before diagnosis.",
+    "source": "dental_agent/agent/prompts.py:build_agent_system_prompt"
+  },
+  {
+    "skill": "box-verification",
+    "claim": 2,
+    "text": "If off-center, too tight/loose, or showing a different tooth, use nudge_crop on the returned box and zoom_crop again. Corrections may be repeated.",
+    "source": "dental_agent/agent/prompts.py:build_agent_system_prompt"
+  },
+  {
+    "skill": "box-verification",
+    "claim": 3,
+    "text": "dx_frac and dy_frac are fractions of the supplied box width and height; scale changes its size. Coordinates remain native-image coordinates.",
+    "source": "dental_agent/tools/nudge.py"
+  },
+  {
+    "skill": "box-verification",
+    "claim": 4,
+    "text": "Use patient FDI quadrants: 1 upper right, 2 upper left, 3 lower left, 4 lower right; positions 1 through 8. Do not substitute display left for patient left.",
+    "source": "dental_agent/tools/fdi.py"
+  },
+  {
+    "skill": "caries-vs-deep-caries",
+    "claim": 1,
+    "text": "Caries and Deep Caries are distinct permitted output labels.",
+    "source": "dental_agent/evaluation/ground_truth.py:DENTEX_DEFAULT_DIAGNOSES"
+  },
+  {
+    "skill": "caries-vs-deep-caries",
+    "claim": 2,
+    "text": "Inspect the returned tooth crop and improve contrast or windowing when density is unclear.",
+    "source": "dental_agent/agent/prompts.py:build_agent_system_prompt"
+  },
+  {
+    "skill": "caries-vs-deep-caries",
+    "claim": 3,
+    "text": "Radiographs contribute evidence about decay; clinical detection also uses examination. Do not infer symptoms or vitality from the image alone.",
+    "source": "https://www.nidcr.nih.gov/health-info/tooth-decay"
+  },
+  {
+    "skill": "caries-vs-deep-caries",
+    "claim": 4,
+    "text": "After verifying the tooth, inspect the crown and any suspected radiolucency, then use window_level or enhance_contrast if density is unclear; compare the suspected extent toward the pulp before choosing between the two permitted caries labels.",
+    "source": "dental_agent/agent/prompts.py:build_agent_system_prompt"
+  },
+  {
+    "skill": "caries-vs-deep-caries",
+    "claim": 5,
+    "text": "The ESE framework distinguishes deep from extremely deep dentinal lesions by their extent and remaining barrier to the pulp. This is clinical context, not an asserted numeric DENTEX annotation rule; do not add an Extremely Deep Caries output class.",
+    "source": "https://onlinelibrary.wiley.com/doi/full/10.1111/iej.13080"
+  },
+  {
+    "skill": "caries-vs-deep-caries",
+    "claim": 6,
+    "text": "Panoramic assessment is not proof of absence of proximal caries; the FDA/ADA selection guidance identifies bitewings as the efficient view for proximal lesions. Record the visible evidence rather than assuming a low-detail region is normal.",
+    "source": "https://www.fda.gov/radiation-emitting-products/medical-x-ray-imaging/selection-patients-dental-radiographic-examinations"
+  },
+  {
+    "skill": "healthy-scan-negative-survey",
+    "claim": 1,
+    "text": "A patient may have multiple findings; report all investigated findings.",
+    "source": "dental_agent/agent/prompts.py:build_agent_system_prompt"
+  },
+  {
+    "skill": "healthy-scan-negative-survey",
+    "claim": 2,
+    "text": "For a clinically healthy dentition with no identifiable target pathologies, return final_answer: [].",
+    "source": "dental_agent/agent/prompts.py:build_agent_system_prompt"
+  },
+  {
+    "skill": "healthy-scan-negative-survey",
+    "claim": 3,
+    "text": "The verifier rejects a nonempty candidate final_answer when the supplied ground truth is empty; ground truth is verifier-only and must never be exposed to the policy.",
+    "source": "dental_agent/training/trace_generation.py:verify_trace"
+  },
+  {
+    "skill": "healthy-scan-negative-survey",
+    "claim": 4,
+    "text": "Screen all four quadrants, retain the full-image context, and investigate suspicious regions before returning an empty target-findings list. Do not stop the survey after confirming one normal crop.",
+    "source": "dental_agent/agent/prompts.py:build_agent_system_prompt"
+  },
+  {
+    "skill": "healthy-scan-negative-survey",
+    "claim": 5,
+    "text": "Use window_level for unclear density, denoise for a noisy view and contrast enhancement for low contrast; verify any investigated crop still shows the intended tooth.",
+    "source": "dental_agent/agent/prompts.py:build_agent_system_prompt"
+  },
+  {
+    "skill": "healthy-scan-negative-survey",
+    "claim": 6,
+    "text": "An empty target-findings list is not a claim that panoramic imaging excludes every dental disease. The FDA/ADA guidance uses clinical context and selected intraoral views, including bitewings for proximal caries, rather than treating a panoramic survey as a universal negative test.",
+    "source": "https://www.fda.gov/radiation-emitting-products/medical-x-ray-imaging/selection-patients-dental-radiographic-examinations"
+  },
+  {
+    "skill": "impacted-tooth",
+    "claim": 1,
+    "text": "The dataset label Impacted is normalized for evaluation; the agent prompt permits Impacted Tooth.",
+    "source": "dental_agent/evaluation/ground_truth.py:DENTEX_DEFAULT_DIAGNOSES"
+  },
+  {
+    "skill": "impacted-tooth",
+    "claim": 2,
+    "text": "Locate the requested tooth and inspect its crop before diagnosing. A detector error is not a clinical finding.",
+    "source": "dental_agent/agent/prompts.py:build_agent_system_prompt"
+  },
+  {
+    "skill": "impacted-tooth",
+    "claim": 3,
+    "text": "AAOMS defines impaction as inability to erupt into a normal oral position, potentially related to space, abnormal position or pathology. A tooth missing from a crop is not evidence of impaction.",
+    "source": "https://aaoms.org/wp-content/uploads/2024/07/impacted_third_molars.pdf"
+  },
+  {
+    "skill": "impacted-tooth",
+    "claim": 4,
+    "text": "Inspect the localized tooth and adjacent anatomy with the full panoramic context retained; AAOMS notes that panoramic imaging is commonly used but radiographs may not fully establish position or the surgical approach. Do not infer a treatment indication from this classification output.",
+    "source": "https://aaoms.org/wp-content/uploads/2024/07/impacted_third_molars.pdf"
+  },
+  {
+    "skill": "impacted-tooth",
+    "claim": 5,
+    "text": "If locate_tooth fails for the requested tooth, do not repeat the same failed detection; inspect a localized neighboring region or improve visibility with the existing contrast/window tools.",
+    "source": "dental_agent/agent/prompts.py:build_agent_system_prompt"
+  },
+  {
+    "skill": "periapical-lesion",
+    "claim": 1,
+    "text": "Periapical Lesion is a permitted output label.",
+    "source": "dental_agent/evaluation/ground_truth.py:DENTEX_DEFAULT_DIAGNOSES"
+  },
+  {
+    "skill": "periapical-lesion",
+    "claim": 2,
+    "text": "The existing example inspects the root apex and compares the mirrored side before committing.",
+    "source": "dental_agent/agent/prompts.py:build_agent_system_prompt"
+  },
+  {
+    "skill": "periapical-lesion",
+    "claim": 3,
+    "text": "Verify the requested tooth is visible in the crop; correct the box before trusting that view.",
+    "source": "dental_agent/agent/prompts.py:build_agent_system_prompt"
+  },
+  {
+    "skill": "periapical-lesion",
+    "claim": 4,
+    "text": "Apical periodontal inflammation may produce radiographic periapical radiolucency. Granuloma, cyst, abscess and scar cannot be reliably separated from each other by their radiographic appearance alone; retain the permitted Periapical Lesion label rather than inventing a histologic subtype.",
+    "source": "https://www.aae.org/specialty/a-concise-guide-to-pathology-within-endodontics/"
+  },
+  {
+    "skill": "periapical-lesion",
+    "claim": 5,
+    "text": "Use locate_tooth, zoom_crop and an alignment check before assessing the apex. If the view is misplaced, nudge then re-crop. Use contralateral_compare to investigate asymmetry and window_level for unclear density.",
+    "source": "dental_agent/agent/prompts.py:build_agent_system_prompt"
+  },
+  {
+    "skill": "periapical-lesion",
+    "claim": 6,
+    "text": "Do not infer percussion tenderness, pain, sinus tracts or pulp vitality from a panoramic image. Clinical apical diagnoses incorporate findings beyond a radiolucency.",
+    "source": "https://www.aae.org/specialty/wp-content/uploads/sites/2/2017/07/aaeconsensusconferencerecommendeddiagnosticterminology.pdf"
+  }
+]

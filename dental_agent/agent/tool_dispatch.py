@@ -42,6 +42,8 @@ def execute_tool_call(
     tool_name: str,
     tool_args: dict[str, Any],
     image: Image.Image,
+    *,
+    harness=None,
 ) -> Any:
     """Execute one registered tool call with the correct calling convention.
 
@@ -50,6 +52,8 @@ def execute_tool_call(
     `image` should always be the trace/rollout's original source image, not a
     previously-returned crop -- pass base_image, not a running "current view."
     """
+    if harness is not None and tool_name == "read_skill":
+        return harness.read(tool_args)
     if tool_name in IMAGE_CONSUMING_TOOLS:
         return registry.execute(tool_name, image=image, **tool_args)
     return registry.execute(tool_name, **tool_args)

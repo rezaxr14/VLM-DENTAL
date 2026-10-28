@@ -31,9 +31,10 @@ class AgentTrajectory:
     format_ok: bool = False
     assistant_token_spans: list[dict[str, Any]] = field(default_factory=list)
     messages: list[dict[str, Any]] = field(default_factory=list)
+    harness_events: list[dict[str, Any]] | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             "image_id": self.image_id,
             "turns": self.turns,
             "tool_calls": self.tool_calls,
@@ -42,6 +43,9 @@ class AgentTrajectory:
             "assistant_token_spans": self.assistant_token_spans,
             "messages": self.messages,
         }
+        if self.harness_events is not None:
+            result["harness_events"] = self.harness_events
+        return result
 
 
 def run_agent(
@@ -58,6 +62,9 @@ def run_agent(
     max_new_tokens: int = 2048,
     max_turns: int | None = None,
     malformed_retries: int = 0,
+    harness=None,
+    reply_fn=None,
+    tool_observer=None,
 ) -> AgentTrajectory:
     """Run the multi-turn agent loop on a single dental radiograph.
 
@@ -83,7 +90,15 @@ def run_agent(
     # Native base_image is what tools execute on; view_image is what the model sees (matches SFT).
     view_image = to_canonical(base_image, "FULL") if canonical_resize else base_image
 
-    system_prompt = build_agent_system_prompt(registry.format_tool_descriptions(), dataset=dataset)
+    session = None
+    if harness is None:
+        system_prompt = build_agent_system_prompt(registry.format_tool_descriptions(), dataset=dataset)
+    else:
+        from dental_agent.harness.skills import HarnessSession
+        system_prompt = build_agent_system_prompt(registry.format_tool_descriptions(), dataset=dataset, harness=harness)
+        if getattr(harness, "skills", False) and harness.skills_mode != "off":
+            session = HarnessSession(harness)
+            system_prompt = session.augment(system_prompt)
 
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system_prompt},
@@ -113,9 +128,13 @@ def run_agent(
     pkv = None
     cache_state = None
 
+    if session is not None and session.active and harness.skills_mode == "index_only":
+        registered_names.add("read_skill")
     malformed_used = 0
     for turn_idx in range(max_turns if max_turns is not None else max_tool_calls + 15):
-        reply, prompt_len, gen_ids, pkv, cache_state = generate_agent_reply(
+        if session is not None:
+            session.turn = turn_idx
+        reply, prompt_len, gen_ids, pkv, cache_state = (reply_fn or generate_agent_reply)(
             model,
             processor,
             messages,
@@ -216,9 +235,16 @@ def run_agent(
                 calls_this_turn.append(call_record)
                 continue
 
-            tool_call_count += 1
+            is_skill = session is not None and session.active and tool_name == "read_skill"
+            if not is_skill:
+                tool_call_count += 1
+            import time
+            tool_started = time.perf_counter() if tool_observer is not None else None
             try:
-                tool_out = execute_tool_call(registry, tool_name, tool_args, base_image)
+                if is_skill:
+                    tool_out = execute_tool_call(registry, tool_name, tool_args, base_image, harness=session)
+                else:
+                    tool_out = execute_tool_call(registry, tool_name, tool_args, base_image)
 
                 if isinstance(tool_out, Image.Image):
                     if canonical_resize:
@@ -242,6 +268,8 @@ def run_agent(
                     {"type": "text", "text": f"Tool '{tool_name}' execution failed: {e}"}
                 )
 
+            if tool_observer is not None:
+                tool_observer(tool_name, time.perf_counter() - tool_started)
             calls_this_turn.append(call_record)
 
         turn_record["tool_calls_this_turn"] = calls_this_turn
@@ -263,6 +291,7 @@ def run_agent(
         format_ok=format_ok,
         assistant_token_spans=assistant_token_spans,
         messages=messages,
+        harness_events=session.events if session is not None and session.active else None,
     )
 
     del pkv, cache_state

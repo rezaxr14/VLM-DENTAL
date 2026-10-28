@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "status": "pending_hardware_execution",
+  "measurements_pending": true,
+  "conditions": {},
+  "gates": {},
+  "reason": "No serving engine, GPU or trained checkpoint available in the build environment; run the Speculative Decoding notebook in a separate runtime."
+}

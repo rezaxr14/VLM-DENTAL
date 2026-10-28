@@ -35,6 +35,8 @@ def build_agent_system_prompt(
     tools_description: str,
     dataset: str = "dentex",
     allowed_classes: list[str] | None = None,
+    *,
+    harness=None,
 ) -> str:
     """Dynamically generate the agent system prompt containing registered tool definitions,
     tailored to the target dataset's pathology taxonomy.
@@ -54,6 +56,10 @@ def build_agent_system_prompt(
 
     classes_str = "|".join(allowed_classes)
     objective_classes = ", ".join(allowed_classes)
+
+    if harness is not None and getattr(harness, "rules_from_file", False):
+        from dental_agent.harness.rules import render_prompt
+        return render_prompt(tools_description, objective_classes, classes_str)
 
     return f"""You are an expert dental radiologist AI agent analyzing panoramic dental X-rays (OPGs).
 

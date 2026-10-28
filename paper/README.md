@@ -197,3 +197,41 @@ and `texlive-latex-extra` are the usual missing ones).
   grounding validation (Tab. A3), verifier taxonomy (App. D), perturbation config (Tab. A1).
 - **Pending** (marked red in the PDF): SFT/GRPO main results, tool-removal probe,
   grounding-perturbation probe, K-sweep, policy-side calibration.
+
+## Optional harness rules contract (v1.0.0)
+
+The extracted with-tools contract is `dental_agent/harness/rules.md`. The default
+prompt path is unchanged. Opt-in callers pass `harness=HarnessConfig(rules_from_file=True)`
+to `build_agent_system_prompt` (`HarnessConfig` is in `dental_agent.harness.rules`).
+See [the one-page overview](../docs/harness/RULES_OVERVIEW.md) for provenance,
+retained discrepancies and reproduction commands. This is an extraction, not a
+new clinical guideline or a modification of the frozen evaluation protocol.
+
+## Dev-only rules and skills experiments
+
+After training, use `notebooks/VLM_Dental_Colab_Rules_Skills.ipynb` or
+`scripts/harness/run_dev.py` on the fixed dev split. All harness defaults remain
+OFF in existing training and evaluation entry points. See
+[`docs/harness/SKILLS.md`](../docs/harness/SKILLS.md) for the paired conditions,
+claim provenance, metrics and commands. The frozen-protocol amendment is an
+**unapplied proposal**, not a registered change or a measured result.
+
+## Serving efficiency (post-training, dev only)
+
+Use `notebooks/VLM_Dental_Colab_Speculative_Decoding.ipynb` in a separate runtime.
+The one-command benchmark is `scripts/bench/spec_decode_bench.py`; it compares
+baseline, native MTP and n-gram modes on fixed dev episodes with the same target,
+prompts, seed and real tool execution. Merge/audit and optional MTP-only
+fine-tuning commands are documented in
+[`docs/harness/SPECDEC.md`](../docs/harness/SPECDEC.md).
+
+Generate the standalone table with:
+
+```
+python scripts/paper/generate_serving_table.py --input paper/generated/spec_decode_bench.json
+```
+
+Omit `--input` to generate pending cells. Missing measurements and failed
+correctness gates stay red `\todo{pending}`. The table is not included in the
+frozen protocol automatically. Real hardware measurements and MTP acceptance
+before/after fine-tuning remain pending until the notebook is executed.

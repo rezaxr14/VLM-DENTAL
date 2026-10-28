@@ -1,0 +1,79 @@
+[
+  {
+    "condition": "baseline",
+    "status": "pending",
+    "equivalence": null,
+    "speedup": null,
+    "acceptance": null,
+    "tokens_per_second": null,
+    "episode_latency": null,
+    "prefill_share": null,
+    "decode_share": null
+  },
+  {
+    "condition": "mtp_1",
+    "status": "pending",
+    "equivalence": null,
+    "speedup": null,
+    "acceptance": null,
+    "tokens_per_second": null,
+    "episode_latency": null,
+    "prefill_share": null,
+    "decode_share": null
+  },
+  {
+    "condition": "mtp_2",
+    "status": "pending",
+    "equivalence": null,
+    "speedup": null,
+    "acceptance": null,
+    "tokens_per_second": null,
+    "episode_latency": null,
+    "prefill_share": null,
+    "decode_share": null
+  },
+  {
+    "condition": "mtp_3",
+    "status": "pending",
+    "equivalence": null,
+    "speedup": null,
+    "acceptance": null,
+    "tokens_per_second": null,
+    "episode_latency": null,
+    "prefill_share": null,
+    "decode_share": null
+  },
+  {
+    "condition": "ngram_2",
+    "status": "pending",
+    "equivalence": null,
+    "speedup": null,
+    "acceptance": null,
+    "tokens_per_second": null,
+    "episode_latency": null,
+    "prefill_share": null,
+    "decode_share": null
+  },
+  {
+    "condition": "ngram_3",
+    "status": "pending",
+    "equivalence": null,
+    "speedup": null,
+    "acceptance": null,
+    "tokens_per_second": null,
+    "episode_latency": null,
+    "prefill_share": null,
+    "decode_share": null
+  },
+  {
+    "condition": "ngram_5",
+    "status": "pending",
+    "equivalence": null,
+    "speedup": null,
+    "acceptance": null,
+    "tokens_per_second": null,
+    "episode_latency": null,
+    "prefill_share": null,
+    "decode_share": null
+  }
+]

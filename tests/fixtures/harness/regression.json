@@ -1,0 +1,5 @@
+[
+ {"trajectory":{"final_answer":[]},"ground_truth":[],"rewards":[1.0,1.0,1.0,1.0]},
+ {"trajectory":{},"ground_truth":[],"rewards":[0.0,1.0,1.0,0.0]},
+ {"trajectory":{"final_answer":[{"quadrant":1,"tooth_position":1,"diagnosis":"Caries"}]},"ground_truth":[{"quadrant":1,"tooth_position":1,"diagnosis":"Caries"}],"rewards":[1.0,1.0,1.0,1.0]}
+]

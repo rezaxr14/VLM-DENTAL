@@ -1,0 +1,24 @@
+--- a/paper/sections/04_experiments.tex
++++ b/paper/sections/04_experiments.tex
+@@ -47,6 +47,20 @@
+   (\cref{sec:eval}).}
+   \label{fig:design}
+ \end{figure}
++
++
++% PROPOSED AMENDMENT -- NOT APPLIED. Requires author approval before registration.
++\paragraph{Proposed inference-time harness amendment (dev only).}
++We propose evaluating an unchanged trained checkpoint under the existing prompt,
++file-rendered rules, rules plus a skills index with on-demand loading, and rules
++plus all skill bodies injected. Configuration selection uses only the fixed
++training-derived dev split, with paired episodes on identical images, seeds,
++tool budgets, geometry and decoding settings. No selection uses the held-out
++DENTEX test set. Pre-registered primary metrics are pooled exact F1 and
++invented-findings rate (unmatched predicted findings divided by all predicted
++findings; undefined if there are no predictions). Paired image bootstrap
++intervals accompany condition differences; format failures and tool usage are
++reported alongside these metrics. Claims remain pending until measured.
+-
++
+ \subsection{Zero-shot baselines: the case for looking again}
+ \label{sec:baselines}
