@@ -56,7 +56,8 @@ def test_preflight_rejects_missing_bibliography_entry(tmp_path):
 
 
 @pytest.mark.skipif(not shutil.which('pdflatex') or not shutil.which('bibtex'),reason='TeX is unavailable')
-def test_real_tex_build_ignores_poisoned_tracked_bbl(tmp_path,monkeypatch):
+@pytest.mark.parametrize('default_output',[False,True])
+def test_real_tex_build_ignores_poisoned_tracked_bbl(tmp_path,monkeypatch,default_output):
     root=tmp_path/'project';paper=root/'paper';paper.mkdir(parents=True)
     (paper/'main.tex').write_text(r'''\documentclass{article}\usepackage{natbib}
 \begin{document}Cite \citep{good}; see Section~\ref{sec:ok}.
@@ -65,7 +66,13 @@ def test_real_tex_build_ignores_poisoned_tracked_bbl(tmp_path,monkeypatch):
     (paper/'main.bbl').write_text('POISONED STALE BIBLIOGRAPHY')
     (paper/'main.aux').write_text('POISONED AUX')
     monkeypatch.setattr(b,'ROOT',root)
-    output=b.build(tmp_path/'output');assert output.is_file()
+    output=b.build() if default_output else b.build(tmp_path/'output')
+    assert output.is_file()
+    if default_output:
+        assert output==paper/'main.pdf'
+        assert not (root/'scratch/paper_build').exists()
+        assert not (paper/'build_metadata.json').exists()
+        assert not (paper/'logs').exists()
     assert 'POISONED' not in output.with_suffix('.bbl').read_text()
     assert 'good' in output.with_suffix('.bbl').read_text()
 
@@ -73,9 +80,10 @@ def test_real_tex_build_ignores_poisoned_tracked_bbl(tmp_path,monkeypatch):
 def test_detailed_diagrams_are_source_grounded_and_deterministic():
     a=d.rules_skills();c=d.speculative();ET.fromstring(a);ET.fromstring(c)
     assert a==d.rules_skills() and c==d.speculative()
-    for field in ['R007','R002','read_skill','harness_events','base_image','dx_frac']:assert field in a
-    assert a.count('<image ')==2
-    for field in ['Visibility mask','mtp.*','mismatch','KV cache','tool_seconds']:assert field in c
+    for field in ['R007','R018','R008','read_skill','harness_events','FDI']:assert field in a
+    assert '<image ' not in a
+    assert '444.0,331.0' in a and '545.0,331.0' in a and 'x="494.5" y="309"' in a
+    for field in ['Token 1','Token 4','Bonus token','mismatch','Draft optimization','Update draft weights']:assert field in c
 
 
 def test_no_measurements_create_no_plot(tmp_path):

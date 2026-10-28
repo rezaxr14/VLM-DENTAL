@@ -2,7 +2,6 @@
 from __future__ import annotations
 import argparse
 import hashlib
-import json
 import os
 from pathlib import Path
 import re
@@ -51,23 +50,25 @@ def validate_citations(work):
     if citations-keys:raise ValueError('Citations absent from bibliography: '+', '.join(sorted(citations-keys)))
 
 
-def build(output):
+def build(output=None):
     for tool in ('pdflatex','bibtex'):
         if not shutil.which(tool):raise RuntimeError('Missing '+tool+'; install MiKTeX or TeX Live and add it to PATH')
-    output=Path(output).resolve();paper=ROOT/'paper'
-    if output==paper or output.is_relative_to(paper):raise ValueError('Use an output folder outside paper/')
-    output.mkdir(parents=True,exist_ok=True);logs=output/'logs';logs.mkdir(exist_ok=True);commands=[]
-    with tempfile.TemporaryDirectory(prefix='tex_',dir=output) as temporary:
+    paper=(ROOT/'paper').resolve()
+    output=Path(output).resolve() if output is not None else paper
+    output.mkdir(parents=True,exist_ok=True);logs=output
+    with tempfile.TemporaryDirectory(prefix='vlm_dental_tex_') as temporary:
         work=Path(temporary);sources=stage_sources(paper,work);validate_citations(work)
         def run(command,label):
-            commands.append(command);env=os.environ.copy()
+            env=os.environ.copy()
             for key in ('TEXINPUTS','BIBINPUTS','BSTINPUTS'):env[key]='.'+os.pathsep+env.get(key,'')
             result=subprocess.run(command,cwd=work,env=env,text=True,encoding='utf-8',errors='replace',stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
-            (logs/(label+'.txt')).write_text(result.stdout,encoding='utf-8')
-            for suffix in ('.log','.blg','.aux','.bbl'):
+            for suffix in ('.log','.blg','.aux','.bbl','.out'):
                 path=work/('main'+suffix)
                 if path.exists():shutil.copyfile(path,logs/path.name)
-            if result.returncode:raise RuntimeError(command[0]+' failed; see '+str(logs/(label+'.txt')))
+            if result.returncode:
+                failure_log=logs/('main.blg' if command[0]=='bibtex' else 'main.log')
+                with failure_log.open('a',encoding='utf-8') as stream:stream.write('\n'+result.stdout)
+                raise RuntimeError(command[0]+' failed; see '+str(failure_log))
         latex=['pdflatex','-interaction=nonstopmode','-halt-on-error','-file-line-error','main.tex']
         run(latex,'01_latex');run(['bibtex','main'],'02_bibtex')
         previous=None
@@ -79,15 +80,12 @@ def build(output):
             previous=state
         check_log(log,logs)
         for name in ('main.pdf','main.log','main.blg','main.bbl'):shutil.copyfile(work/name,output/name)
-    metadata={'commands':commands,'staged_clean':True,'sources_sha256':sources,
-              'pdflatex':subprocess.check_output(['pdflatex','--version'],text=True).splitlines()[0]}
-    (output/'build_metadata.json').write_text(json.dumps(metadata,indent=2)+'\n')
     print(output/'main.pdf');return output/'main.pdf'
 
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--output-dir',type=Path,default=ROOT/'scratch/paper_build')
+    parser.add_argument('--output-dir',type=Path,default=ROOT/'paper')
     build(parser.parse_args().output_dir)
 
 

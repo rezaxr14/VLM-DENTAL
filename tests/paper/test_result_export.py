@@ -62,10 +62,13 @@ def test_invalid_evidence_rejected(kind,failure):
 
 def test_serving_rates_and_missing_counters():
     text=assets.render_serving(result('serving'))
-    assert '5.000' in text  # tokens / request wall time, not episode time
+    assert '0.667' in text  # pooled exact F1 recomputed from episode counts
+    assert '1.000' in text  # paired episode wall-time ratio
+    assert text.count('Speculative')==1
+    assert 'Lookup' not in text and 'MTP,' not in text
     assert '0.500' in text
     assert 'pass' in text
-    assert r'\todo{pending}' in text  # prefill cannot be inferred from TTFT
+    assert 'Hit rate' in text
 
 
 @pytest.mark.parametrize('field',['text','final','gate','score','format'])
@@ -78,8 +81,8 @@ def test_divergent_conditions_have_no_speedup(field):
     else:data['gates']['mtp_1']['passed']=False
     data['status']='failed_or_divergent'
     text=assets.render_serving(data)
-    row=next(r for r in text.splitlines() if r.startswith('MTP, 1'))
-    assert 'FAIL' in row and row.count(r'\todo{pending}')==5
+    row=next(r for r in text.splitlines() if r.startswith('Speculative'))
+    assert 'FAIL' in row and row.count(r'\todo{pending}')==1
 
 
 def test_no_argument_build_preserves_measured_tables(tmp_path):
@@ -100,3 +103,18 @@ def test_failed_batch_does_not_partially_replace_tables(tmp_path):
     assert (tmp_path/'table_harness_dev.tex').read_bytes()==before
 
 
+def test_grid_requires_explicit_paper_selection():
+    data=result('serving')
+    data['conditions']['mtp_2']=copy.deepcopy(data['conditions']['mtp_1'])
+    data['gates']['mtp_2']=copy.deepcopy(data['gates']['mtp_1'])
+    with pytest.raises(ValueError,match='Select one'):assets.render_serving(data)
+    text=assets.render_serving(data,'mtp_2')
+    assert text.count('Speculative')==1
+    assert '0.500' in text
+
+
+def test_paper_selection_is_recorded(tmp_path):
+    data=result('serving');path=tmp_path/'input.json';path.write_text(json.dumps(data))
+    assets.generate(tmp_path/'out',serving_path=path,serving_condition='mtp_1')
+    manifest=json.loads((tmp_path/'out/harness_evidence.json').read_text())
+    assert manifest['serving']['paper_condition']=='mtp_1'

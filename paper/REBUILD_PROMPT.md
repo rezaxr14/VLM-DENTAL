@@ -1,7 +1,6 @@
 # Reusable paper rebuild / editing prompt
 
-Read paper/README.md and the actual rules/skills/serving implementation. Work from 0048 with
-0050 (evaluation) and 0051 (replacement paper), not rejected 0049.
+Read paper/README.md and the actual rules/skills/serving implementation. Work from the current GitHub HEAD and approved figure revision.
 
 Keep every original diagram in its original section/order. Keep the frozen sec:eval protocol
 verbatim. Retain the detailed source-grounded mechanism figures and regenerate SVG/PDF twins
@@ -23,5 +22,7 @@ while rebuilding the manuscript. Do not run inference or training as a PDF build
 Run paper tests, verify_paper.py, SVG text/arrow audits and build_paper.py. Use the isolated
 staged TeX build; never compile against tracked stale .aux/.bbl products. Read individual pass
 logs if citations/references fail, fix real missing keys, and render/inspect all changed pages.
-Deliver the compiled PDF, a clean git-apply patch, exact commands and the evidence gaps. Use
+Publish the compiled PDF at paper/main.pdf, a clean git-apply patch, exact commands and the evidence gaps. Use
 Reza Nadimi <rezaxr14@gmail.com> as patch author; do not commit or push without instruction.
+
+Keep the approved rule/context and matrix/draft-training figures. Use one baseline-versus-speculative table. The helper defaults to paper/main.pdf, with temporary staging and standard auxiliary files.

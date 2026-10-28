@@ -18,11 +18,11 @@ def finite(v):return isinstance(v,(int,float)) and not isinstance(v,bool) and ma
 def collect(harness=None,serving=None):
     sys.path.insert(0,str(Path(__file__).resolve().parent))
     try:
-        from generate_harness_assets import render_harness,render_serving,counts,serving_stats,serving_gate
+        from generate_harness_assets import render_harness,cohort,counts,serving_stats,serving_gate
     except ImportError as error:
         raise RuntimeError('Apply evaluation patch 0050 for the shared evidence validator') from error
     data={};sources={}
-    for kind,path,validate in [('harness',harness,render_harness),('serving',serving,render_serving)]:
+    for kind,path,validate in [('harness',harness,render_harness),('serving',serving,lambda data:cohort(data,'serving'))]:
         if path:
             raw=Path(path).read_bytes();value=json.loads(raw);validate(value)
             data[kind]=value;sources[kind]={'sha256':hashlib.sha256(raw).hexdigest(),'images':len(value['image_ids'])}

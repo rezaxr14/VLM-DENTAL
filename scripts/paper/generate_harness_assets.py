@@ -14,8 +14,7 @@ ROOT=Path(__file__).resolve().parents[2]
 PENDING=r'\todo{pending}'
 HARNESS={'baseline':'Baseline','rules_only':'Rules only (identity control)',
          'rules_skills_index':'Rules + on-demand skills','rules_skills_full':'Rules + full skills'}
-SERVING={'baseline':'Baseline','mtp_1':'MTP, 1 token','mtp_2':'MTP, 2 tokens',
-         'mtp_3':'MTP, 3 tokens','ngram_2':'Lookup, 2 tokens','ngram_3':'Lookup, 3 tokens','ngram_5':'Lookup, 5 tokens'}
+
 
 
 def number(value, field, *, integer=False):
@@ -104,44 +103,64 @@ def serving_stats(condition):
             'prefill_share':None if prefill is None or decode is None else ratio(prefill,prefill+decode)}
 
 
-def render_serving(data=None):
+def serving_gate(data, key):
+    """One equivalence eligibility check shared by paper tables and plots."""
+    if key == 'baseline':
+        return True
+    base = data['conditions']['baseline']
+    current = data['conditions'][key]
+    reported = data.get('gates', {}).get(key, {})
+    old = {e['image_id']: e for e in base['episodes']}
+    same = all(e['format_ok'] and old[e['image_id']]['format_ok']
+               and signature(e) == signature(old[e['image_id']]) for e in current['episodes'])
+    return (reported.get('passed') is True and reported.get('exact_f1_unchanged') is True
+            and not reported.get('divergences') and same
+            and counts(base['episodes'])[0] is not None
+            and counts(current['episodes'])[0] == counts(base['episodes'])[0])
+
+
+def selected_serving_condition(data, condition=None):
+    """Require an explicit comparison when the raw benchmark contains a grid."""
+    candidates=[key for key in data['conditions'] if key!='baseline']
+    selected=condition or data.get('paper_condition')
+    if selected:
+        if selected not in candidates:raise ValueError('Selected speculative condition is absent or baseline')
+        return selected
+    if len(candidates)!=1:
+        raise ValueError('Select one speculative condition with --serving-condition; never select the fastest result automatically')
+    return candidates[0]
+
+
+def render_serving(data=None, condition=None):
     conditions=cohort(data,'serving') if data is not None else {}
-    base=conditions.get('baseline')
-    base_stats=serving_stats(base) if base else None
+    selected=selected_serving_condition(data,condition) if data is not None else None
+    base_stats=serving_stats(conditions['baseline']) if conditions else None
     rows=[]
-    for key,label in SERVING.items():
-        values=[PENDING]*5; gate='pending'
+    for key,label in [('baseline','Baseline'),(selected,'Speculative')]:
+        f1=speed=hit=None;gate='pending'
         if key in conditions:
             current=conditions[key];stats=serving_stats(current)
-            if key=='baseline':
-                passed=True;gate='reference'
-            else:
-                reported=data.get('gates',{}).get(key,{})
-                old={e['image_id']:e for e in base['episodes']}
-                same=all(e['format_ok'] and old[e['image_id']]['format_ok'] and signature(e)==signature(old[e['image_id']]) for e in current['episodes'])
-                passed=(reported.get('passed') is True and reported.get('exact_f1_unchanged') is True
-                        and not reported.get('divergences') and same
-                        and counts(base['episodes'])[0] is not None
-                        and counts(current['episodes'])[0]==counts(base['episodes'])[0])
-                gate='pass' if passed else 'FAIL'
-            # Ineligible conditions retain raw stats in source JSON, never an asserted speedup.
-            if passed:
-                speed=ratio(base_stats['wall'],stats['wall']) if base_stats['wall'] is not None and stats['wall'] is not None else None
-                values=[fmt(speed),fmt(stats['acceptance']) if key!='baseline' else '--',
-                        fmt(stats['tokens_s']),fmt(stats['latency']),fmt(stats['prefill_share'])]
-        rows.append([label,gate,*values])
-    return '\n'.join([r'\begin{table}[tbp]\centering\scriptsize',r'\setlength{\tabcolsep}{3pt}',
-        r'\caption{Serving efficiency on shared dev episodes. Speedup is baseline total wall time '
-        r'divided by condition total wall time; tokens/s uses request time. Latency is seconds '
-        r'per episode. Prefill share is prefill/(prefill+decode), only when separately measured. '
-        r'Failed gates suppress efficiency claims; missing counters remain pending.}',
-        r'\label{tab:serving-efficiency}',table(['Serving','Gate','Speedup','Accept.','Tokens/s','Latency','Prefill share'],rows),r'\end{table}',''])
+            f1=counts(current['episodes'])[0]
+            passed=serving_gate(data,key)
+            gate='reference' if key=='baseline' else ('pass' if passed else 'FAIL')
+            hit=stats['acceptance'] if key!='baseline' else None
+            if passed and base_stats['wall'] is not None and stats['wall'] is not None:
+                speed=ratio(base_stats['wall'],stats['wall'])
+        rows.append([label,fmt(f1),fmt(speed),'--' if key=='baseline' else fmt(hit),gate])
+    return '\n'.join([r'\begin{table}[tbp]\centering\small',r'\setlength{\tabcolsep}{4pt}',
+        r'\caption{Accuracy and efficiency of speculative decoding on paired dev episodes. '
+        r'Diagnostic accuracy is pooled exact F1. Speedup is baseline total episode wall time '
+        r'divided by speculative total wall time. Proposal hit rate is accepted proposed tokens '
+        r'divided by all proposed tokens, not diagnostic accuracy. The baseline has no proposals. '
+        r'Failed decoded-output or F1 agreement withholds speedup; missing measurements remain pending.}',
+        r'\label{tab:serving-efficiency}',
+        table(['Decoding','Exact F1','Speedup','Hit rate','Agreement'],rows),r'\end{table}',''])
 
 
-def generate(out_dir, harness_path=None, serving_path=None, reset=False):
+def generate(out_dir, harness_path=None, serving_path=None, reset=False, serving_condition=None):
     out_dir=Path(out_dir);out_dir.mkdir(parents=True,exist_ok=True)
     sources={'harness':harness_path,'serving':serving_path}
-    renderers={'harness':render_harness,'serving':render_serving}
+    renderers={'harness':render_harness,'serving':lambda data=None:render_serving(data,serving_condition)}
     filenames={'harness':'table_harness_dev.tex','serving':'table_serving_efficiency.tex'}
     manifest_path=out_dir/'harness_evidence.json'
     manifest=json.loads(manifest_path.read_text()) if manifest_path.exists() else {'schema_version':1}
@@ -154,7 +173,8 @@ def generate(out_dir, harness_path=None, serving_path=None, reset=False):
             updates[kind]=(renderers[kind](data),{'status':'result_file','input_sha256':hashlib.sha256(raw).hexdigest(),
                            'dev_split_sha256':data.get('dev_split_sha256'),'image_ids':data.get('image_ids'),
                            'settings':data.get('settings'),'software':data.get('software'),
-                           'hardware':data.get('hardware'),'commands':data.get('commands')})
+                           'hardware':data.get('hardware'),'commands':data.get('commands'),
+                           **({'paper_condition':selected_serving_condition(data,serving_condition)} if kind=='serving' else {})})
         elif reset or not target.exists():
             updates[kind]=(renderers[kind](),{'status':'pending','reason':'No measured result file supplied'})
     for kind,(content,evidence) in updates.items():
@@ -166,9 +186,10 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--harness-results',type=Path)
     parser.add_argument('--serving-results',type=Path)
+    parser.add_argument('--serving-condition',help='Preselected speculative condition when the raw JSON contains several settings')
     parser.add_argument('--output-dir',type=Path,default=ROOT/'paper/generated')
     parser.add_argument('--reset-pending',action='store_true',help='Explicitly replace unsupplied tables with pending cells')
-    args=parser.parse_args();generate(args.output_dir,args.harness_results,args.serving_results,args.reset_pending)
+    args=parser.parse_args();generate(args.output_dir,args.harness_results,args.serving_results,args.reset_pending,args.serving_condition)
 
 
 if __name__=='__main__':

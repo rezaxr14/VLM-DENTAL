@@ -3,7 +3,7 @@
 LaTeX sources for the paper draft. Corpus statistics come from the released traces through
 `generate_paper_assets.py`; existing zero-shot scores are retained as reported. New inference
 results require measured JSON. Missing measurements stay pending. Figures have SVG sources
-and PDF twins. The checked-in `main.pdf` is historical; build the current source as below.
+and PDF twins. Both compile routes below update `paper/main.pdf`.
 
 ## Layout
 
@@ -191,78 +191,54 @@ and `texlive-latex-extra` are the usual missing ones).
    regress to an unqualified "first" (see `docs/dentex-agentic-vlm-proposal.md` §3.5 for the
    reasoning and the two concurrent systems that must be cited).
 
-## Replacement paper revision 0051 (on 0048; no 0049)
+## Approved figures and standard paper output
 
-Every original diagram remains in its original section and original order, including the
-architecture, training, trace, data, tools and gallery figures. A regression fixture enforces
-that placement. The frozen primary protocol is hash-checked and unchanged. The new
-`04b_harness_serving.tex` is a separate exploratory dev-only extension, not an applied protocol
-amendment. It separates teacher evidence, pending trained-policy outcomes, procedural context
-and serving efficiency. Existing scores are unchanged; the zero-shot image-level at-least-one
-exact-match metric is now labeled “Exact hit”, distinct from pooled F1 and complete-case accuracy.
+The existing `build_mechanism_diagrams.py` generates the approved rule/context and speculative
+matrix/draft-training figures under their existing SVG/PDF filenames. The rules-to-context arrow
+is centered and its label gutter is wider. The original figures and frozen protocol stay in place.
+No new diagram modules, notebooks, backup files or build-output folders are added by this revision.
 
-Two detailed mechanism figures are included near the new methods:
+Run from the repository root:
 
-- `fig_rules_skills_mechanism`: real rule excerpts/IDs, five skill files, request/reply sequence,
-  dispatcher/registry boundaries, prompt conditions, audit fields, existing train-image crops,
-  and box-relative geometry. The teacher image illustrates the procedure, not harness efficacy.
-- `fig_speculative_mechanism`: reusable prefix/cache, native MTP versus lookup proposals,
-  causal-visibility matrix, target argmax verification, first-mismatch replacement, rejected
-  suffix, bonus-token case, tool dispatch boundary, counters and hardware/equivalence gates.
-  Symbols and operation widths do not claim observed attention or speed.
-
-The original diagrams are retained. The two old generic 0049 diagrams are not used.
-`build_mechanism_diagrams.py` refreshes only the two new SVG/PDF twins, without loading data
-or a model. `build_diagrams.py` remains the complete builder and also registers them.
-
-### Windows / MiKTeX and TeX Live rebuild
-
-The builder stages only source and artwork in a new temporary directory per invocation;
-tracked or previous `.aux/.bbl` files cannot shadow the bibliography. All tools run in that
-same directory with relative filenames, including BibTeX. LaTeX repeats until cross-references
-stabilize (bounded to six passes); unresolved keys are named in errors and all pass logs remain.
-A real regression build includes a deliberately poisoned source `.bbl/.aux` and confirms they
-are ignored. Windows itself still needs a run on your machine; local verification used TeX Live.
-
-From the repository root (PowerShell or bash, one command per line):
-
-```text
-python -m pip install svglib reportlab pytest
+```bash
 python scripts/paper/build_mechanism_diagrams.py
 python scripts/paper/verify_paper.py
+python scripts/paper/build_paper.py
+```
+
+**Output: `paper/main.pdf`.** Compilation uses a clean temporary directory, then publishes the
+PDF and ordinary `main.aux/.bbl/.blg/.log/.out` files to `paper/`. Stale auxiliary files are excluded.
+No `scratch/paper_build`, per-pass text files or build-metadata JSON are created. Explicit
+`--output-dir` is still supported. The manual workflow produces the same output:
+
+```bash
+cd paper
+pdflatex main && bibtex main && pdflatex main && pdflatex main
+```
+
+Matplotlib supplies portable DejaVu fonts for the figures; Pillow, svglib and ReportLab are
+existing dependencies. No model is loaded and no training is launched by these commands.
+
+The single serving table reports baseline versus one preselected speculative setting: exact F1,
+end-to-end speedup and proposal hit rate, with output agreement visible. Unmeasured entries stay
+pending. Raw benchmark support for other settings remains available. For measured dev results:
+
+```bash
+python scripts/paper/generate_harness_assets.py --serving-results path/to/spec_decode_bench.json --serving-condition mtp_1
+```
+
+The selected ID is recorded in the existing evidence manifest; the exporter never chooses the
+fastest result. Failed agreement withholds speedup. Draft training is a planned stage, not a
+completed result. The current final-evaluation notebook is retained with targeted export/build
+cell updates; its optional PDF build also writes `paper/main.pdf`.
+
+Checks from the root:
+
+```bash
+python -m pytest -q --confcutdir=tests/paper tests/paper
 python scripts/paper/audit_diagram_text.py
 python scripts/paper/audit_diagram_arrows.py --strict
-python -m pytest -q --confcutdir=tests/paper tests/paper
-python scripts/paper/build_paper.py
 ```
-
-Output: `scratch/paper_build/main.pdf`. Complete TeX/BibTeX logs are under
-`scratch/paper_build/logs/`. This does not overwrite tracked build products or training files.
-MiKTeX/TeX Live must supply the packages under *Compile* below. Nothing needs the rejected 0049.
-
-### Real-result figures and tables
-
-Evaluation patch **0050** provides the complete final notebook and shared JSON validator/exporter.
-0051 builds independently with committed pending tables; real-result plotting uses that 0050
-validator to avoid a second interpretation of cohorts/gates. On collected dev evidence:
-
-```text
-python scripts/paper/generate_harness_assets.py --harness-results PATH_TO_DEV_JSON --serving-results PATH_TO_SERVING_JSON
-python scripts/paper/plot_harness_serving.py --harness-results PATH_TO_DEV_JSON --serving-results PATH_TO_SERVING_JSON
-python scripts/paper/build_paper.py
-```
-
-Either input can be omitted. No inputs create no invented figure and preserve existing plots.
-Only available, validated panels are drawn: paired F1 differences/intervals, episode latency
-distributions, acceptance versus proposal count, equivalence-qualified speedup, separately
-measured prefill/decode/tool ratios, and per-device sampled memory. Missing counters are listed
-in a manifest and omitted, not drawn as zero. A failed gate remains visible and cannot qualify
-a speedup. Timing ratios may overlap; sampled whole-device memory is not allocator telemetry.
-The generated fragment adds the measured figure at the inference-results section when available.
-
-See `REBUILD_PROMPT.md` for the reusable prompt. The final notebook exports primary table
-candidates and paired reports; it does not overwrite the frozen manuscript's main-results table.
-Do not infer student diagnosis improvements or MTP acceptance/speed from teacher/corpus evidence.
 
 ## Status of numbers
 
@@ -290,22 +266,8 @@ OFF in existing training and evaluation entry points. See
 claim provenance, metrics and commands. The frozen-protocol amendment is an
 **unapplied proposal**, not a registered change or a measured result.
 
-## Serving efficiency (post-training, dev only)
+## Serving benchmark
 
-Use `notebooks/VLM_Dental_Colab_Speculative_Decoding.ipynb` in a separate runtime.
-The one-command benchmark is `scripts/bench/spec_decode_bench.py`; it compares
-baseline, native MTP and n-gram modes on fixed dev episodes with the same target,
-prompts, seed and real tool execution. Merge/audit and optional MTP-only
-fine-tuning commands are documented in
-[`docs/harness/SPECDEC.md`](../docs/harness/SPECDEC.md).
-
-Generate the standalone table with:
-
-```
-python scripts/paper/generate_serving_table.py --input paper/generated/spec_decode_bench.json
-```
-
-Omit `--input` to generate pending cells. Missing measurements and failed
-correctness gates stay red `\todo{pending}`. The table is not included in the
-frozen protocol automatically. Real hardware measurements and MTP acceptance
-before/after fine-tuning remain pending until the notebook is executed.
+The existing speculative-decoding notebook and benchmark runner keep their runtime settings.
+The manuscript uses the single paired comparison above. This paper patch does not run or
+implement draft training; its figure and methods describe the planned experiment.
