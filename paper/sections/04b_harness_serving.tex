@@ -1,0 +1,126 @@
+% This section is outside the frozen primary evaluation protocol.
+\section{Inference harness and serving: a separate dev-only extension}
+\label{sec:harness-serving}
+
+This extension follows checkpoint training. It changes neither the SFT/GRPO objectives nor
+the frozen primary evaluation in \cref{sec:eval}. The implementation is supplied in the
+companion harness branches; it is not enabled by this paper patch. All effectiveness and
+speed results below are pending. The purpose is to distinguish three possible sources of a
+change: learned weights, procedural context at inference, and decoding implementation.
+
+\subsection{Versioned rules and progressive procedural context}
+\label{sec:rules-skills}
+\Cref{fig:rules-skills-mechanism} details the procedural mechanism. The harness contract extracts existing system/tool instructions and verifier/reward constraints
+into \texttt{dental\_agent/harness/rules.md}. Versioned rule identifiers link statements to
+prompt rendering or enforcement checks. A golden test requires the default file-based rendering
+to reproduce the existing system prompt byte for byte; inventory checks bind verifier/reward
+identifiers to their implementations without changing outcomes or reward values. Code-only and
+prompt-only constraints are recorded as discrepancies, not silently reconciled.
+The switch \texttt{rules\_from\_file} defaults to false.
+
+Five versioned procedural skills cover box verification, caries versus deep caries, periapical
+lesions, impacted teeth, and a healthy-scan negative survey. Sources accompany each skill;
+content is drawn from existing procedures, class definitions, and cited public material,
+without test images or test-derived examples. Skills are contextual instructions, not new
+learned parameters. The default \texttt{skills=false}, \texttt{skills\_mode=off} preserves the
+existing agent. In \texttt{index\_only} mode, the prompt lists names and descriptions, and a
+\texttt{read\_skill} harness action loads a body on demand. In \texttt{full\_inject} mode, all
+bodies are present initially. The harness action is dispatched outside the unchanged eight-tool
+diagnostic registry; it does not consume a diagnostic-call slot, but the episode turn bound
+still applies. Loaded skill versions, content digests, and turn/timing events are recorded in
+optional trace metadata. Old traces remain readable without that metadata.
+
+
+\begin{figure}[tbp]
+\centering
+\includegraphics[width=\linewidth]{fig_rules_skills_mechanism}
+\caption{Rules and skills as procedural context. (A--C) Versioned rule excerpts, skill files
+and dispatcher boundaries. (D) Illustrative message routing. (E) Controlled prompt conditions
+and logged disclosure. (F) Existing teacher image 624 views explain re-inspection and box-relative
+geometry; no harness-effectiveness measurement is implied.}
+\label{fig:rules-skills-mechanism}
+\end{figure}
+
+\subsection{Paired evaluation without reopening the primary protocol}
+The extension (\cref{tab:harness-dev}) uses only the fixed, training-derived dev split. A frozen checkpoint is evaluated
+under baseline, rules only, rules plus index/on-demand skills, and rules plus full skills.
+The same image identifiers, seeds, geometry, dispatcher, tool budgets, and scoring implementation
+are used across conditions; full skills are a disclosure control, not an additional training arm.
+Rules-only and baseline must render identical prompts. Deviations invalidate that control.
+We report pooled exact F1 and the finding-level false-discovery fraction
+\[
+ F_1^{\mathrm{exact}}=\frac{2TP}{2TP+FP+FN},\qquad
+ I_{\mathrm{finding}}=\frac{FP}{TP+FP}.
+\]
+The latter is the harness JSON field \texttt{invented\_findings\_rate}; it is \emph{not} the
+healthy-image invention rate of \cref{sec:eval}. A zero denominator is undefined, not zero.
+Paired uncertainty resamples whole shared images. Report format failures and disclosure events
+alongside the primary endpoints. Since these conditions were added after the primary protocol
+was frozen, they are exploratory; the proposed amendment is distributed separately and is not
+applied to that protocol. Dev selection cannot establish independent generalization.
+
+\input{generated/table_harness_dev}
+
+\subsection{Speculative decoding: verify the same numerical target}
+\label{sec:specdecode}
+\Cref{fig:speculative-mechanism} details verification and its boundaries. Speculation proposes several tokens cheaply and verifies them with the target model
+\citep{leviathan2023fast,chen2023accelerating}. Native multi-token prediction (MTP) and
+n-gram lookup are alternative proposal mechanisms. The target still evaluates token
+probabilities; speculation does not remove the vocabulary projection or change the SFT loss.
+Its benefit depends on accepted proposals, verification overhead, and the fraction of episode
+time spent decoding rather than processing images or executing tools.
+
+The serving benchmark (\cref{tab:serving-efficiency}) compares baseline, MTP with one, two, or three proposed tokens, and
+n-gram lookup with proposal lengths 2, 3, and 5 (lookup windows from 1 to the proposal length), on identical dev episodes. Each condition uses
+the same merged 16-bit target, image inputs, prompts, greedy decoding, seed, and tool execution.
+Servers run serially on the selected devices. Before serving, checkpoint hygiene checks native
+\texttt{mtp.*} tensors against the original base by key, shape, dtype, and content hash; missing
+or unintentionally replaced tensors invalidate the MTP condition. Merging must not silently
+replace the native prediction head. This check establishes tensor preservation, not useful
+acceptance after adapter training.
+
+
+The gate compares decoded turn text, tool actions, and final answers exactly and checks that
+pooled exact F1 is unchanged. Any divergence is retained and the condition is ineligible for
+an equivalence-qualified speedup. The chat API does not expose generated token identifiers,
+so decoded-text agreement must not be described as token-ID or universal bitwise equivalence.
+Finite-set greedy agreement also does not prove equivalence for stochastic sampling.
+
+Per-episode records separate generated tokens, total latency, request latency, tool time,
+reported prefill/decode counters, accepted/drafted tokens, and sampled GPU memory. Missing
+backend counters remain null; time to first token is not substituted for prefill time.
+Acceptance is pooled accepted proposals divided by pooled drafted proposals. Episode speedup
+uses paired total wall times, while token throughput uses request wall time; neither is a
+kernel-only rate. Images can make prefill dominate, and tool execution can limit end-to-end gains.
+
+Hardware profiles cover dual T4 (FP16, tensor parallelism two), RTX 4090 (BF16, one device),
+and a 48-GB RTX Pro workstation (BF16, one device). These are requested execution profiles,
+not demonstrations that every mode fits or is supported. The existing TPU path is for the
+rules/skills experiment; this CUDA serving benchmark does not claim TPU speculation support.
+Runtime version, model revision, merged-checkpoint identity, commands, and memory measurements
+must accompany results. In particular, 24-GB feasibility depends on image/context tokens and
+KV-cache allocation, not parameter memory alone.
+
+\input{generated/table_serving_efficiency}
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=\linewidth]{fig_speculative_mechanism}
+\caption{Speculation at the token, cache, tool and measurement boundaries. Native MTP and lookup
+propose tokens for one fixed target. The causal visibility mask and first-mismatch example are
+symbolic, not measured attention or acceptance. Verified tokens alone can trigger tools.
+Logical operation widths do not encode latency. Tensor-preservation and decoded-episode gates
+qualify any reported speedup; requested hardware profiles still require real runtime validation.}
+\label{fig:speculative-mechanism}
+\end{figure}
+
+\subsection{Optional MTP adaptation and evidence required}
+A separate experiment can adapt only the MTP head using on-policy continuations regenerated
+from with-tools training episodes, excluding the dev split and all test images. It must retain
+real tool execution, record the regenerated-data provenance, and verify that non-MTP target
+weights remain byte-identical before and after adaptation. Report acceptance, throughput,
+and equivalence both before and after on the same dev workload; until measured, improved
+acceptance is a hypothesis. This optional training is distinct from the running SFT/GRPO jobs.
+No acceptance recovery, trained-policy benefit, or serving speedup is claimed in this draft.
+
+\input{generated/harness_serving_plot}

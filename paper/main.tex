@@ -54,38 +54,32 @@
 \maketitle
 
 \begin{abstract}
-Vision-language models (VLMs) fail structurally on panoramic dental radiographs: the best frontier
-models reach only 36--46\% exact-match accuracy against expert labels on the DENTEX benchmark
-while reporting 0.85--0.95 confidence on hallucinated tooth positions (ECE up to 0.68), and a
-dense 11B generalist falls below the statistical majority class --- because one forward pass
-cannot zoom into sub-patch pathology, resolve the modality's left/right display convention, or
-verify an anatomical hypothesis before committing to it. We present \textbf{VLM-DENTAL}, an
-agentic VLM built on a different contract between the policy and its tools: \emph{grounding is a
-hypothesis to interrogate, not an answer to trust}. (1) The policy can correct its learned
-grounding tool via \texttt{nudge\_crop}, a data-only tool taking box-relative fractional shifts
-and rescales that a VLM can reason about linguistically. (2) A \emph{tiered perturbation}
-mechanism makes this skill learnable from synthetic demonstrations: the demonstrator experiences
-deliberately imperfect tool output (45\% clean / 25\% small / 30\% large offsets, decoupled from
-the detector's real error rate so demonstrations never go stale, and never announced verbally so
-the offset magnitude alone carries the signal). (3) The eight-tool interface exposes continuous
-effect parameters (denoise strength, window center/width, contrast factor, crop context), so tool
-calls carry \emph{how much}, not just \emph{which}. (4) GRPO reinforcement learning uses a
-ground-truth-anchored composite reward with multi-finding set matching, whose efficiency term
-exempts locate-and-correct calls so the reward never prices out the behavior it teaches. A
-corpus-level analysis of 3{,}694 verified, decontaminated synthetic traces shows a clean judgment
-gradient --- corrective nudges on 38.4\% of large tool errors, 13.6\% of ambiguous ones, 1.1\% of
-clean outputs (ground-truth-anchored pathology locates), with recoveries up to IoU
-$0.07 \to 0.94$ --- genuine visually-driven self-correction rather than scripted steps. Evaluation
-follows DENTEX-native, leaderboard-comparable set-matched metrics with paired bootstrap intervals
-and a frozen, leak-free protocol; end-to-end training results are reported as runs complete. We
-position the work relative to concurrent dental agentic systems and release the corpus, audit
-tooling, and all figure/table sources for regenerability.
+Panoramic dental diagnosis requires both identifying a finding and assigning it to the
+correct tooth. In our zero-shot DENTEX evaluation, the strongest reported baseline obtains
+pooled exact finding-level F1 of 0.222, motivating methods that can revisit localized image
+evidence. We present \textbf{VLM-DENTAL}, a tool-using vision-language pipeline organized around
+one principle: \emph{grounding is a hypothesis to interrogate, not an answer to trust}.
+An eight-tool interface lets a policy inspect native-resolution regions and correct a proposed
+box using box-relative shifts and scales through \texttt{nudge\_crop}. During demonstration
+synthesis, tiered spatial perturbations expose the teacher to imperfect grounding without
+verbal error cues. A ground-truth-anchored reward is designed to preserve corrective tool use
+during subsequent reinforcement learning. The released corpus contains 3{,}694 verified,
+decontaminated synthetic traces. Within ground-truth-anchored pathology locates, the teacher
+uses corrective nudges on 38.4\% of large offsets, 13.6\% of small offsets, and 1.1\% of clean
+outputs; these are demonstration statistics, not trained-policy results. We additionally
+specify a versioned rules-and-skills harness and a separately gated speculative-decoding
+benchmark, keeping inference-time procedural context distinct from model training and serving
+optimizations. The frozen primary evaluation uses DENTEX-native set matching and paired
+image-level bootstrap intervals. Trained-policy, harness-effectiveness, and serving-speed
+results remain explicitly pending. This draft contributes an auditable method, corpus, and
+experimental specification; evidence of end-to-end diagnostic improvement awaits those runs.
 \end{abstract}
 
 \input{sections/01_intro}
 \input{sections/02_related}
 \input{sections/03_method}
 \input{sections/04_experiments}
+\input{sections/04b_harness_serving}
 \input{sections/05_limitations}
 \input{sections/06_conclusion}
 

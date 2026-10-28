@@ -10,12 +10,27 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 paper = REPO_ROOT / 'paper'
 main = (paper / 'main.tex').read_text(encoding='utf-8')
-sec_files = sorted((paper / 'sections').glob('*.tex'))
-texts = {'main.tex': main}
-for f in sec_files:
-    texts[f.name] = f.read_text(encoding='utf-8')
-
 errors, warnings = [], []
+texts = {'main.tex': main}
+# Follow the actual input graph, including generated table fragments. Do not
+# validate unrelated or unapplied drafts as though they were part of main.tex.
+queue = ['main.tex']
+while queue:
+    name = queue.pop(0)
+    source = re.sub(r'(?<!\\)%.*', '', texts[name])
+    for target in re.findall(r'\\input\{([^}]+)\}', source):
+        candidate = (paper / (target if target.endswith('.tex') else target + '.tex')).resolve()
+        if not candidate.is_relative_to(paper.resolve()):
+            errors.append(f'input escapes paper directory: {target}')
+            continue
+        relative = candidate.relative_to(paper.resolve()).as_posix()
+        if relative in texts:
+            continue
+        if not candidate.is_file():
+            errors.append(f'missing input: {relative}')
+            continue
+        texts[relative] = candidate.read_text(encoding='utf-8')
+        queue.append(relative)
 
 # 1. collect labels and refs across all files
 labels, refs = set(), set()
@@ -32,10 +47,6 @@ if unused:
     warnings.append(f'unreferenced labels: {sorted(unused)}')
 
 # 2. inputs and graphics
-for m in re.finditer(r'\\input\{([^}]+)\}', main):
-    p = paper / (m.group(1) + '.tex')
-    if not p.exists():
-        errors.append(f'missing input: {p}')
 for name, t in texts.items():
     for m in re.finditer(r'\\includegraphics(?:\[[^\]]*\])?\{([^}]+)\}', t):
         p = paper / 'figures' / 'pdf' / (m.group(1) + '.pdf')
@@ -115,3 +126,5 @@ for w in warnings:
     print(' ~', w)
 print(f'labels: {len(labels)}, refs: {len(refs)}, texts checked: {len(texts)}')
 print('OK' if not errors else f'{len(errors)} errors')
+
+sys.exit(1 if errors else 0)

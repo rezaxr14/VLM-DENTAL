@@ -51,3 +51,12 @@ expert labels --- and its rejection taxonomy shows it catches real failures --- 
 verification has blind spots that human clinical review would not. We mitigate with
 cross-family verification, ground-truth anchoring of every correctness claim, and release of
 the full corpus and audit trail so that the community can re-audit it.
+
+\paragraph{Harness and serving evidence.}
+The rules-only condition is a prompt-identity control, not a proposed source of diagnostic
+improvement. Skills add procedural context and may help or distract; their effects require
+paired dev-split measurements. A BF16 merged target is numerically different from a 4-bit
+QLoRA serving target, so speed or equivalence cannot be attributed to speculation across those
+targets. Multimodal/MTP support and memory feasibility must be established for the pinned
+runtime and hardware; a recognized configuration flag is not evidence of a completed run.
+Neither the harness nor speculative decoding establishes clinical validity.

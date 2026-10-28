@@ -1,0 +1,30 @@
+{
+  "figures": {
+    "01_intro.tex": [
+      "fig_concept"
+    ],
+    "03_method.tex": [
+      "fig_pipeline",
+      "fig_datasets",
+      "fig_architecture",
+      "fig_architecture_training",
+      "fig_input_geometry",
+      "fig_tools",
+      "fig_grounding_cv",
+      "fig_perturbation_mechanism",
+      "fig_trace_generation",
+      "fig_trace_verification",
+      "fig_corpus_composition",
+      "fig_tool_usage",
+      "fig_traces_evidence",
+      "fig_traces_comparison"
+    ],
+    "04_experiments.tex": [
+      "fig_design",
+      "fig_nudge_tier",
+      "fig_gallery"
+    ],
+    "07_appendix.tex": []
+  },
+  "protocol_sha256": "03244618d91a2cfbe5a47d0a55ff43cd26e7fa3708775925309109c0df2e178d"
+}

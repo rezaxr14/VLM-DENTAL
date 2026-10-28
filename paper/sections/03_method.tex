@@ -94,7 +94,7 @@ this logic and the rollout side drifted onto a compounding image state, a real b
 invalidated rollouts. Second, the image-input geometry lives in one module and is an explicit
 flag, not an implicit behavior (\cref{fig:inputgeom}). The two candidate execution targets make
 different demands: TPU training requires aspect-preserving canonical views with static
-vision-slot padding so XLA compiles a single graph and never recompiles, while GPU runs so far
+vision-slot padding to reduce shape-driven XLA recompilation, without guaranteeing one graph or eliminating HBM pressure, while GPU runs so far
 feed original images with dynamic shapes; which target the project settles on --- a GPU
 (RTX 4090 / RTX Pro 6000 / A100) or a TPU v5e-8 cluster --- is deliberately deferred to the
 first GPU run. Whichever is chosen applies identically across SFT, RL, and evaluation, and in
@@ -434,7 +434,7 @@ matched recall and precision --- missed findings and hallucinated extra findings
 zero, so spamming guesses cannot free-ride. With one finding on each side this reduces exactly
 to the single-pair score. This design follows \citet{oralgptplus2026}'s documented
 reward-hacking failure under an LLM-judge accuracy term: our accuracy signal is not a judge's
-opinion and cannot be collapsed by calling one tool and stopping.
+opinion. This reduces that particular judge dependence; it does not establish immunity to reward exploitation.
 
 \paragraph{Complexity-scaled efficiency that does not fight correction.}
 A naive per-call penalty prices every tool call equally --- and therefore prices a legitimate

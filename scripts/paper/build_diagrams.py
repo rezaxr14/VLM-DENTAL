@@ -1899,6 +1899,9 @@ BUILDERS = {
 }
 
 
+from build_mechanism_diagrams import BUILDERS as MECHANISM_BUILDERS
+BUILDERS.update(MECHANISM_BUILDERS)
+
 # y (in the builder's own coordinates) where each figure's real content starts.
 # Everything above it is the in-figure title/subtitle: journals expect the
 # caption to carry that, so it is removed and the content shifted up.

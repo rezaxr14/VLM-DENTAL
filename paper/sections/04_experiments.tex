@@ -1,4 +1,4 @@
-﻿% ---------------------------------------------------------------------------
+% ---------------------------------------------------------------------------
 \section{Experiments}
 \label{sec:experiments}
 
@@ -55,12 +55,15 @@ design.
   \centering
   \small
   \caption{Zero-shot frontier VLMs on the DENTEX validation set ($N=50$ panoramic radiographs;
-  set-level matching over all annotated findings). Exact match requires the right tooth
-  \emph{and} diagnosis. ECE = expected calibration error.}
+  set-level matching over annotated findings). Exact hit is the percentage of evaluated images
+  with at least one correct tooth--diagnosis pair, not complete-case accuracy. FDI hit similarly
+  requires at least one matched tooth. The reported confidence interval refers to exact hit;
+  F1 pools finding counts. $N$ is the available evaluated count per model, which differs across
+  rows; these are not identical paired cohorts. ECE = expected calibration error.}
   \label{tab:zeroshot}
   \begin{tabular}{lrrrrrr}
     \toprule
-    Model & $N$ & FDI acc. & Exact acc. & Exact F1 & 95\% CI & ECE \\
+    Model & $N$ & FDI hit & Exact hit & Exact F1 & 95\% CI & ECE \\
     \midrule
     Moonshot Kimi-k3 & 50 & 64.0\% & \textbf{46.0\%} & \textbf{0.222} & [32.0, 60.0] & \textbf{0.214} \\
     Meta Llama 3.2 90B & 46 & 45.7\% & 37.0\% & 0.098 & [23.9, 52.2] & 0.395 \\
@@ -74,18 +77,10 @@ design.
   \end{tabular}
 \end{table}
 
-\cref{tab:zeroshot} establishes the problem the agent architecture addresses. Even the best
-frontier model misses more than half of the exact findings; the best-calibrated model still
-carries ECE 0.21 while most models report 0.85--0.95 confidence on hallucinated positions; and a
-dense 11B generalist falls \emph{below the majority-class floor}, a statistical collapse rather
-than a graceful degradation. The failure modes are structural, not stochastic: quadrant
-inversions from the OPG's left/right display convention, a resolution bottleneck that reduces an
-early caries to a sub-patch blur, tissue-masking of periapical radiolucencies, and severe
-overconfidence. Each of these maps onto a specific tool in \cref{tab:tools} --- which is the
-design rationale of the suite, not a post hoc story: grounding corrects spatial disorientation,
-\texttt{zoom\_crop} bypasses the resolution bottleneck, \texttt{window\_level} and
-\texttt{enhance\_contrast} counter tissue masking, and \texttt{contralateral\_compare} tests
-symmetry hypotheses before commitment.
+\cref{tab:zeroshot} motivates additional inspection without identifying a causal error
+mechanism. The best pooled exact F1 is 0.222; the 46.0\% image-level exact hit rate answers
+a different question and is not finding recall or complete-case correctness. Tool-specific
+benefits require the controlled trained-policy comparisons, not extrapolation from baselines.
 
 \subsection{Main results}
 \label{sec:mainresults}

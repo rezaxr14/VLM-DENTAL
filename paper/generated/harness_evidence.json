@@ -1,0 +1,11 @@
+{
+  "harness": {
+    "reason": "No measured result file supplied",
+    "status": "pending"
+  },
+  "schema_version": 1,
+  "serving": {
+    "reason": "No measured result file supplied",
+    "status": "pending"
+  }
+}
