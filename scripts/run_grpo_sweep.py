@@ -32,6 +32,8 @@ from dental_agent.utils.canonical import SLOT_BUDGET, add_letterbox_arg, check_g
 from scripts.run_grpo import ensure_pool_images, resolve_grpo_inputs, resolve_sft_reference, sft_reference_candidates
 
 
+from dental_agent.training.experiment_profiles import grpo_name, can_resume
+
 def parse_args():
     parser = argparse.ArgumentParser(description="VLM-DENTAL: GRPO K={1, 2, 4, 8, 16} Sweep Orchestrator")
     parser.add_argument(
@@ -68,6 +70,7 @@ def parse_args():
     parser.add_argument("--checkpoint-dir", type=str, default="data/models",
                         help="Parent folder of the per-K checkpoint folders qwen3_5_9b_grpo_<track>_k<K>_<stage> "
                              "(run_grpo.py calls this --output-dir).")
+    parser.add_argument("--hf-run-tag", default=None, help="Separate upload/resume experiment namespace")
     parser.add_argument("--resume", action=argparse.BooleanOptionalAction, default=False,
                         help="Continue an interrupted sweep: a K whose final checkpoint exists is skipped without loading the model; "
                              "an interrupted K continues from its newest step checkpoint (same pool, seed and K needed).")
@@ -213,7 +216,7 @@ def main():
     for k in args.k_values:
         print(f"\n>>> Starting GRPO Experiment for Group Size K={k} <<<")
         start_time = time.time()
-        target_name = f"qwen3_5_9b_grpo_{args.track}_k{k}_{args.sft_stage}"
+        target_name = grpo_name(args.track, k, args.sft_stage, args.precision, args.hf_run_tag)
         ckpt_dir = f"{args.checkpoint_dir}/{target_name}"
         path_in_repo_prefix = f"grpo/{target_name}"
         final_meta = Path(ckpt_dir) / f"grpo-{args.track}-final" / "checkpoint_meta.json"
@@ -245,7 +248,7 @@ def main():
             track=args.track,
             hf_repo=args.hf_repo,
             push_every_steps=args.push_every_steps,
-            resume=args.resume,
+            resume=args.resume and can_resume(ckpt_dir, args.track),
             path_in_repo_prefix=path_in_repo_prefix,
             num_cores=args.num_cores,
             use_fsdp=args.fsdp,

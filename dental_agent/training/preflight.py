@@ -683,7 +683,8 @@ def run_preflight(args: Any, sft_candidates: list[Path], emit: Callable[[str], N
     if sft_dir is not None and (sft_dir / "adapter_config.json").is_file():
         _check_sft_consistency(args, sft_dir, dev_keys, rep)
 
-    out_dir = Path(args.output_dir) / f"qwen3_5_9b_grpo_{args.track}_k{args.group_size}_{args.sft_stage}"
+    from dental_agent.training.experiment_profiles import grpo_name
+    out_dir = Path(args.output_dir) / grpo_name(args.track, args.group_size, args.sft_stage, args.precision, getattr(args, "hf_run_tag", None))
     _check_resume(args, pool, out_dir, rep)
     _check_hub(args, rep)
     _check_hardware(args, rep)

@@ -41,6 +41,8 @@ from dental_agent.training.grpo import train_grpo
 from dental_agent.utils.canonical import SLOT_BUDGET, add_letterbox_arg, check_gpu_image_policy, parse_slot_budget, set_letterbox, slot_totals
 
 
+from dental_agent.training.experiment_profiles import grpo_name, can_resume
+
 def upload_checkpoint_to_hf(checkpoint_dir: Path, hf_repo: str, step: int):
     """Upload lightweight LoRA checkpoint (~760 MB) to Hugging Face Hub."""
     try:
@@ -172,6 +174,7 @@ def main() -> None:
         help="Hugging Face repo to download the NEWEST step checkpoint of this run from (a fresh Kaggle/Colab session). "
              "Only downloads; add --resume to continue from it.",
     )
+    parser.add_argument("--hf-run-tag", default=None, help="Separate upload/resume experiment namespace")
     parser.add_argument(
         "--resume",
         action=argparse.BooleanOptionalAction,
@@ -375,7 +378,7 @@ def run_worker(index: int, args: argparse.Namespace):
     resolved_sft_dir = resolve_grpo_inputs(args, cfg.data_dir)
 
     # Checkpoint directory naming: qwen3_5_9b_grpo_{track}_k{group_size}_{sft_stage}
-    target_name = f"qwen3_5_9b_grpo_{args.track}_k{args.group_size}_{args.sft_stage}"
+    target_name = grpo_name(args.track, args.group_size, args.sft_stage, args.precision, args.hf_run_tag)
     out_dir = Path(args.output_dir) / target_name
     out_dir.mkdir(parents=True, exist_ok=True)
     path_in_repo_prefix = f"grpo/{target_name}"
@@ -452,7 +455,7 @@ def run_worker(index: int, args: argparse.Namespace):
         max_seq_len=args.max_seq_len,
         pad_vision_to_slots=args.pad_vision_to_slots,
         slot_budget=slot_budget,
-        resume=args.resume,
+        resume=args.resume and can_resume(out_dir, args.track),
         max_new_tokens=args.max_new_tokens,
         log_path=args.log_path,
         runtime_options=runtime_from_args(args),
