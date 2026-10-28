@@ -1,9 +1,15 @@
-\begin{thebibliography}{17}
+\begin{thebibliography}{21}
 \providecommand{\natexlab}[1]{#1}
 \providecommand{\url}[1]{\texttt{#1}}
 \expandafter\ifx\csname urlstyle\endcsname\relax
   \providecommand{\doi}[1]{doi: #1}\else
   \providecommand{\doi}{doi: \begingroup \urlstyle{rm}\Url}\fi
+
+\bibitem[{Agent Skills contributors}(2026)]{agentskills2026}
+{Agent Skills contributors}.
+\newblock Agent skills: Specification.
+\newblock \url{https://agentskills.io/specification}, 2026.
+\newblock Accessed 2026-10-28.
 
 \bibitem[Baghbanzadeh et~al.(2026)Baghbanzadeh, Sarkar, Colacci, Badawi,
   Fallahpour, Afkanpour, Sigal, Etemad, and Dolatabadi]{openmedreason2026}
@@ -22,6 +28,14 @@ Shuai Bai, Keqin Chen, Xuejing Liu, Ruiqi Wang, Wenbin Ge, Sibo Song, Kai Dang,
   Jiabo Ye, et~al.
 \newblock {Qwen3-VL} technical report.
 \newblock \emph{arXiv preprint arXiv:2511.21631}, 2025.
+
+\bibitem[Chen et~al.(2023)Chen, Borgeaud, Irving, Lespiau, Sifre, and
+  Jumper]{chen2023accelerating}
+Charlie Chen, Sebastian Borgeaud, Geoffrey Irving, Jean-Baptiste Lespiau,
+  Laurent Sifre, and John Jumper.
+\newblock Accelerating large language model decoding with speculative sampling.
+\newblock \emph{arXiv preprint arXiv:2302.01318}, 2023.
+\newblock URL \url{https://arxiv.org/abs/2302.01318}.
 
 \bibitem[Chen et~al.(2024)]{chen2024huatuo}
 Junying Chen et~al.
@@ -90,6 +104,16 @@ Harold~W. Kuhn.
 \newblock The {Hungarian} method for the assignment problem.
 \newblock \emph{Naval Research Logistics Quarterly}, 2:\penalty0 83--97, 1955.
 
+\bibitem[Kwon et~al.(2023)Kwon, Li, Zhuang, Sheng, Zheng, Yu, Gonzalez, Zhang,
+  and Stoica]{kwon2023efficient}
+Woosuk Kwon, Zhuohan Li, Siyuan Zhuang, Ying Sheng, Lianmin Zheng, Cody~Hao Yu,
+  Joseph~E. Gonzalez, Hao Zhang, and Ion Stoica.
+\newblock Efficient memory management for large language model serving with
+  {PagedAttention}.
+\newblock In \emph{Proceedings of the 29th Symposium on Operating Systems
+  Principles}, pages 611--626, 2023.
+\newblock \doi{10.1145/3600006.3613165}.
+
 \bibitem[Lai et~al.(2026)Lai, Zhong, Li, Zhao, Li, Psounis, and
   Yang]{wang2025medr1}
 Yuxiang Lai, Jike Zhong, Ming Li, Shitian Zhao, Yuheng Li, Konstantinos
@@ -98,6 +122,15 @@ Yuxiang Lai, Jike Zhong, Ming Li, Shitian Zhao, Yuheng Li, Konstantinos
   in vision-language models.
 \newblock \emph{IEEE Transactions on Medical Imaging}, 2026.
 \newblock arXiv:2503.13939.
+
+\bibitem[Leviathan et~al.(2023)Leviathan, Kalman, and
+  Matias]{leviathan2023fast}
+Yaniv Leviathan, Matan Kalman, and Yossi Matias.
+\newblock Fast inference from transformers via speculative decoding.
+\newblock In \emph{Proceedings of the 40th International Conference on Machine
+  Learning}, volume 202 of \emph{Proceedings of Machine Learning Research},
+  pages 19274--19286, 2023.
+\newblock URL \url{https://proceedings.mlr.press/v202/leviathan23a.html}.
 
 \bibitem[Li et~al.(2024)Li, Xiao, Li, et~al.]{li2024mmedagent}
 Junying Li, Zhenyang Xiao, Chunjiang Li, et~al.
