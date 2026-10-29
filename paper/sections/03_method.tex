@@ -15,9 +15,8 @@ answer reporting \emph{every} finding the agent commits to. The same agent loop 
 synthetic data generation, RL rollouts, and evaluation, and tool calls execute for real against
 the source image at every stage (\cref{fig:pipeline}); a single shared dispatcher defines which
 tools consume the image and which image they operate on, so the training and inference
-environments cannot drift apart. Tool calls are capped at 50 per episode, counted by calls
-rather than turns, and parsed by a bracket-counting JSON extractor that repairs truncated or
-markdown-wrapped outputs.
+environments cannot drift apart. Tool calls are capped at 50 per episode, and a lightweight JSON extractor repairs
+truncated or markdown-wrapped outputs.
 
 \begin{figure}[tbp]
   \centering
@@ -26,8 +25,7 @@ markdown-wrapped outputs.
   tool suite in a LangGraph loop (with the tiered perturbation hook of \cref{sec:perturbation}),
   verified cross-family against expert labels, and used for SFT followed by GRPO with a
   ground-truth-anchored composite reward. Tool calls execute for real against the source image
-  at every stage; the radiograph and crop pixels are real assets from the corpus (the image
-  whose trace anatomy is dissected in \cref{fig:traces}).}
+  at every stage; the example radiograph is the image whose trace is dissected in \cref{fig:traces}.}
   \label{fig:pipeline}
 \end{figure}
 
@@ -39,8 +37,7 @@ and evaluation time, and the offline stack that produces its weights. Five compo
 core --- a Qwen3.5-9B vision-language policy running the loop of \cref{sec:setup}: a data layer
 (\cref{fig:datasets}: registry-driven loaders for the two in-use sources, DENTEX and Tufts; a
 candidate pool of eight further public panoramic datasets, promoted only after their annotation
-semantics are verified; and surgical per-image Hugging Face caching), the trace
-synthesis stack of \cref{sec:traces}, the two training stages of \cref{sec:reward}, and an
+semantics are verified), the trace synthesis stack of \cref{sec:traces}, the two training stages of \cref{sec:reward}, and an
 evaluation layer (\cref{sec:eval}) whose probes feed model selection on a fixed dev split.
 
 \begin{figure}[tbp]
@@ -55,8 +52,8 @@ evaluation layer (\cref{sec:eval}) whose probes feed model selection on a fixed 
   guess. The diagnosis-label vs grounding-only flag drives purpose: grounding candidates
   generalize \texttt{locate\_tooth}, diagnosis candidates would feed trace generation. The
   catalog is transcribed from a systematic review of 16 public dental imaging datasets
-  \citep{uribe2024systematic} plus a targeted follow-up search; the radiographs are real examples of
-  the two sources, with their expert boxes.}
+  \citep{uribe2024systematic} plus a targeted follow-up search; example radiographs from the two sources
+  are shown with their expert boxes.}
   \label{fig:datasets}
 \end{figure}
 
@@ -69,8 +66,7 @@ evaluation layer (\cref{sec:eval}) whose probes feed model selection on a fixed 
   execute on the native source image; the final findings JSON is scored by an evaluation layer
   whose probes select on a dev split only, with the test split run once at the end. Badges 4--6
   continue the numbered path of \cref{fig:training}, whose training stack is the source of the
-  adapters and the sink of the dev-split signal (the grey ``training'' boxes); radiograph and
-  crop pixels are real assets from the corpus.}
+  adapters and the sink of the dev-split signal (the grey ``training'' boxes).}
   \label{fig:architecture}
 \end{figure}
 
@@ -89,9 +85,7 @@ evaluation layer (\cref{sec:eval}) whose probes feed model selection on a fixed 
 Three single-source-of-truth decisions hold the system together. First, one shared dispatcher
 defines, for every tool, whether and \emph{which} image it consumes --- always the native source
 image --- so the trace-generation loop, the GRPO rollout loop, and the evaluation runner cannot
-silently diverge; the dispatcher exists precisely because the two loops originally duplicated
-this logic and the rollout side drifted onto a compounding image state, a real bug that silently
-invalidated rollouts. Second, the image-input geometry lives in one module and is an explicit
+silently diverge. Second, the image-input geometry lives in one module and is an explicit
 flag, not an implicit behavior (\cref{fig:inputgeom}). The two candidate execution targets make
 different demands: TPU training requires aspect-preserving canonical views with static
 vision-slot padding to reduce shape-driven XLA recompilation, without guaranteeing one graph or eliminating HBM pressure, while GPU runs so far
@@ -101,7 +95,7 @@ first GPU run. Whichever is chosen applies identically across SFT, RL, and evalu
 both modes every tool operates on native-resolution pixels, so coordinates the model was trained
 to emit remain valid at inference. Third, the conversion from DENTEX's zero-indexed annotation rows
 to FDI notation has exactly one implementation, called by the reward, the verifier, and the
-metrics alike --- an indexing bug cannot recur independently in several subsystems.
+metrics alike --- so an indexing error cannot arise independently in several subsystems.
 
 \begin{figure}[tbp]
   \centering
@@ -124,11 +118,10 @@ The registry exposes eight tools (\cref{tab:tools}; \cref{fig:tools} shows what 
 that tools expose \emph{how much} effect to apply as a continuous or overridable parameter, not
 just a fixed on/off call: denoising takes a continuous \texttt{strength}, windowing takes exact
 \texttt{center}/\texttt{width} values as an override on top of tissue presets, contrast takes a
-multiplicative \texttt{factor}, and cropping takes a tunable context margin. A policy calling
-\texttt{denoise(strength=0.3)} versus \texttt{denoise(strength=0.9)} is expressing a
-patient-specific judgment about how grainy a crop is --- information a fixed three-level menu
-cannot carry --- and the resulting tool-call stream is correspondingly more informative to train
-on and to audit.
+multiplicative \texttt{factor}, and cropping takes a tunable context margin. A policy calling \texttt{denoise(strength=0.3)}
+rather than \texttt{denoise(strength=0.9)} is expressing a patient-specific judgment about how
+grainy a crop is. A fixed three-level menu cannot carry this information, and the resulting
+tool-call stream is more informative to train on and to audit.
 
 \begin{table}[tbp]
   \centering
@@ -170,11 +163,10 @@ on and to audit.
 The grounding tool is a YOLOv8m detector fine-tuned on 2{,}339 DENTEX+Tufts images with 46{,}808
 tooth boxes, trained with 5-fold cross-validation (one class per FDI quadrant--position pair)
 (\cref{fig:groundingcv}; full per-fold numbers in \cref{app:grounding}).
-It is strong --- held-out \emph{target} mAP50 of 0.93--0.96 with precision up to 0.986 on
-annotated teeth --- but it is a 32-class detector operating under per-fold variance, and its
-errors are exactly the kind that poison downstream reasoning: a box shifted by half a
-tooth-width produces a crop that still \emph{looks} like a plausible anatomical region while
-showing the wrong tooth.
+The detector is accurate (held-out \emph{target} mAP50 of 0.93--0.96 with precision up to 0.986
+on annotated teeth), but it is a 32-class detector with per-fold variance, and its errors
+propagate into downstream reasoning: a box shifted by half a tooth-width yields a crop that
+still \emph{looks} like a plausible anatomical region while showing the wrong tooth.
 
 \begin{figure}[tbp]
   \centering
@@ -190,27 +182,26 @@ showing the wrong tooth.
   \label{fig:groundingcv}
 \end{figure}
 
-\texttt{nudge\_crop} turns that failure mode into an interaction. It takes a box the policy was
-\emph{already given} (by \texttt{locate\_tooth} or a previous \texttt{nudge\_crop} --- never
-asserted from nowhere) and returns adjusted coordinates: a shift $(\texttt{dx\_frac},
+\texttt{nudge\_crop} makes such errors correctable. It takes a box the policy was
+\emph{already given} (by \texttt{locate\_tooth} or a previous \texttt{nudge\_crop}; it cannot
+create a box from scratch) and returns adjusted coordinates: a shift $(\texttt{dx\_frac},
 \texttt{dy\_frac})$ expressed as fractions of the box's own width and height, and a rescale
 \texttt{scale} around the new center, clamped to image bounds. The tool is deliberately
 \emph{data-only}: it computes coordinates, and the policy must pair it with \texttt{zoom\_crop}
-to actually see the corrected region. Two consequences follow. First, the fractional,
-box-relative parameterization is what a VLM can reason about reliably --- ``shift left by about
-half the box'' --- rather than raw pixel coordinates at an arbitrary zoom level. Second, because
+to actually see the corrected region. Two consequences follow. First, a fractional,
+box-relative parameterization (``shift left by about half the box'') is easier for a VLM to
+reason about than raw pixel coordinates at an arbitrary zoom level. Second, because
 each correction must be followed by a verification crop, the loop enforces an
-inspect--correct--re-inspect cycle rather than a single blind adjustment. This is the mechanism
-neither concurrent dental agentic system provides: their tools are fixed operations whose
-outputs the policy can only accept.
+inspect--correct--re-inspect cycle rather than a single blind adjustment. To our knowledge, neither
+concurrent dental agentic system exposes such a mechanism: their tools are fixed operations
+whose outputs the policy can only accept.
 
 \subsection{Tiered perturbation: making self-correction learnable}
 \label{sec:perturbation}
 
-A policy can only learn to interrogate its tools if its teachers did. The core difficulty is
-that an idealized demonstrator --- one whose grounding tool always returns the right box ---
-demonstrates \emph{trusting} the tool, and SFT on such traces teaches exactly the wrong
-reflex. At the same time, blind exploration by the demonstrator would collapse the yield of
+A policy learns to question its tools only if its demonstrations do. An idealized
+demonstrator, whose grounding tool always returns the right box, demonstrates
+\emph{trusting} the tool, and SFT on such traces teaches the wrong reflex. At the same time, unguided exploration by the demonstrator would sharply reduce the yield of
 usable traces.
 
 Our resolution (\cref{fig:mechanism}) separates what the grounding tool \emph{computes} from
@@ -222,34 +213,34 @@ a \emph{perturbation roll} decides what is displayed (exact configuration in
 \cref{app:perturbation}):
 
 \begin{itemize}[leftmargin=*,itemsep=1pt,topsep=2pt]
-  \item \textbf{none} (45\%): the box is shown as computed --- a clean accept-and-proceed demonstration;
+  \item \textbf{none} (45\%): the box is shown as computed, giving a clean accept-and-proceed demonstration;
   \item \textbf{small} (25\%): a synthetic offset of 12--28\% of the box's own size per axis,
-  random sign --- a genuine judgment call that the zoom margin often absorbs, and that the prompt
-  deliberately does \emph{not} resolve either way;
-  \item \textbf{big} (30\%): an offset of 45--75\% per axis --- sized to be visually self-evident.
+  random sign. This is a judgment call that the zoom margin often absorbs, and the
+  prompt does \emph{not} say whether such a box needs correction;
+  \item \textbf{big} (30\%): an offset of 45--75\% per axis, sized to be visually self-evident.
 \end{itemize}
 
 Offsets are applied with \texttt{nudge\_crop}'s own shift-and-clamp math, so every perturbed box
 is one the correction tool could plausibly have produced or fixed; the unperturbed box is logged
-internally for auditing but never shown. Two design commitments matter more than the numbers:
+internally for auditing but never shown. Two design choices matter more than the specific rates:
 
 \paragraph{Fixed rates, decoupled from detector accuracy.}
 The perturbation probabilities are configured constants, not a reflection of the grounding
-model's measured error rate. This is a deliberate decoupling: if ``how often the model must
-verify'' tracked the detector's live precision, then every improvement to the detector would
+model's measured error rate. This decoupling is deliberate: if the required frequency of verification
+tracked the detector's live precision, then every improvement to the detector would
 silently reduce the frequency of demonstrated correction, and traces generated under the old
-detector would teach a stale behavior. With fixed rates, today's corpus remains valid as the
-grounding tool improves --- a property this project exercised for real, as the detector's
-validated mAP50 improved from 0.58 (DENTEX-only) to 0.87--0.96 (multi-dataset) while the trace
-corpus stayed in use unchanged.
+detector would teach a stale behavior. With fixed rates, the corpus remains valid as the
+grounding tool improves, as occurred during this project, when the
+detector's validated mAP50 improved from 0.58 (DENTEX-only) to 0.87--0.96 (multi-dataset)
+while the trace corpus remained in use unchanged.
 
 \paragraph{No verbal cue; magnitude carries the signal.}
 Nothing in the trace-generation prompt marks a perturbed box as wrong. A verbal cue (``this box
 needs correction'') would exist only during data generation and not at RL or inference time, so
-teaching the model to respond to it would be a shortcut that fails exactly when it matters. The
+teaching the model to respond to it would install a shortcut that fails at inference time. The
 big tier is therefore sized to be self-evident from the crop alone, and the small tier is left
-genuinely ambiguous --- the demonstrator has to look and judge, which is precisely the skill the
-deployed policy must exercise with no ground truth available at all.
+ambiguous: the demonstrator has to look and judge, which is the skill the deployed policy must
+exercise without any ground truth.
 
 \begin{figure}[tbp]
   \centering
@@ -263,23 +254,21 @@ deployed policy must exercise with no ground truth available at all.
 \subsection{Trace generation, verification, and decontamination}
 \label{sec:traces}
 
-Traces are generated by a frontier teacher (Gemini 3.5 Flash Lite or MiniMax M3, routed through
-a rate-limited provider pool) that is directed toward the expert labels for the image but writes
+Traces are generated by a frontier teacher (Gemini 3.5 Flash Lite or MiniMax M3) that is directed toward the expert labels for the image but writes
 its own reasoning and tool calls turn by turn under real tool feedback. Generation is
-ground-truth-directed by design: blind exploration by an untuned model would tank the yield of
-correctly-labeled demonstrations. Every trace then passes an independent, cross-family
+ground-truth-directed by design: unguided exploration by an untuned model would sharply reduce the yield of
+correctly labeled demonstrations. Every trace then passes an independent, cross-family
 \emph{verifier} conditioned on the image and the expert labels, which rejects reasoning not
-supported by what the model was actually shown (verifier prompt and gating rules in
+supported by what the model was actually shown (rejection taxonomy in
 \cref{app:verifier}). Verification is staged rather than monolithic
 (\cref{fig:tracegen,fig:traceverif}): a strict pass checks diagnostic correctness, FDI validity, and whether
 every claim is supported by what the model was actually shown --- treating valid
 \texttt{nudge\_crop} correction loops as evidence of diligence rather than as errors --- and
-rejected traces are routed to a verifier-editor that surgically repairs FDI labels, diagnosis
+rejected traces are routed to a verifier-editor that repairs FDI labels, diagnosis
 labels, and formatting while preserving the clinical chain of thought; the repaired trace is
 re-verified before promotion. Both stages are cross-family by construction: the generator and
-the verifier are routed through separate provider pools spanning different model families
-(Gemini, MiniMax, NVIDIA NIM, Groq, OpenRouter), so a generator's blind spot is unlikely to be
-shared by its judge. Because generation is conditioned on privileged information, traces are
+the verifier are drawn from separate provider pools spanning different model families, so a
+generator's blind spot is unlikely to be shared by its judge. Because generation is conditioned on privileged information, traces are
 scanned for \emph{directive leakage} --- the demonstrator echoing its hidden instructions in its
 reasoning --- and leaking cases are excised and regenerated under a dual gate (zero-leak regex
 audit + verifier re-approval); the canonical corpus contains zero leaks.
@@ -320,28 +309,27 @@ audit + verifier re-approval); the canonical corpus contains zero leaks.
   \label{fig:corpus}
 \end{figure}
 
-The resulting corpus (\cref{tab:corpus}, \cref{fig:corpus}) comprises 3{,}694 verified traces over 1{,}847 images
+The resulting corpus (\cref{tab:corpus,fig:corpus}) comprises 3{,}694 verified traces over 1{,}847 images
 from two institutions: 1{,}847 interactive with-tools traces and 1{,}847 single-turn no-tools
 traces in exact 1:1 parity --- the paired design that lets the evaluation isolate the
 contribution of the tools (\cref{sec:eval}). The with-tools corpus carries 5{,}144
-finding-level ground-truth annotations across cohorts (4{,}513 unique: the 202-image Tufts
-overlap cohort is contained in the 280-image Tufts all-diseases cohort, so its 631 findings are
-counted twice), spanning caries (2{,}189), deep caries (578), impacted teeth (604), periapical
+finding-level ground-truth annotations across cohorts (4{,}513 unique, because the 202-image
+Tufts overlap cohort is contained in the 280-image Tufts all-diseases cohort), spanning caries (2{,}189), deep caries (578), impacted teeth (604), periapical
 lesions (789 unique), and three further Tufts lesion classes (353); multi-finding images carry
 up to 23 annotated findings, and the teacher surveys every finding on the image. Healthy scans
 are included as negative controls with empty finding sets. The verifier rejected 92 traces
 across three failure modes: 66 hallucinated findings on healthy scans, 15 ground-truth
 contradictions (wrong diagnosis class or swapped quadrants), and 11 uncorrected spatial drifts
 --- cases where the teacher diagnosed from a visibly displaced box without issuing a corrective
-\texttt{nudge\_crop}. The third category is direct evidence that the perturbation mechanism
-creates real, auditable judgment pressure rather than a scripted step. Across the with-tools
+\texttt{nudge\_crop}. The third category indicates that the perturbation mechanism
+creates judgment pressure that the verifier can audit. Across the with-tools
 corpus the teacher averaged 12--13 turns and 18--30 real tool calls per trace
 (\cref{tab:corpus}); the full call distribution is shown in \cref{fig:toolusage}.
 
 \begin{table}[tbp]
   \centering
   \small
-  \caption{The verified corpus, regenerated from the released trace files. With-tools and
+  \caption{The verified corpus. With-tools and
   no-tools cohorts are in exact 1:1 parity (checkmarks). Turns and tool calls are for the
   with-tools side; findings are counted per cohort (the Tufts overlap cohort is a subset of the
   Tufts all-diseases cohort, so its findings are counted in both).}
@@ -365,8 +353,8 @@ corpus the teacher averaged 12--13 turns and 18--30 real tool calls per trace
 
 \cref{fig:evidence,fig:traces} show both halves of the paired corpus for one DENTEX image (a carious FDI
 tooth 34, a single finding). The no-tools trace is one turn: a fluent, well-structured direct
-diagnosis that happens to reach the right answer, with no evidence trail --- the reasoning
-cannot be checked against anything the model was actually shown, and the model never had the
+diagnosis that reaches the right answer but leaves no evidence trail: its reasoning cannot be
+checked against anything the model was actually shown, and the model never had the
 opportunity to be wrong and recover. The with-tools trace for the same image runs 23 turns and
 22 real tool calls and demonstrates the full behavioral repertoire the perturbation mechanism is
 designed to elicit: the grounding box for tooth 34 was inspected, judged wrong (``the crop shows
@@ -404,9 +392,8 @@ with-tools and 1{,}847 no-tools traces in exact per-cohort parity, the evaluatio
 image and the label fixed and vary only the tool interface, isolating what interactive tool use
 adds over single-pass reasoning (\cref{sec:eval}). The no-tools traces are retained
 deliberately: they teach output format and clinical vocabulary and provide the baseline arm of
-every comparison --- but they are documented as ground-truth-directed single-pass generation
-(closer to hindsight rationalization than blind discovery), a tradeoff \cref{sec:traces} made
-explicit rather than hidden.
+every comparison --- but they are ground-truth-directed single-pass generations, closer to
+hindsight rationalization than to blind discovery (\cref{sec:traces}).
 
 \subsection{Training: SFT then GRPO with a correction-friendly reward}
 \label{sec:reward}
@@ -431,14 +418,15 @@ pair scores $0.25 \cdot
 \mathbf{1}[\text{quadrant}] + 0.25 \cdot \mathbf{1}[\text{position}] + 0.50 \cdot
 \mathbf{1}[\text{diagnosis}]$, and the image-level score is the F1-style harmonic mean of the
 matched recall and precision --- missed findings and hallucinated extra findings both score
-zero, so spamming guesses cannot free-ride. With one finding on each side this reduces exactly
-to the single-pair score. This design follows \citet{oralgptplus2026}'s documented
-reward-hacking failure under an LLM-judge accuracy term: our accuracy signal is not a judge's
-opinion. This reduces that particular judge dependence; it does not establish immunity to reward exploitation.
+zero, so indiscriminate
+guessing cannot inflate the score. With one finding on each side this reduces exactly
+to the single-pair score. This design is motivated by the reward-hacking failure that \citet{oralgptplus2026} document
+for an LLM-judge accuracy term. A rule-based match removes that judge dependence; it does not
+by itself rule out other forms of reward exploitation.
 
 \paragraph{Complexity-scaled efficiency that does not fight correction.}
 A naive per-call penalty prices every tool call equally --- and therefore prices a legitimate
-corrective \texttt{nudge\_crop} the same as aimless spam, directly fighting the behavior
+corrective \texttt{nudge\_crop} the same as an aimless call, directly fighting the behavior
 \cref{sec:perturbation} exists to teach. $R_{\text{eff}}$ instead derives a reference budget
 from the trajectory itself (6 calls per distinct located tooth), exempts \texttt{locate\_tooth}
 and \texttt{nudge\_crop} entirely from per-call cost, and charges only budget overruns and

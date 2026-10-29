@@ -2,16 +2,16 @@
 \section{Conclusion}
 \label{sec:conclusion}
 
-\sys{} makes grounding correction an explicit action in a dental VLM pipeline.
-Box-relative revision, deliberately imperfect demonstration-time grounding, and a
-correction-friendly reward jointly define a testable approach to learning when to look again.
-The completed corpus analysis shows a teacher correction gradient across perturbation tiers;
-it does not establish that the trained student corrects errors or improves diagnostic accuracy.
-Those conclusions require the pending SFT/GRPO comparisons under the frozen protocol.
+\sys{} makes grounding correction an explicit action in a dental VLM pipeline. Box-relative
+revision, deliberately imperfect demonstration-time grounding, and a correction-friendly reward
+together define a testable approach to learning when to look again. The completed corpus
+analysis shows a teacher correction gradient across perturbation tiers; it does not show that
+the trained student corrects errors or improves diagnostic accuracy. Those conclusions require
+the pending SFT/GRPO comparisons under the frozen protocol.
 
 The inference extension separates an exact rules rendering from on-demand procedural skills,
-while the serving extension tests speculative decoding against the same numerical target.
-Their quality and efficiency results are reported independently, with missing measurements
-left explicit. Together with the released sources and audit trail, these distinctions make
-both positive and negative results interpretable. The next evidential step is to complete the
-predefined trained-policy comparisons, followed by broader external validation.
+and the serving extension tests speculative decoding against the same numerical target. Their
+quality and efficiency results are reported independently, with missing measurements left
+explicit. Together with the released sources and audit trail, this separation keeps both
+positive and negative results interpretable. The next step is to complete the predefined
+trained-policy comparisons, followed by broader external validation.

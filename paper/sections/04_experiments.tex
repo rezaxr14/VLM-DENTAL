@@ -11,10 +11,9 @@ annotated target teeth, plus 4 healthy controls) as the test set, used exactly o
 numbers. All configuration choices --- checkpoint selection, ablation conditions, group-size
 sweeps --- are made on a fixed dev split of $\sim$70 training images drawn once with a fixed
 seed, so that no choice leaks into the test result. Healthy images are evaluated with ground
-truth $\emptyset$: an invented finding on a healthy image is charged to precision, which is
-where it belongs. Cross-dataset context comes from the Tufts Dental Database
+truth $\emptyset$: an invented finding on a healthy image is charged to precision. Cross-dataset context comes from the Tufts Dental Database
 \citep{tuftsdatabase}, which contributes training traces and grounding training data but is not
-used for test-time evaluation in this draft.
+used for test-time evaluation in this work.
 
 \paragraph{Metrics.}
 Findings are matched as a \emph{set}: predictions and annotations are paired one-to-one by
@@ -116,16 +115,16 @@ benefits require the controlled trained-policy comparisons, not extrapolation fr
 \cref{tab:main} is the paper's primary claim table: does the agentic recipe beat zero-shot
 inference and the same backbone without tools (H1: tools help; H2: RL helps), and where does it
 stand against a supervised specialist (H3, framed as a fair test rather than a guaranteed win).
-The training runs are in progress; all result cells are filled from the frozen evaluation
-protocol above as runs complete.
+Cells for the trained conditions are pending and will be filled from the frozen evaluation
+protocol above.
 
 \subsection{Mechanism analysis: does tiered perturbation elicit self-correction?}
 \label{sec:mechanism}
 
 Before any training, the corpus itself tests the central design claim of \cref{sec:perturbation}:
-did the perturbation hook make the \emph{teacher} --- an expert-level frontier model with no
-verbal hints --- actually inspect, judge, and correct grounding output, rather than scriptedly
-nudge? We answer this by re-walking every with-tools trace (8{,}404 analysed
+did the perturbation hook make the \emph{teacher} --- a frontier model with no
+verbal hints --- actually inspect, judge, and correct grounding output, rather than nudge
+mechanically? We answer this by re-walking every with-tools trace (8{,}404 analysed
 \texttt{locate\_tooth} returns) and reconstructing, for each located tooth, the box the teacher
 was shown, the reference box, and every subsequent \texttt{nudge\_crop} applied to that box
 through the trace. The shown box is recovered from the retained observation payloads (exact
@@ -161,30 +160,28 @@ reference center (cosine $>0.3$), \emph{away} if against it, \emph{rescaling} ot
   \label{fig:nudgetier}
 \end{figure}
 
-\cref{tab:nudgetier} and \cref{fig:nudgetier} show the intended gradient, cleanly and
-monotonically: corrective nudges on 38.4\% of large offsets, 13.6\% of small ones, and 1.1\% of
-clean boxes. The clean-tier control matters: the teacher does not nudge reflexively --- with a
-correct box it proceeds 98.9\% of the time, so the gradient is driven by the \emph{observed}
-displacement, not a scripted habit. The small tier behaves exactly as designed as a judgment
+\cref{tab:nudgetier} and \cref{fig:nudgetier} show the intended monotonic gradient: corrective nudges on 38.4\% of large offsets, 13.6\% of small ones, and 1.1\% of
+clean boxes. The clean-tier control
+matters: the teacher does not nudge reflexively --- with a correct box it proceeds 98.9\% of the time, so the gradient is driven by the \emph{observed}
+displacement, not a scripted habit. The small tier behaves as designed, as a judgment
 call: nudges there are frequent (23.1\%) but only sometimes corrective (13.6\%), consistent with
 the zoom margin often absorbing a small offset (the paired mean IoU of those episodes is unchanged,
 0.45 $\to$ 0.45). On corrected large offsets, mean IoU against the expert box improves from
 0.088 to 0.243 on the same 573 episodes --- partial on average, because a
 single nudge rarely lands perfectly --- with individual recoveries as large as IoU 0.066
-$\to$ 0.938 on a DENTEX training image (\cref{fig:concept}; further episodes in \cref{fig:gallery}). The residual gap is not silently
-absorbed: uncorrected spatial drifts are exactly what the verifier's third rejection category
-(11 traces) caught and repaired during corpus construction.
+$\to$ 0.938 on a DENTEX training image (\cref{fig:concept}; further episodes in \cref{fig:gallery}). The remaining gap is visible in
+the audit: uncorrected spatial drifts are what the verifier's third rejection category (11
+traces) caught and repaired during corpus construction.
 
-Two further observations sharpen the picture. First, the split by reference type (full split in
+Two further observations qualify these results. First, the split by reference type (full split in
 \cref{app:mechanism}): on
 \emph{detector-anchored} locates (exploratory calls during healthy-scan full-arch surveys, where
 the reference is the detector's own box), correction is much rarer (5.0\% on large offsets vs.\
-38.4\% ground-truth-anchored) --- during rapid systematic surveys the teacher surveys broadly
-and does not inspect each exploratory box as carefully. We report this honestly; the
-demonstrated skill this paper targets is the ground-truth-anchored pathology workflow. Second,
+38.4\% ground-truth-anchored) ; during rapid systematic surveys the teacher surveys broadly
+and inspects each exploratory box less carefully. The demonstrated skill this paper targets is the
+ground-truth-anchored pathology workflow. Second,
 nudge \emph{rescales} skew small (scale $<1$): the dominant corrective pattern is
-tighten-after-shift, matching radiologist behavior of zooming into a suspected lesion after
-centering it.
+tighten-after-shift, which resembles zooming into a suspected lesion after centering it.
 
 \begin{figure}[!tb]
   \centering
@@ -206,15 +203,14 @@ centering it.
 \subsection{Ablations and robustness checks}
 \label{sec:ablations}
 
-All ablation machinery is implemented and runs on a trained checkpoint with nothing retrained;
-results are reported here as the runs complete.
+The following probes run on a trained checkpoint without retraining; their results are pending.
 
 \paragraph{Tool-removal probe.}
 A tool is removed from the registry (absent from the prompt's tool list; calls to it return the
 standard ``not recognized'' error), and we record both the score drop and how often the trained
 agent attempts the missing tool. This measures dependence on each tool, including
 \texttt{nudge\_crop}; because the checkpoint was trained with the tools present, it is a
-dependence probe, not the score of a tool-free model --- the no-tools training arms in
+dependence probe, not the score of a tool-free model; the no-tools training arms in
 \cref{tab:main} serve the latter role. \todo{pending}
 
 \paragraph{Grounding-perturbation probe.}
@@ -227,4 +223,4 @@ self-correction --- the deployed version of \cref{sec:mechanism}. \todo{pending}
 
 \paragraph{Group-size sweep.}
 GRPO group sizes $K \in \{1, 2, 4, 8, 16\}$ on the dev split, reporting pooled F1 per K with
-paired comparisons and training cost; reports, never selects. \todo{pending}
+paired comparisons and training cost. The sweep is descriptive and is not used for selection. \todo{pending}

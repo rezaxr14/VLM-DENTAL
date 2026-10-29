@@ -11,8 +11,7 @@ The exact configuration used for trace generation is given in \cref{tab:perturbc
   \small
   \caption{Exact tiered-perturbation configuration used for trace generation. Offsets are drawn
   uniformly per axis with a random sign and applied with \texttt{nudge\_crop}'s own
-  shift-and-clamp math, so every shown box is one the correction tool could produce or fix. The
-  unperturbed box is logged internally per call (\texttt{true\_bbox}, \texttt{perturb\_tier}) and
+  shift-and-clamp math, so every shown box is one the correction tool could produce or fix. The unperturbed box is logged for auditing and
   never shown to the model.}
   \label{tab:perturbconfig}
   \footnotesize
@@ -41,12 +40,11 @@ accuracy so that improving the detector never invalidates existing demonstration
 \begin{table}[htbp]
   \centering
   \small
-  \caption{Corrective-nudge behavior split by reference type, regenerated from the released
-  corpus. \emph{GT-anchored}: the locate call was ground-truth-grounded (annotated tooth;
+  \caption{Corrective-nudge behavior split by reference type. \emph{GT-anchored}: the locate call was ground-truth-grounded (annotated tooth;
   pathology cohorts) and the reference box is the expert box. \emph{Detector-anchored}:
   exploratory calls (dominated by healthy-scan full-arch surveys), where the reference is the
-  detector's own box. During rapid surveys the teacher corrects far less often per box --- a
-  real behavioral difference we report rather than average away.}
+  detector's own box. During rapid surveys the teacher corrects far less often per box, a
+  difference in behavior that pooled rates would hide.}
   \label{tab:mechanismsplit}
   \begin{tabular}{llrrrr}
     \toprule
@@ -92,7 +90,7 @@ reference boxes on the clean tier gave zero mean coordinate error.
 
 The precision/recall profile is the intended operating point for a grounding \emph{tool} inside
 an agent loop: high precision so crops are plausible, non-perfect recall so that correction
-(\cref{sec:nudge}) and re-location remain live skills rather than dead code paths.
+(\cref{sec:nudge}) and re-location remain useful.
 
 \section{Verifier rejection taxonomy}
 \label{app:verifier}
@@ -109,24 +107,12 @@ final yield:
   pathology classes or swapped quadrants; repaired via targeted re-prompting.
   \item \textbf{Uncorrected spatial drift} --- 11 rejections (12.0\%). The teacher diagnosed from
   a visibly displaced grounding box without a corrective \texttt{nudge\_crop}; repaired with
-  spatial realignment. This category exists \emph{because} of the perturbation mechanism
-  (\cref{sec:perturbation}) and is direct audit evidence that it creates genuine, checkable
-  judgment pressure.
+  spatial realignment. This category exists because of the perturbation mechanism
+  (\cref{sec:perturbation}) and indicates that it creates judgment pressure the verifier can
+  check.
 \end{enumerate}
 
 In a separate decontamination pass, 105 traces in which the generator echoed its hidden
 ground-truth directive in its reasoning were excised and regenerated under a dual gate (zero-leak
 audit + verifier re-approval); the canonical corpus contains zero directive leaks and exact
 1:1 parity between the with-tools and no-tools cohorts.
-
-\section{Reproducibility}
-\label{app:repro}
-
-Every number in this paper is regenerable from released artifacts:
-corpus statistics, tool-usage counts, and the mechanism analysis via
-\texttt{scripts/paper/generate\_paper\_assets.py} over the released trace files (tables in
-\texttt{paper/generated/}, figures in \texttt{paper/figures/}); all figures have SVG sources.
-The evaluation protocol (\cref{sec:eval}) is implemented in the repository's evaluation
-package; verbatim system prompts are extractable programmatically from the source
-(\texttt{dental\_agent/paper/prompts.py}). Traces are hosted on the Hugging Face Hub;
-model checkpoints and the grounding weights are synced to the same Hub organization.

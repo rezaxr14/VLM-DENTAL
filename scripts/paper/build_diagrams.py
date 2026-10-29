@@ -350,7 +350,7 @@ def build_trace_generation(a):
     p.append(connect((mx + 10, my + 8, ctw, 64), "r", (mx + mw - 10 - ctw, my + 8, ctw, 64), "l", color=C_ORANGE, sw=1.6))
     p.append(IMG(mx + mw - 10 - ctw, my + 8, ctw, 64, fl_["crop_after"]))
     p.append(R(mx + mw - 10 - ctw, my + 8, ctw, 64, rx=1, stroke="#888888", sw=0.8, fill="none"))
-    p.append(t(mx + mw / 2, my + 86, "before / after (real episode)", size=8.2, fill="#666666", maxw=mw - 8))
+    p.append(t(mx + mw / 2, my + 86, "before / after (one episode)", size=8.2, fill="#666666", maxw=mw - 8))
     # generation pool chips
     gy = ca + 140
     p.append(t(lx + 12, gy, "generation pool:", size=8.6, fill=C_SUB, anchor="start", maxw=140))
@@ -527,9 +527,9 @@ def build_trace_verification(a):
     for i, ln in enumerate(("per-call audit: perturbation", "tier, shown vs true bbox,", "offsets")):
         p.append(t(rlx + 12, cc_ + 64 + i * 12, ln, size=8.4, anchor="start", maxw=rlw - 18))
     p.append(R(rlx + 12, cc_ + 106, rlw - 24, 22, rx=11, fill="#EEF2FA", stroke=C_BLUE, sw=1.0))
-    p.append(t(rlx + rlw / 2, cc_ + 121, "every number regenerable", size=8.2, weight="bold", fill=C_BLUE_D, maxw=rlw - 32))
-    p.append(t(rlx + 12, cc_ + 148, "scripts/paper rebuilds all", size=8.2, fill=C_SUB, anchor="start", maxw=rlw - 18))
-    p.append(t(rlx + 12, cc_ + 160, "figures and tables in this paper", size=8.2, fill=C_SUB, anchor="start", maxw=rlw - 18))
+    p.append(t(rlx + rlw / 2, cc_ + 121, "open release", size=8.2, weight="bold", fill=C_BLUE_D, maxw=rlw - 32))
+    p.append(t(rlx + 12, cc_ + 148, "corpus, audit logs and", size=8.2, fill=C_SUB, anchor="start", maxw=rlw - 18))
+    p.append(t(rlx + 12, cc_ + 160, "model weights", size=8.2, fill=C_SUB, anchor="start", maxw=rlw - 18))
     if warn:
         print("  trace_verification text-fit warnings:\n   " + "\n   ".join(warn))
     return svg(W, yc + hc + 10, "".join(p))
@@ -652,7 +652,7 @@ def build_architecture(a):
     p.append(t(328, e0 + 30, "probes (mechanism evidence):", size=9.0, weight="bold", fill=C_BLUE_D, anchor="start", maxw=280))
     for i, ln in enumerate(("- tool removal: with vs without", "- perturbation: shown-box vs true-box", "- nudge budget K sweep")):
         p.append(t(328, e0 + 47 + i * 13, ln, size=8.8, fill=C_BLUE_D, anchor="start", maxw=280))
-    p.append(t(328, e0 + 94, "(results pending, reported as open cells)", size=8.6, fill=C_SUB, anchor="start", maxw=280))
+    p.append(t(328, e0 + 94, "(results pending)", size=8.6, fill=C_SUB, anchor="start", maxw=280))
     # dev-split signal back to the training stack (a sink box, not a dangling tip)
     sink = (537, e0 + eh + 30, 46, 26)
     p.append(connect(ev, "b", sink, "t", oa=sink[0] + sink[2] / 2 - ev[0], color=G, sw=1.5))
@@ -729,8 +729,8 @@ def build_architecture_training(a):
     p.append(R(*corpus, rx=6, fill="#EEF2FA", stroke=C_BLUE, sw=1.2))
     p.append(t(sx + sw_ / 2, fy + 15, "corpus: 1,847 + 1,847 · 3,694 traces", size=9.0, weight="bold", fill=C_BLUE_D, maxw=sw_ - 34))
     p.append(t(sx + sw_ / 2, fy + 28, "exact per-cohort parity", size=8.4, fill=C_BLUE_D, maxw=sw_ - 34))
-    p.append(t(sx + 14, y1 + h1 - 22, "details in the trace-synthesis figure", size=8.0, fill=C_SUB, anchor="start", maxw=sw_ - 24))
-    p.append(t(sx + 14, y1 + h1 - 10, "(all quotes, boxes and stats are real)", size=8.0, fill=C_SUB, anchor="start", maxw=sw_ - 24))
+    p.append(t(sx + 14, y1 + h1 - 22, "details in the trace-synthesis", size=8.0, fill=C_SUB, anchor="start", maxw=sw_ - 24))
+    p.append(t(sx + 14, y1 + h1 - 10, "figures (stages 1 to 3)", size=8.0, fill=C_SUB, anchor="start", maxw=sw_ - 24))
 
     # ---- row 2: training ----
     y2 = y1 + h1 + 44
@@ -1280,7 +1280,7 @@ def build_pipeline(a):
     p.append(R(200, y1, 430, h1, rx=8, fill="#FBF6F0", stroke="#DD8452", sw=1.5))
     cx = 415
     p.append(T(cx, y1 + 22, "Trace generation: LangGraph agent loop", size=11.5, weight="bold"))
-    p.append(T(cx, y1 + 39, "frontier teacher via rate-limited provider pool", size=9.8))
+    p.append(T(cx, y1 + 39, "frontier teacher model pool", size=9.8))
     p.append(T(cx, y1 + 52, "ground-truth-directed agent loop", size=9.8))
     iy, ih = y1 + 62, 80
     pd_ = _showcase()["params_dentex"]

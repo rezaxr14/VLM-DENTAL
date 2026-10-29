@@ -3,27 +3,25 @@
 \label{sec:harness-serving}
 
 This extension follows checkpoint training. It changes neither the SFT/GRPO objectives nor
-the frozen primary evaluation in \cref{sec:eval}. The implementation is supplied in the
-companion harness branches; it is not enabled by this paper patch. All effectiveness and
-speed results below are pending. The purpose is to distinguish three possible sources of a
-change: learned weights, procedural context at inference, and decoding implementation.
+the frozen primary evaluation in \cref{sec:eval}. All effectiveness and speed results below
+are pending. Its purpose is to distinguish three possible sources of a change in behavior:
+learned weights, procedural context at inference, and decoding implementation.
 
 \subsection{Versioned rules and progressive procedural context}
 \label{sec:rules-skills}
 \Cref{fig:rules-skills-mechanism} shows how the harness supplies procedural context and audits its use. The harness contract extracts existing system/tool instructions and verifier/reward constraints
 into \texttt{rules.md}. Versioned rule identifiers link statements to
-prompt rendering or enforcement checks. A golden test requires the default file-based rendering
-to reproduce the existing system prompt byte for byte; inventory checks bind verifier/reward
+prompt rendering or enforcement checks. A byte-level test requires the default file-based rendering
+to reproduce the existing system prompt exactly; inventory checks bind verifier/reward
 identifiers to their implementations without changing outcomes or reward values. Code-only and
 prompt-only constraints are recorded as discrepancies, not silently reconciled.
-The switch \texttt{rules\_from\_file} defaults to false.
+
 
 Five versioned procedural skills cover box verification, caries versus deep caries, periapical
 lesions, impacted teeth, and a healthy-scan negative survey. Sources accompany each skill;
 content is drawn from existing procedures, class definitions, and cited public material,
 without test images or test-derived examples. Skills are contextual instructions, not new
-learned parameters. The default \texttt{skills=false}, \texttt{skills\_mode=off} preserves the
-existing agent. In \texttt{index\_only} mode, the prompt lists names and descriptions, and a
+learned parameters. With skills disabled, the existing agent is unchanged. In \texttt{index\_only} mode, the prompt lists names and descriptions, and a
 \texttt{read\_skill} harness action loads a body on demand. In \texttt{full\_inject} mode, all
 bodies are present initially. The harness action is dispatched outside the unchanged eight-tool
 diagnostic registry; it does not consume a diagnostic-call slot, but the episode turn bound
@@ -47,7 +45,7 @@ The extension (\cref{tab:harness-dev}) uses only the fixed, training-derived dev
 under baseline, rules only, rules plus index/on-demand skills, and rules plus full skills.
 The same image identifiers, seeds, geometry, dispatcher, tool budgets, and scoring implementation
 are used across conditions; full skills are a disclosure control, not an additional training arm.
-Rules-only and baseline must render identical prompts. Deviations invalidate that control.
+Rules-only and baseline must render identical prompts; any deviation invalidates the control.
 We report pooled exact F1 and the finding-level false-discovery fraction
 \[
  F_1^{\mathrm{exact}}=\frac{2TP}{2TP+FP+FN},\qquad
@@ -55,10 +53,9 @@ We report pooled exact F1 and the finding-level false-discovery fraction
 \]
 The latter is the harness JSON field \texttt{invented\_findings\_rate}; it is \emph{not} the
 healthy-image invention rate of \cref{sec:eval}. A zero denominator is undefined, not zero.
-Paired uncertainty resamples whole shared images. Report format failures and disclosure events
-alongside the primary endpoints. Since these conditions were added after the primary protocol
-was frozen, they are exploratory; the proposed amendment is distributed separately and is not
-applied to that protocol. Dev selection cannot establish independent generalization.
+Paired uncertainty resamples whole shared images. We also report format failures and disclosure events alongside the primary endpoints.
+Because these conditions were added after the primary protocol was frozen, they are exploratory
+and do not amend that protocol. Dev-split selection cannot establish independent generalization.
 
 \input{generated/table_harness_dev}
 
@@ -78,7 +75,7 @@ enabled. Both conditions use the same fixed dev images, prompt construction, gre
 seeds, tool implementation and budgets. The serving configuration, hardware, software versions
 and checkpoint identity accompany the result artifact. When the selected serving configuration
 uses the native MTP head, the checkpoint audit checks its tensors against the original base
-before execution. This audit checks checkpoint integrity before the comparison.
+before execution.
 
 \begin{figure}[tbp]
 \centering

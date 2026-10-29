@@ -3,60 +3,57 @@
 \label{sec:limitations}
 
 \paragraph{No prospective clinician study.}
-Our validity anchor is DENTEX's own dentist-verified ground truth (each image annotated by a
-final-year dental student and verified by an expert dentist with over 15 years of experience)
-plus automated reasoning-grounding checks by a cross-family LLM judge. This validates against
-expert labels, not against a prospective, blinded review by practicing clinicians on new cases.
-We state this plainly and consider a live reader study the natural next step for a team with
-clinical access.
+Our validity anchor is DENTEX's dentist-verified ground truth (each image was annotated by a
+final-year dental student and verified by an expert dentist with over 15 years of experience),
+together with automated checks of reasoning grounding by a cross-family LLM judge. This
+validates against expert labels, not against a prospective, blinded review by practicing
+clinicians on new cases. A reader study is the natural next step.
 
-\paragraph{Training results are pending in this draft.}
-The training-side evaluations (SFT, GRPO, ablations on the trained agent) are designed, frozen,
-and implemented, but their runs are not complete at the time of writing; those cells are marked
-as such rather than extrapolated. The completed evidence --- zero-shot baselines, grounding-tool
-validation, and the corpus-level mechanism analysis --- stands independently, but the paper's
-end-to-end claims await those runs.
+\paragraph{Pending trained-policy results.}
+The training-side evaluations (SFT, GRPO, and ablations on the trained agent) are designed,
+frozen, and implemented, but the runs are not complete. Those cells are marked as pending
+instead of extrapolated. The completed evidence (zero-shot baselines, grounding-tool
+validation, and the corpus-level mechanism analysis) stands independently, but end-to-end
+claims cannot be made until the runs are complete.
 
 \paragraph{Synthetic perturbations are not real detector errors.}
-The tiered perturbation draws offsets from fixed configured ranges rather than from the
-grounding model's actual error distribution. This is what makes demonstrations stable as the
-detector improves (\cref{sec:perturbation}), but it means the training distribution of box
-errors is synthetic: uniform random offsets with random signs, not the structured errors (e.g.,
-adjacent-tooth confusions, root-tip truncations) a real detector exhibits. The evaluation-time
+The tiered perturbation draws offsets from fixed configured ranges, not from the grounding
+model's actual error distribution. This keeps demonstrations stable as the detector improves
+(\cref{sec:perturbation}), but the training distribution of box errors is synthetic: uniform
+random offsets with random signs, unlike the structured errors a real detector makes (for
+example adjacent-tooth confusions and root-tip truncations). The evaluation-time
 grounding-perturbation probe (\cref{sec:ablations}) measures robustness to a related synthetic
-distribution; robustness to the detector's true error modes is best assessed post hoc by
-swapping in improved detector weights, which our decoupling makes safe for the trace corpus but
-does not substitute for measuring.
+distribution. Robustness to the detector's true error modes is best assessed by swapping in
+improved detector weights, which our decoupling makes safe for the trace corpus but which does
+not replace measuring it.
 
 \paragraph{Demonstrated vs.\ learned correction.}
-\cref{sec:mechanism} measures the \emph{teacher's} behavior in the demonstrations --- the skill
-the student is trained to acquire --- not the trained policy's behavior at inference. The
-policy-side version of the same analysis is precisely the grounding-perturbation probe, pending
-the trained checkpoint. Demonstrated behavior is a necessary but not sufficient condition for
-learned behavior.
+\cref{sec:mechanism} measures the \emph{teacher's} behavior in the demonstrations, which is the
+skill the student is trained to acquire, not the trained policy's behavior at inference. The
+policy-side version of the same analysis is the grounding-perturbation probe, which awaits the
+trained checkpoint. Demonstrated behavior is necessary but not sufficient for learned behavior.
 
 \paragraph{Scale and scope.}
-The corpus is 3{,}694 traces over two institutions and four DENTEX diagnosis classes (plus
-Tufts' four-class taxonomy); it is anchored to precedents showing a few hundred verified
-examples suffice for medical RL fine-tuning \citep{hu2025medvlmr1}, but it is small by
-data-centric standards, and DENTEX's test set is 50 images --- confidence intervals on it are
-wide, and we report them rather than over-reading point estimates. The tool suite covers
-radiologist-like inspection primitives; measurement and calibration tools (lesion sizing,
-periodontal probing analogues) and anomaly detection beyond the four classes are out of scope
-for this paper.
+The corpus holds 3{,}694 traces over two institutions and four DENTEX diagnosis classes (plus
+Tufts' four-class taxonomy). Prior work suggests that a few hundred verified examples can
+suffice for medical RL fine-tuning \citep{hu2025medvlmr1}, but the corpus is modest in size and
+the DENTEX test set contains only 50 images, so confidence intervals on it are wide; we report
+them rather than over-reading point estimates. The tool suite covers radiologist-like
+inspection primitives. Measurement and calibration tools (lesion sizing, periodontal probing
+analogues) and anomaly detection beyond the four classes are out of scope.
 
 \paragraph{Automated verification is not expert review.}
 The verifier is a frontier model from a different family than the generator, audited against
-expert labels --- and its rejection taxonomy shows it catches real failures --- but automated
-verification has blind spots that human clinical review would not. We mitigate with
-cross-family verification, ground-truth anchoring of every correctness claim, and release of
-the full corpus and audit trail so that the community can re-audit it.
+expert labels, and its rejection taxonomy shows that it catches real failures. Automated
+verification nevertheless has blind spots that human clinical review would not. We mitigate
+this with cross-family verification, ground-truth anchoring of every correctness claim, and
+release of the full corpus and audit trail so that others can re-audit it.
 
 \paragraph{Harness and serving evidence.}
 The rules-only condition is a prompt-identity control, not a proposed source of diagnostic
-improvement. Skills add procedural context and may help or distract; their effects require
+improvement. Skills add procedural context and may help or distract, so their effects require
 paired dev-split measurements. A BF16 merged target is numerically different from a 4-bit
 QLoRA serving target, so speed or equivalence cannot be attributed to speculation across those
-targets. Multimodal/MTP support and memory feasibility must be established for the pinned
+targets. Multimodal and MTP support and memory feasibility must be established for the pinned
 runtime and hardware; a recognized configuration flag is not evidence of a completed run.
 Neither the harness nor speculative decoding establishes clinical validity.

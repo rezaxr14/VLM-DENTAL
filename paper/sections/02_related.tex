@@ -3,58 +3,60 @@
 \label{sec:related}
 
 \paragraph{Supervised dental AI.}
-The dominant paradigm in dental radiograph analysis is narrow, single-task supervised learning:
-CNN and Faster R-CNN cephalometric landmark detectors, U-Net-style segmentation, FDI tooth-numbering
+Dental radiograph analysis has been dominated by narrow, single-task supervised models: CNN and
+Faster R-CNN cephalometric landmark detectors, U-Net-style segmentation, FDI tooth-numbering
 classifiers, and YOLO-family or Faster R-CNN detectors for caries, periapical lesions, and
-impactions \citep{hamamci2024dentex}. The DENTEX benchmark consolidated this into a hierarchical
-quadrant--enumeration--diagnosis task with expert-verified labels \citep{hamamci2024dentex} and
-remains the most structured public benchmark for our problem. These supervised tasks differ from our episode-level setting, in which a policy can request
-additional views and revise a grounding hypothesis. A systematic review of public dental imaging
-datasets \citep{uribe2024systematic} screened 131{,}028 records and found only 16 datasets
-meeting a minimal bar --- the data scarcity that motivates our synthetic-trace approach.
+impactions \citep{hamamci2024dentex}. The DENTEX benchmark consolidated these into a
+hierarchical quadrant--enumeration--diagnosis task with expert-verified labels
+\citep{hamamci2024dentex} and remains the most structured public benchmark for our problem.
+These supervised tasks differ from our episode-level setting, in which a policy can request
+additional views and revise a grounding hypothesis. A systematic review of public dental
+imaging datasets \citep{uribe2024systematic} screened 131{,}028 records and found only 16
+datasets that met a minimal bar, which motivates our synthetic-trace approach.
 
 \paragraph{Reinforcement-learned reasoning in medical VLMs.}
-Following the GRPO recipe \citep{deepseek2025r1}, \citet{hu2025medvlmr1} fine-tuned a 2B VLM with
-GRPO on a few hundred examples and reported large gains over zero-shot across MRI, CT, and X-ray
-VQA; Med-R1 extended this across eight modalities and found that lengthening the chain of thought
-does not reliably improve accuracy --- reward alignment matters more than reasoning length
+Following the GRPO recipe \citep{deepseek2025r1}, \citet{hu2025medvlmr1} fine-tuned a 2B VLM
+with GRPO on a few hundred examples and reported large gains over zero-shot across MRI, CT, and
+X-ray VQA. Med-R1 extended this to eight modalities and found that longer chains of thought do
+not reliably improve accuracy, so reward alignment matters more than reasoning length
 \citep{wang2025medr1}. HuatuoGPT-o1 \citep{chen2024huatuo} and OpenMedReason
-\citep{openmedreason2026} build reasoning supervision by using a frontier model purely as a
-\emph{verifier} of evidence-grounded traces. These reasoning-supervision approaches motivate our training recipe; our focus is the
-additional interaction between a reasoning policy and revisable visual observations.
+\citep{openmedreason2026} build reasoning supervision by using a frontier model as a
+\emph{verifier} of evidence-grounded traces. These works motivate our training recipe; we add
+the interaction between a reasoning policy and revisable visual observations.
 
 \paragraph{Agentic tool use in VLMs.}
 MMedAgent trains an LLM to select among grounding, segmentation, and report tools
-\citep{li2024mmedagent}; OctoTools generalizes the orchestration pattern \citep{zhang2025octotools}.
-Closest in spirit is VTool-R1 \citep{wu2026vtool}, which trains a VLM with GRPO to call
-Python-based visual-editing tools mid-reasoning, improving chart/table QA from 64.7\% to 71.7\%.
-Its tools are generic image-editing primitives, its reward is a single outcome-accuracy term, and
-its domain is not medical. Two concurrent dental systems must be addressed directly.
-\textbf{OralGPT-Plus} \citep{oralgptplus2026} pairs trained CoT, two callable image tools
-(zoom-in, contralateral mirror), and GRPO-style RL with a composite reward --- the closest
-concurrent work, but it evaluates on its own benchmark with an LLM-judge-scored reward (whose
-documented reward-hacking failure mode motivates our ground-truth-anchored accuracy term,
-\cref{sec:reward}) and does not cleanly separate tool-use from RL effects.
+\citep{li2024mmedagent}, and OctoTools generalizes the orchestration pattern
+\citep{zhang2025octotools}. Closest in spirit is VTool-R1 \citep{wu2026vtool}, which trains a
+VLM with GRPO to call Python-based visual-editing tools during reasoning and improves chart and
+table QA from 64.7\% to 71.7\%. Its tools are generic image-editing primitives, its reward is a
+single outcome-accuracy term, and its domain is not medical. Two concurrent dental systems are
+closest to our work. \textbf{OralGPT-Plus} \citep{oralgptplus2026} combines trained
+chain-of-thought, two callable image tools (zoom-in and contralateral mirror), and GRPO-style RL
+with a composite reward. It evaluates on its own benchmark with an LLM-judge-scored reward,
+whose documented reward-hacking failure motivates our ground-truth-anchored accuracy term
+(\cref{sec:reward}), and it does not cleanly separate the effects of tool use and RL.
 \textbf{OralAgent} \citep{oralagent2026} is a broader prompted ReAct orchestrator around an
-off-the-shelf model, not an RL-trained tool-use policy. Our emphasis is a box-relative corrective action and a controlled evaluation of tools and RL,
-rather than a claim to originate dental agents or medical tool use. Comparisons should account
-for differences in datasets, available supervision, and scoring protocols.
+off-the-shelf model, not an RL-trained tool-use policy. Our contribution is a box-relative
+corrective action and a controlled evaluation of tools and RL; we do not claim to originate
+dental agents or medical tool use. Comparisons should account for differences in datasets,
+available supervision, and scoring protocols.
 
 \paragraph{Procedural context and speculative serving.}
 The rules-and-skills extension follows the inspectable \texttt{SKILL.md} convention with
-progressive disclosure \citep{agentskills2026}. Its contribution here is a provenance-tracked
-integration with the shared dental dispatcher, not a new knowledge-file format.
-Speculative decoding uses a draft proposal and target verification to accelerate generation
-\citep{leviathan2023fast,chen2023accelerating}; vLLM provides the serving substrate
+progressive disclosure \citep{agentskills2026}; it contributes a provenance-tracked integration
+with the shared dental dispatcher, not a new knowledge-file format. Speculative decoding uses a
+draft proposal and target verification to accelerate generation
+\citep{leviathan2023fast,chen2023accelerating}, and vLLM provides the serving substrate
 \citep{kwon2023efficient}. We treat serving speed and clinical-task performance as separate
-measurements, and test output equivalence on the actual multimodal episodes rather than
-assuming it from the algorithm alone.
+measurements and test output equivalence on the actual multimodal episodes instead of assuming
+it from the algorithm.
 
 \paragraph{Label-anchored synthetic reasoning traces.}
-Frontier LLMs can generate and verify reasoning-trace training data of sufficient quality for
-downstream fine-tuning \citep{chen2024huatuo,openmedreason2026}, replacing prospective expert
-annotation with expert-\emph{verified benchmark labels} plus cross-model automated checks. We
-extend this pattern to \emph{multi-turn tool-use} traces: the demonstrator operates a real tool
-suite under real tool feedback (including deliberately imperfect tool output, \cref{sec:perturbation}),
-and an independent cross-family verifier audits every trace against expert labels before it
-enters the training set.
+Frontier LLMs can generate and verify reasoning traces of sufficient quality for downstream
+fine-tuning \citep{chen2024huatuo,openmedreason2026}, replacing prospective expert annotation
+with expert-\emph{verified benchmark labels} plus cross-model automated checks. We extend this
+pattern to \emph{multi-turn tool-use} traces: the demonstrator operates a real tool suite under
+real tool feedback, including deliberately imperfect tool output (\cref{sec:perturbation}), and
+an independent cross-family verifier audits every trace against expert labels before it enters
+the training set.

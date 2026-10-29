@@ -44,7 +44,9 @@
 
 \author{%
   Reza Nadimi\thanks{Corresponding author. \todo{Affiliations and co-author list to be
-  finalized.}}\\
+  finalized.}}
+  \quad \todo{Second author name}
+  \quad \todo{Third author name}\\[4pt]
   \todo{affiliations}
 }
 \date{October 2026}
@@ -55,24 +57,23 @@
 
 \begin{abstract}
 Panoramic dental diagnosis requires both identifying a finding and assigning it to the
-correct tooth. In our zero-shot DENTEX evaluation, the strongest reported baseline obtains
-pooled exact finding-level F1 of 0.222, motivating methods that can revisit localized image
-evidence. We present \textbf{VLM-DENTAL}, a tool-using vision-language pipeline organized around
-one principle: \emph{grounding is a hypothesis to interrogate, not an answer to trust}.
-An eight-tool interface lets a policy inspect native-resolution regions and correct a proposed
-box using box-relative shifts and scales through \texttt{nudge\_crop}. During demonstration
+correct tooth. In our zero-shot evaluation on DENTEX, the strongest baseline reaches a pooled
+exact finding-level F1 of only 0.222, which motivates methods that can revisit localized image
+evidence. We present \textbf{VLM-DENTAL}, a tool-using vision-language pipeline built on one
+principle: \emph{grounding is a hypothesis to interrogate, not an answer to trust}.
+An eight-tool interface lets a policy inspect native-resolution regions and revise a proposed
+box through box-relative shifts and scales (\texttt{nudge\_crop}). During demonstration
 synthesis, tiered spatial perturbations expose the teacher to imperfect grounding without
-verbal error cues. A ground-truth-anchored reward is designed to preserve corrective tool use
-during subsequent reinforcement learning. The released corpus contains 3{,}694 verified,
-decontaminated synthetic traces. Within ground-truth-anchored pathology locates, the teacher
-uses corrective nudges on 38.4\% of large offsets, 13.6\% of small offsets, and 1.1\% of clean
-outputs; these are demonstration statistics, not trained-policy results. We additionally
+verbal error cues, and a ground-truth-anchored reward is designed to preserve corrective tool
+use during reinforcement learning. The released corpus contains 3{,}694 verified,
+decontaminated synthetic traces. On ground-truth-anchored pathology locates, the teacher
+issues corrective nudges on 38.4\% of large offsets, 13.6\% of small offsets, and 1.1\% of
+clean boxes; these are demonstration statistics, not trained-policy results. We further
 specify a versioned rules-and-skills harness and a separately gated speculative-decoding
-benchmark, keeping inference-time procedural context distinct from model training and serving
-optimizations. The frozen primary evaluation uses DENTEX-native set matching and paired
-image-level bootstrap intervals. Trained-policy, harness-effectiveness, and serving-speed
-results remain explicitly pending. This draft contributes an auditable method, corpus, and
-experimental specification; evidence of end-to-end diagnostic improvement awaits those runs.
+benchmark, which keep inference-time procedural context distinct from model training and
+serving optimization. Evaluation follows a frozen protocol with DENTEX-native set matching and
+paired image-level bootstrap intervals; trained-policy, harness, and serving results are
+pending and are not claimed.
 \end{abstract}
 
 \input{sections/01_intro}
@@ -82,6 +83,11 @@ experimental specification; evidence of end-to-end diagnostic improvement awaits
 \input{sections/04b_harness_serving}
 \input{sections/05_limitations}
 \input{sections/06_conclusion}
+
+\section*{Data and code availability}
+The verified trace corpus, the grounding model weights, and model checkpoints are hosted on the
+Hugging Face Hub. \todo{Add repository, Hub, and DOI links before submission.}
+
 
 \FloatBarrier
 \bibliographystyle{plainnat}
