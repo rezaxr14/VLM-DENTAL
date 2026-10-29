@@ -383,6 +383,17 @@ def validate_document(kind, path, identity):
     return {'results.json':(json.dumps(doc,sort_keys=True,allow_nan=False)+'\n').encode()},progress,terminal
 
 
+def transient_upload_error(error):
+    """Retry transport failures and temporary HTTP errors; data/auth conflicts stay fatal."""
+    status = getattr(getattr(error, 'response', None), 'status_code', None)
+    if status is not None: return status in {408, 429} or 500 <= status < 600
+    if isinstance(error, (ConnectionError, TimeoutError)): return True
+    return any((base.__module__.split('.')[0], base.__name__) in {
+        ('httpx', 'TransportError'), ('httpx2', 'TransportError'),
+        ('requests', 'ConnectionError'), ('requests', 'Timeout'),
+    } for base in type(error).__mro__)
+
+
 class NotebookEvaluations:
     """Inventory first, restore before weights, execute only missing compatible cohorts."""
     def __init__(self, *, target_profiles='dual_t4', kinds=KINDS, stages='all', selected_k=4,
@@ -596,6 +607,27 @@ class NotebookEvaluations:
             result = folder/'results.json'
         return command,result,adapter
 
+    def _upload_results(self, folder, prefix, identity, payloads, progress, complete, row, attempts=1):
+        """Retry fresh Hub state; keep inference/local evidence alive during transport outages."""
+        pending = folder/'upload_pending.json'
+        for attempt in range(attempts):
+            try:
+                self.store.save(folder,prefix,identity,payloads,progress,complete)
+            except Exception as error:
+                if not transient_upload_error(error): raise
+                row.update(upload_status='pending',pending_upload=str(pending))
+                write(pending,dict(hub_path=prefix,progress=progress,complete=complete,
+                    files=sorted(payloads),error_type=type(error).__name__))
+                if attempt+1 < attempts:
+                    time.sleep(min(2**attempt,2))
+                    continue
+                print('[UPLOAD DEFERRED]',prefix,type(error).__name__,'local results preserved; retry on the next sync or rerun',flush=True)
+                return False
+            else:
+                row['upload_status']='synced'; row.pop('pending_upload',None)
+                pending.unlink(missing_ok=True)
+                return True
+
     def run(self, execute=True):
         devices = []
         if execute:
@@ -622,7 +654,7 @@ class NotebookEvaluations:
                 if complete:
                     if (folder/'summary.json').is_file(): payloads['summary.json']=(folder/'summary.json').read_bytes()
                     if (folder/'runtime.json').is_file(): payloads['runtime.json']=(folder/'runtime.json').read_bytes()
-                    self.store.save(folder,prefix,identity,payloads,progress,True)
+                    self._upload_results(folder,prefix,identity,payloads,progress,True,row,attempts=3)
                     row.update(status=('failed_or_divergent_reused' if job['kind']=='speculative' and json.loads(portable.read_text()).get('status')=='failed_or_divergent' else 'complete_reused'),episodes=progress); self._save_inventory(); print('[SKIP FINISHED]',prefix); continue
                 reason = hardware_reason(job['profile'],job['kind'],devices,self.profile_configs) if execute else None
                 if job['kind']=='speculative' and not shutil.which(self.vllm): reason = 'pending: configure the compatible isolated VLLM_EXECUTABLE'
@@ -652,7 +684,7 @@ class NotebookEvaluations:
                 write(folder/'runtime.json',dict(devices=devices,python=sys.version,software=self.software,command=command,checkpoint_revision=self.revision))
                 child = subprocess.Popen(command,cwd=ROOT,env=env)
                 last = time.monotonic()
-                def sync():
+                def sync(final=False):
                     payloads,n,done = validate_document(job['kind'],result,identity)
                     if n:
                         payloads['runtime.json']=(folder/'runtime.json').read_bytes()
@@ -665,14 +697,15 @@ class NotebookEvaluations:
                                 summary = dict(status=document.get('status'),conditions={c:e.get('summary') for c,e in document.get('conditions',{}).items()},gates=document.get('gates',{}),comparisons=document.get('comparisons',{}))
                             payloads['summary.json'] = (json.dumps(summary,sort_keys=True,allow_nan=False)+'\n').encode()
                         for name,data in payloads.items(): (folder/name).write_bytes(data) if folder/name != result else None
-                        self.store.save(folder,prefix,identity,payloads,n,done)
+                        row['episodes']=n
+                        self._upload_results(folder,prefix,identity,payloads,n,done,row,attempts=3 if final else 1)
                     return n,done
                 try:
                     while child.poll() is None:
                         try: child.wait(timeout=5)
                         except subprocess.TimeoutExpired: pass
                         if time.monotonic()-last>=60: sync(); last=time.monotonic()
-                    n,done = sync()
+                    n,done = sync(final=True)
                     if child.returncode or not done: raise RuntimeError(f'Evaluation unfinished or failed ({child.returncode}); saved {n} episodes at {folder}')
                     row.update(status='complete',episodes=n)
                 except BaseException:
@@ -682,7 +715,7 @@ class NotebookEvaluations:
                         child.terminate()
                         try: child.wait(timeout=15)
                         except subprocess.TimeoutExpired: child.kill(); child.wait()
-                    try: sync()
+                    try: sync(final=True)
                     except Exception as error: print('[SYNC FAILED] Local evidence preserved:',type(error).__name__,str(error))
                     self._save_inventory()
         self._save_inventory()
@@ -733,7 +766,7 @@ def summarize_inventory(status):
     """Read saved evidence; primary scoring stays in the existing shared matrix module."""
     output = []
     for item in status:
-        row = {k:item.get(k) for k in ('profile','kind','track','condition','stage','k','size','status','reason','hub_path')}
+        row = {k:item.get(k) for k in ('profile','kind','track','condition','stage','k','size','status','reason','hub_path','upload_status','pending_upload')}
         folder = Path(item['path']) if item.get('path') else None
         if folder and (folder/'results.json').is_file():
             doc = json.loads((folder/'results.json').read_text())
