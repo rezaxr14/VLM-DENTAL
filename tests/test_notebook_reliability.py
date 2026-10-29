@@ -30,9 +30,9 @@ def test_optional_mtp_comparison_imports_copy_before_using_it():
 
 @pytest.mark.parametrize('exit_code', [0, 7])
 def test_grpo_launch_checks_real_subprocess_exit_code(exit_code):
-    source = next(s for s in notebook_source('VLM_Dental_Colab_GRPO.ipynb') if 'subprocess.run(cmd, check=True)' in s)
+    source = next(s for s in notebook_source('VLM_Dental_Colab_GRPO.ipynb') if 'subprocess.run(_run_cmd, check=True)' in s)
     launch = 'import subprocess\n'+source.rsplit('import subprocess\n', 1)[1]
-    env = dict(cmd=[sys.executable, '-c', f'raise SystemExit({exit_code})'])
+    env = dict(cmd=[sys.executable, '-c', f'raise SystemExit({exit_code})'],GRPO_HARNESS_MODES=['off','rules_skills_index'],MODE='sweep')
     if exit_code:
         with pytest.raises(subprocess.CalledProcessError) as error: exec(launch, env)
         assert error.value.returncode == exit_code

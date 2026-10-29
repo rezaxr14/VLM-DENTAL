@@ -39,6 +39,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+
 # Ensure UTF-8 output on Windows consoles
 if hasattr(sys.stdout, "reconfigure"):
     try:
@@ -54,6 +55,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from dental_agent.config import load_config, load_env
+from dental_agent.harness.configuration import harness_options, harness_identity
 from dental_agent.data.dentex import load_dentex_dataset
 from dental_agent.data.dev_split import assert_not_test_split, image_key, load_dev_keys
 from dental_agent.agent.prompts import FIRST_USER_PROMPT, ZERO_SHOT_PROMPT, build_agent_system_prompt
@@ -372,7 +374,10 @@ def run_condition_trajectory(
             max_tool_calls=args.max_tool_calls, verbose=False, canonical_resize=args.canonical_resize,
             temperature=0.0, dataset=args.dataset, max_new_tokens=args.max_new_tokens,
             max_turns=args.max_turns, malformed_retries=args.malformed_retries,
+            harness=harness_options(getattr(args,"harness_mode","off")),
         )
+    if getattr(args,"harness_mode","off") != "off":
+        raise ValueError("Rules/skills require the with_tools evaluation track")
     return run_agent_no_tools(
         image_id=image_id, images_df=images_df, model=model, processor=processor, verbose=False,
         canonical_resize=args.canonical_resize, temperature=0.0, max_new_tokens=args.max_new_tokens,
@@ -579,6 +584,7 @@ def eval_settings(args: argparse.Namespace, condition: str, adapter_path: str | 
     """Everything that changes what a condition's numbers mean. Stored in every record; a resume must match it."""
     return {
         "condition": condition,
+        **({"harness": harness_identity(args.harness_mode)} if getattr(args,"harness_mode","off") != "off" else {}),
         "model_id": args.model_id,
         "adapter_path": adapter_path or "",
         "precision": args.precision,
@@ -911,6 +917,8 @@ def parse_args() -> argparse.Namespace:
     from dental_agent.model.local_runtime import add_runtime_args
     add_runtime_args(parser)
     add_letterbox_arg(parser)
+    from dental_agent.harness.configuration import HARNESS_MODES
+    parser.add_argument('--harness-mode', choices=HARNESS_MODES, default='off')
     return parser.parse_args()
 
 

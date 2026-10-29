@@ -303,6 +303,7 @@ def collect_grpo_group_batched_with_tools(
     compute_old_log_probs: bool = True,
     temperature: float = 0.7,
     max_new_tokens: int = 2048,
+    harness: Any = None,
 ) -> tuple[list[dict], list[float], list[torch.Tensor], list[torch.Tensor]]:
     """Sample K candidate multi-turn trajectories with workstation tools (Track A), at ``temperature`` (> 0)."""
     trajectories, rewards, old_log_probs_list, masks_list = [], [], [], []
@@ -321,6 +322,7 @@ def collect_grpo_group_batched_with_tools(
             canonical_resize=canonical_resize,
             temperature=temperature,
             max_new_tokens=max_new_tokens,
+            harness=harness,
         )
         traj_dict = traj.to_dict() if hasattr(traj, "to_dict") else traj
         reward, _ = combine_reward(traj_dict, ground_truth, max_tool_calls=max_tool_calls)
@@ -358,8 +360,11 @@ def collect_grpo_group(
     compute_old_log_probs: bool = True,
     temperature: float = 0.7,
     max_new_tokens: int = 2048,
+    harness: Any = None,
 ) -> tuple[list[dict], list[float], list[torch.Tensor], list[torch.Tensor]]:
     """Unified group rollout entrypoint supporting Track A and Track B."""
+    if track == "no_tools" and harness is not None:
+        raise ValueError("Cannot attach rules/skills to no_tools rollouts")
     if track == "no_tools":
         return collect_grpo_group_batched_no_tools(
             model=model,
@@ -389,6 +394,7 @@ def collect_grpo_group(
             compute_old_log_probs=compute_old_log_probs,
             temperature=temperature,
             max_new_tokens=max_new_tokens,
+            harness=harness,
         )
 
 
@@ -520,6 +526,7 @@ def grpo_step(
     temperature: float = 0.7,
     max_new_tokens: int = 2048,
     grad_scaler: Any = None,
+    harness: Any = None,
 ) -> tuple[dict[str, Any], float]:
     """One GRPO update cycle over on-policy sampled groups.
 
@@ -575,6 +582,7 @@ def grpo_step(
             compute_old_log_probs=train_collator is None,
             temperature=temperature,
             max_new_tokens=max_new_tokens,
+            harness=harness,
         )
         advantages, current_baseline = compute_group_advantages(
             rewards=rewards,
@@ -837,9 +845,18 @@ def train_grpo(
     log_path: str | Path = "data/grpo_training_log.jsonl",
     runtime_options: Any = None,
     gradient_checkpointing: bool = True,
+    harness_mode: str = "off",
+    seed: int | None = None,
 ) -> str:
     """Execute Stage 2 GRPO policy optimization with dual-adapter reference and group advantage normalization."""
     from peft import PeftModel, LoraConfig
+    from dental_agent.harness.configuration import harness_options, harness_identity, validate_harness_mode, assert_harness_identity
+    validate_harness_mode(harness_mode, track)
+    harness = harness_options(harness_mode)
+    harness_record = harness_identity(harness_mode)
+    if seed is not None:
+        import random
+        random.seed(seed); np.random.seed(seed); torch.manual_seed(seed)
     tr_cfg = config.training if isinstance(config, ProjectConfig) else (config or TrainingConfig())
     G = group_size or tr_cfg.grpo_group_size
     lr = learning_rate or tr_cfg.grpo_lr
@@ -913,12 +930,14 @@ def train_grpo(
             raise ValueError("resume needs the SFT reference adapter (sft_model_dir); none was found.")
         final_meta = Path(checkpoint_dir) / f"grpo-{track}-final" / "checkpoint_meta.json"
         if final_meta.is_file():
+            assert_harness_identity(json.loads(final_meta.read_text()).get("extra", {}).get("harness"), harness_mode)
             print(f"[RESUME] {final_meta.parent} already exists: this run is complete; nothing to resume.")
             return str(final_meta.parent)
         found = find_latest_step_checkpoint(checkpoint_dir, track)
         if found is None:
             raise FileNotFoundError(f"--resume given but no 'grpo-{track}-step-N' checkpoint was found under {checkpoint_dir}.")
         ckpt_path, meta = found
+        assert_harness_identity(meta.get("harness"), harness_mode)
         if meta.get("pool_fingerprint") != pool_fp or int(meta.get("group_size", G)) != G:
             raise ValueError(
                 f"Checkpoint {ckpt_path.name} was trained on a different image pool or group size "
@@ -1028,8 +1047,9 @@ def train_grpo(
             temperature=temperature,
             max_new_tokens=max_new_tokens,
             grad_scaler=grad_scaler,
+            harness=harness,
         )
-        log_grpo_step(stats, log_path=log_path, extra={"step": step, "image_id": int(img_id)})
+        log_grpo_step(stats, log_path=log_path, extra={"step": step, "image_id": int(img_id), "harness_mode": harness_mode})
         print(f"[GRPO Step {step}/{total_steps}] mean_reward={stats['mean_reward']:.3f} kl={stats['kl_divergence']:.4f}")
 
         if (push_every_steps > 0 and step % push_every_steps == 0) or step == total_steps:
@@ -1041,7 +1061,7 @@ def train_grpo(
                 checkpoint_dir=checkpoint_dir,
                 extra_metadata={
                     "step": step, "mean_reward": stats["mean_reward"], "track": track, "baseline": float(current_baseline),
-                    "group_size": G, "pool_fingerprint": pool_fp, "pool_size": total_steps,
+                    "group_size": G, "pool_fingerprint": pool_fp, "pool_size": total_steps, "harness": harness_record,
                 },
             )
             if hf_repo:
@@ -1058,7 +1078,7 @@ def train_grpo(
         processor=processor,
         tag=final_tag,
         checkpoint_dir=checkpoint_dir,
-        extra_metadata={"track": track, "group_size": G},
+        extra_metadata={"track": track, "group_size": G, "harness": harness_record, "step": total_steps},
     )
     if hf_repo:
         upload_checkpoint_to_hf(

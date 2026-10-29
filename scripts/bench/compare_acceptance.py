@@ -6,11 +6,17 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[2]))
 
 def compare(before,after):
     from dental_agent.harness.specdec import equivalence,sum_complete
-    settings=lambda r:{k:v for k,v in r['settings'].items() if k not in {'checkpoint','output','plan_only'}}
+    settings=lambda r:{k:v for k,v in r['settings'].items() if k not in {'checkpoint','output','plan_only','draft_variant'}}
     if settings(before)!=settings(after) or before['image_ids']!=after['image_ids'] or before['dev_split_sha256']!=after['dev_split_sha256']:
         raise ValueError('Before/after runs are not paired with identical settings')
+    if before.get('harness',{'mode':'off'}) != after.get('harness',{'mode':'off'}):
+        raise ValueError('Before/after harness differs')
+    if before.get('target_tensor_sha256') != after.get('target_tensor_sha256'):
+        raise ValueError('Before/after target weights differ')
     rows={}
-    for name in ['mtp_1','mtp_2','mtp_3']:
+    selected = [name for name in before.get('settings',{}).get('conditions',list(before.get('conditions',{}))) if name.startswith('mtp_')]
+    if not selected: raise ValueError('No requested MTP conditions to compare')
+    for name in selected:
         a=before.get('conditions',{}).get(name,{});b=after.get('conditions',{}).get(name,{})
         if a.get('status')!='complete' or b.get('status')!='complete':rows[name]=dict(status='pending');continue
         gate=equivalence(a['episodes'],b['episodes'])

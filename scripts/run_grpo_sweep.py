@@ -133,6 +133,9 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=42, help="Seed of the image-pool shuffle.")
     parser.add_argument("--include-healthy", action=argparse.BooleanOptionalAction, default=True,
                         help="Keep healthy images (ground truth []) in the pool.")
+    from dental_agent.harness.configuration import HARNESS_MODES
+    parser.add_argument("--harness-mode", choices=HARNESS_MODES, default="off",
+                        help="Rules/skills during GRPO rollouts; off preserves the original control")
     return parser.parse_args()
 
 
@@ -152,6 +155,8 @@ def _preflight_all(args) -> int:
 
 def main():
     args = parse_args()
+    from dental_agent.harness.configuration import validate_harness_mode
+    validate_harness_mode(args.harness_mode, args.track)
     if args.temperature <= 0:
         raise SystemExit("--temperature must be > 0 (greedy rollouts give identical samples and zero advantages).")
     if args.pad_vision_to_slots and not args.canonical_resize:
@@ -216,11 +221,13 @@ def main():
     for k in args.k_values:
         print(f"\n>>> Starting GRPO Experiment for Group Size K={k} <<<")
         start_time = time.time()
-        target_name = grpo_name(args.track, k, args.sft_stage, args.precision, args.hf_run_tag)
+        target_name = grpo_name(args.track, k, args.sft_stage, args.precision, args.hf_run_tag, harness_mode=args.harness_mode)
         ckpt_dir = f"{args.checkpoint_dir}/{target_name}"
         path_in_repo_prefix = f"grpo/{target_name}"
         final_meta = Path(ckpt_dir) / f"grpo-{args.track}-final" / "checkpoint_meta.json"
         if args.resume and final_meta.is_file():
+            from dental_agent.harness.configuration import assert_harness_identity
+            assert_harness_identity(json.loads(final_meta.read_text()).get("extra", {}).get("harness"), args.harness_mode)
             print(f">>> K={k} is already complete ({final_meta.parent}); skipped. <<<")
             continue
         if args.resume_hf:
@@ -262,6 +269,7 @@ def main():
             log_path=f"{ckpt_dir}/grpo_training_log.jsonl",  # one log per K
             runtime_options=runtime_from_args(args),
             gradient_checkpointing=args.gradient_checkpointing,
+            harness_mode=args.harness_mode, seed=args.seed,
         )
 
         elapsed = time.time() - start_time

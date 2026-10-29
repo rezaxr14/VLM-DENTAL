@@ -309,6 +309,10 @@ def _check_resume(args: Any, pool: Any, out_dir: Path, rep: _Report) -> None:
             rep.add(WARN, "resume", f"--resume given but {out_dir} holds no step checkpoint: the run starts at step 1.")
         return
     path, meta = latest
+    from dental_agent.harness.configuration import assert_harness_identity
+    try: assert_harness_identity(meta.get('harness'),getattr(args,'harness_mode','off'))
+    except ValueError as error:
+        rep.add(FAIL,'resume harness',str(error)); return
     if pool is not None:
         fp = pool_fingerprint(pool.dropna(subset=["local_path"])["id"]) if "local_path" in pool.columns else pool_fingerprint(pool["id"])
         if meta.get("pool_fingerprint") != fp or int(meta.get("group_size", args.group_size)) != args.group_size:
@@ -684,7 +688,7 @@ def run_preflight(args: Any, sft_candidates: list[Path], emit: Callable[[str], N
         _check_sft_consistency(args, sft_dir, dev_keys, rep)
 
     from dental_agent.training.experiment_profiles import grpo_name
-    out_dir = Path(args.output_dir) / grpo_name(args.track, args.group_size, args.sft_stage, args.precision, getattr(args, "hf_run_tag", None))
+    out_dir = Path(args.output_dir) / grpo_name(args.track, args.group_size, args.sft_stage, args.precision, getattr(args, "hf_run_tag", None), harness_mode=getattr(args, "harness_mode", "off"))
     _check_resume(args, pool, out_dir, rep)
     _check_hub(args, rep)
     _check_hardware(args, rep)

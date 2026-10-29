@@ -86,10 +86,16 @@ def parse_args(argv=None):
     p.add_argument('--existing-results',choices=['error','resume'],default='error')
     p.add_argument('--plan-only',action='store_true',help='Write exact server commands without loading data/model')
     p.add_argument('--warmup-episodes',type=int,default=1,help='Separate full dev episodes excluded from timing; 0 disables')
+    from dental_agent.harness.configuration import HARNESS_MODES
+    p.add_argument('--harness-mode',choices=HARNESS_MODES,default='off')
+    p.add_argument('--draft-variant',choices=['original','finetuned'],default='original')
     return p.parse_args(argv)
 
 def main(argv=None):
     args=parse_args(argv)
+    from dental_agent.harness.configuration import harness_options,harness_identity,assert_harness_identity
+    harness = harness_options(args.harness_mode)
+    harness_record = harness_identity(args.harness_mode)
     from dental_agent.harness.specdec import server_command,ServingReply,episode_measurements,equivalence,gpu_snapshot
     from dental_agent.harness.evaluation import atomic_json,load_dev,evaluate_episode,pooled,digest
     output=Path(args.output)
@@ -106,6 +112,7 @@ def main(argv=None):
         except importlib.metadata.PackageNotFoundError:packages[name]=None
     result=dict(schema_version=1,status='planned' if args.plan_only else 'running',settings=vars(args),software=packages,python=sys.version,platform=platform.platform(),
                 hardware=gpu_snapshot(args.gpu_indices),commands=commands,conditions={},gates={},measurements_pending=True)
+    result['harness']=harness_record;result['draft_variant']=args.draft_variant
     if args.plan_only:atomic_json(output,result);print(json.dumps(commands,indent=2));return
     if not shutil.which(args.vllm_executable):raise FileNotFoundError('Install/pin vLLM in a separate serving environment')
     ck=Path(args.checkpoint).resolve()
@@ -115,6 +122,17 @@ def main(argv=None):
     if any(c.startswith('mtp') for c in args.conditions) and not any(k.startswith('mtp.') for k in headers):raise ValueError('MTP head is absent; run merge/audit before speculation')
     from dental_agent.harness.notebook_eval import merged_signature
     checkpoint_sha256=merged_signature(ck)
+    from dental_agent.harness.checkpoints import target_tensor_fingerprint,mtp_parameter_inventory
+    target_sha = target_tensor_fingerprint(ck)
+    draft_meta = ck/'mtp_draft_manifest.json'
+    if args.draft_variant == 'finetuned':
+        if not draft_meta.is_file(): raise ValueError('Fine-tuned draft requires mtp_draft_manifest.json')
+        draft = json.loads(draft_meta.read_text())
+        if draft.get('target_tensor_sha256') != target_sha: raise ValueError('Draft belongs to different target weights')
+        assert_harness_identity(draft.get('harness'),args.harness_mode)
+    elif draft_meta.exists():
+        raise ValueError('This checkpoint contains a fine-tuned draft; select --draft-variant finetuned')
+    result.update(target_tensor_sha256=target_sha,mtp_inventory=mtp_parameter_inventory(ck))
     if saved and saved.get('checkpoint_sha256') != checkpoint_sha256: raise ValueError('Saved benchmark target content differs or lacks provenance; evidence preserved')
     immutable={str(p.relative_to(ck)):[p.stat().st_size,p.stat().st_mtime_ns] for p in ck.glob('*') if p.is_file()}
     ids,images,annotations,categories=load_dev(args.data_dir,args.dev_split,args.limit,args.seed)
@@ -143,14 +161,14 @@ def main(argv=None):
                 except Exception:entry['server_version']=None
                 # Same selected warmup episodes and geometry for every condition; excluded from metrics and gates.
                 for j in range(args.warmup_episodes):
-                    evaluate_episode(ids[j%len(ids)],images,annotations,categories,reply_fn=ServingReply(url,args.seed),seed=args.seed,
+                    evaluate_episode(ids[j%len(ids)],images,annotations,categories,reply_fn=ServingReply(url,args.seed),harness=harness,seed=args.seed,
                                      max_new_tokens=args.max_new_tokens,max_tool_calls=args.max_tool_calls,max_turns=args.max_turns)
                 for iid in ids:
                     if iid in done: continue
                     reply=ServingReply(url,args.seed);tools=[]
                     with MemoryMonitor(args.gpu_indices) as memory:
                         start=time.perf_counter()
-                        record,_=evaluate_episode(iid,images,annotations,categories,reply_fn=reply,seed=args.seed,
+                        record,_=evaluate_episode(iid,images,annotations,categories,reply_fn=reply,harness=harness,seed=args.seed,
                             max_new_tokens=args.max_new_tokens,max_tool_calls=args.max_tool_calls,max_turns=args.max_turns,
                             tool_observer=lambda name,seconds:tools.append(dict(name=name,seconds=seconds)))
                         wall=time.perf_counter()-start

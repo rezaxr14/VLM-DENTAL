@@ -89,3 +89,20 @@ def preserve_mtp(base,merged):
     index=merged/'model.safetensors.index.json'
     index.write_text(json.dumps(dict(metadata=dict(total_size=sum(v['length'] for v in b.values())+offset),weight_map=mapping),indent=2)+'\n')
     return audit_mtp(base,merged)
+
+
+def target_tensor_fingerprint(folder):
+    """Hash non-MTP tensors so original/finetuned drafts share exactly one target."""
+    tensors = tensor_headers(folder)
+    content = {name:dict(shape=v['shape'],dtype=v['dtype'],sha256=tensor_hash(v))
+               for name,v in sorted(tensors.items()) if not name.startswith('mtp.')}
+    return hashlib.sha256(json.dumps(content,sort_keys=True).encode()).hexdigest()
+
+
+def mtp_parameter_inventory(folder):
+    import math
+    tensors = tensor_headers(folder)
+    shapes = {name:v['shape'] for name,v in sorted(tensors.items()) if name.startswith('mtp.')}
+    if not shapes: raise ValueError('Native MTP tensors are missing')
+    return dict(parameters=sum(math.prod(shape) for shape in shapes.values()),tensor_shapes=shapes,
+                excludes_shared_embeddings_and_lm_head=True)

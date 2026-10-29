@@ -11,12 +11,15 @@ PROFILE_TAGS = {
     "dual_t4_fp16": "dual_t4_unquantized_fp16",
 }
 
-def grpo_name(track, k, stage, precision, tag=None):
+def grpo_name(track, k, stage, precision, tag=None, harness_mode="off"):
+    from dental_agent.harness.configuration import validate_harness_mode
+    validate_harness_mode(harness_mode, track)
     name = f"qwen3_5_9b_grpo_{track}_k{k}_{stage}"
     if tag:
         if not re.fullmatch(r"[A-Za-z0-9_-]+", tag):
             raise ValueError("Invalid experiment tag")
         name += f"_{precision}__{tag}"
+    if harness_mode != "off": name += "--harness_"+harness_mode
     return name
 
 def fetch_sft(repo, track, stage, precision, tag):

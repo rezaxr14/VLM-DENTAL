@@ -88,9 +88,13 @@ def discover(files, profiles, stages=None, selected_k=4, profile_configs=None):
     jobs = []
     stages = None if stages == 'all' or stages is None else ({stages} if isinstance(stages, str) else set(stages))
     for name in sorted(files):
-        match = re.fullmatch(r'(sft|grpo)/(qwen3_5_9b_(?:sft|grpo)_(with_tools|no_tools)_(?:k(\d+)_)?(.+)_(qlora|bf16|fp16)__([A-Za-z0-9_-]+))(.*)/adapter_config\.json', name)
+        named_mode = re.search(r'--harness_(rules_skills_index|rules_skills_full)(?=/)', name)
+        mode = named_mode[1] if named_mode else 'off'
+        parsed_name = re.sub(r'--harness_(rules_skills_index|rules_skills_full)(?=/)', '', name)
+        match = re.fullmatch(r'(sft|grpo)/(qwen3_5_9b_(?:sft|grpo)_(with_tools|no_tools)_(?:k(\d+)_)?(.+)_(qlora|bf16|fp16)__([A-Za-z0-9_-]+))(.*)/adapter_config\.json', parsed_name)
         if not match: continue
         kind, stem, track, k, stage, precision, tag, tail = match.groups()
+        if mode != 'off' and (kind != 'grpo' or track != 'with_tools'): continue
         if stages is not None and stage not in stages: continue
         profile = next((p for p in profiles if profile_configs[p]['tag'] == tag and profile_configs[p]['precision'] == precision), None)
         if profile is None: continue
@@ -104,7 +108,7 @@ def discover(files, profiles, stages=None, selected_k=4, profile_configs=None):
         weight = next((prefix + '/adapter_model' + ext for ext in ('.safetensors', '.bin') if prefix + '/adapter_model' + ext in files), None)
         if not weight: continue
         jobs.append(dict(kind=kind, condition=kind+'_'+track, track=track, profile=profile, stage=stage,
-                         k=int(k) if k else None, adapter=prefix, weight=weight))
+                         k=int(k) if k else None, adapter=prefix, weight=weight, harness_mode=mode))
     return jobs
 
 
@@ -258,6 +262,7 @@ def result_path(identity):
     runtime = identity.get('runtime') or {}
     parts = ['evaluations', 'dentex', identity['split'], runtime.get('tag', identity['profile']),
              identity.get('stage', 'base'), identity['kind'], identity['condition']]
+    if identity.get('harness_mode','off') != 'off': parts.append('harness_'+identity['harness_mode'])
     if identity.get('k') is not None: parts.append('k'+str(identity['k']))
     parts += [identity.get('size', 'canonical'), 'run_'+fingerprint(identity)[:16]]
     if any(not re.fullmatch(r'[A-Za-z0-9_.-]+', str(part)) or str(part) in {'.','..'} for part in parts):
@@ -355,6 +360,7 @@ def validate_document(kind, path, identity):
                 if row.get('condition') != identity['condition'] or row.get('prompt') != 'unified': raise ValueError('Wrong condition/prompt')
                 settings = row.get('eval_settings') or {}
                 if settings.get('max_new_tokens') != 16384: raise ValueError('Wrong evaluation budget')
+                if settings.get('harness',{'mode':'off'}) != identity.get('harness',{'mode':'off'}): raise ValueError('Wrong evaluation harness')
             else:
                 if row.get('provider') not in {'transformers','local_hf'}: raise ValueError('API zero-shot results are not local baselines')
                 if (row.get('evaluation_settings') or {}).get('max_tokens') != 16384: raise ValueError('Zero-shot budget lacks 16K provenance')
@@ -400,13 +406,24 @@ class NotebookEvaluations:
                  data_dir='data', dev_split='data/splits/dentex_dev.json', output_dir='data/evaluations',
                  model_id=None, split='test', sizes=('canonical',), spec_checkpoints=None,
                  vllm_executable='vllm', gpu_indices=None, port=8910, seed=42, serving_context_length=32768, ablation=None, api=None, download=None, profiles=None,
-                 results_repo=None, results_repo_type=None, track="all"):
+                 results_repo=None, results_repo_type=None, track="all", grpo_harness_modes='off',
+                 speculative_harness_mode=None, speculative_target_kind=None, adapter_prefixes=None, draft_variant='original'):
         if split not in {'test','dev'} or set(kinds)-set(KINDS) or not kinds: raise ValueError('Invalid split or kinds')
         if set(sizes)-{'canonical','original'} or not sizes: raise ValueError('Invalid sizes')
         if ablation and split!='dev': raise ValueError('Tool/grounding ablations belong to dev only')
         self.tracks = ('with_tools', 'no_tools') if track == 'all' else (track,)
         if any(t not in {'with_tools', 'no_tools'} for t in self.tracks):
             raise ValueError('EVAL_TRACK must be with_tools, no_tools, or all')
+        from dental_agent.harness.configuration import HARNESS_MODES, validate_harness_mode
+        self.grpo_harness_modes = HARNESS_MODES if grpo_harness_modes == 'all' else ((grpo_harness_modes,) if isinstance(grpo_harness_modes,str) else tuple(grpo_harness_modes))
+        if not self.grpo_harness_modes: raise ValueError('Select at least one GRPO harness variant')
+        for mode in self.grpo_harness_modes: validate_harness_mode(mode)
+        if speculative_harness_mode is not None: validate_harness_mode(speculative_harness_mode)
+        if speculative_target_kind not in {None,'sft','grpo'}: raise ValueError('Unknown speculative target kind')
+        if draft_variant not in {'original','finetuned'}: raise ValueError('Unknown MTP draft variant')
+        self.speculative_harness_mode,self.speculative_target_kind = speculative_harness_mode,speculative_target_kind
+        self.adapter_prefixes = None if adapter_prefixes is None else set(adapter_prefixes)
+        self.draft_variant = draft_variant
         self.ablation = copy.deepcopy(ablation)
         if serving_context_length<=16384: raise ValueError('Serving total context must exceed the unchanged 16384 generation budget to leave input/image headroom')
         self.serving_context_length=serving_context_length
@@ -444,7 +461,7 @@ class NotebookEvaluations:
 
     def _discover(self):
         trained = discover(self.files,self.profiles,self.stages,self.k,self.profile_configs)
-        trained = [job for job in trained if job['track'] in self.tracks]
+        trained = [job for job in trained if job['track'] in self.tracks and (job['kind']!='grpo' or job['harness_mode'] in self.grpo_harness_modes)]
         for profile in self.profiles:
             if 'zeroshot' in self.kinds:
                 self.jobs.append(dict(kind='zeroshot',condition='zero_shot',profile=profile,stage='base',adapter=None,k=None))
@@ -456,15 +473,24 @@ class NotebookEvaluations:
                 if job['kind'] in self.kinds: self.jobs.append(job)
                 if job['track']=='with_tools':
                     for kind in ('rules_skills','speculative'):
-                        if kind in self.kinds: self.jobs.append({**job,'kind':kind,'checkpoint_kind':job['kind']})
+                        if kind not in self.kinds: continue
+                        if kind == 'speculative':
+                            if self.speculative_target_kind and job['kind'] != self.speculative_target_kind: continue
+                            if self.speculative_harness_mode is not None and job['harness_mode'] != self.speculative_harness_mode: continue
+                            if self.adapter_prefixes is not None and job['adapter'] not in self.adapter_prefixes: continue
+                        self.jobs.append({**job,'kind':kind,'checkpoint_kind':job['kind']})
             for kind in ('sft','grpo','rules_skills','speculative'):
                 for track in self.tracks:
                     if kind not in self.kinds: continue
                     if kind in {'rules_skills','speculative'} and track == 'no_tools':
                         self.status.append(dict(profile=profile,kind=kind,track=track,status='unsupported',reason='This experiment requires the with_tools track'))
                         continue
-                    if not any(j['profile']==profile and j['kind']==kind and j.get('track')==track for j in self.jobs):
-                        self.status.append(dict(profile=profile,kind=kind,track=track,condition=kind+'_'+track,status='missing_checkpoint',reason='No exact uploaded adapter for selected track/stage/K/profile'))
+                    modes = tuple(m for m in self.grpo_harness_modes if track == 'with_tools' or m == 'off') if kind == 'grpo' else (None,)
+                    for mode in modes:
+                        if not any(j['profile']==profile and j['kind']==kind and j.get('track')==track and (mode is None or j.get('harness_mode','off')==mode) for j in self.jobs):
+                            row = dict(profile=profile,kind=kind,track=track,condition=kind+'_'+track,status='missing_checkpoint',reason='No exact uploaded adapter for selected track/stage/K/profile')
+                            if mode is not None and (mode != 'off' or len(self.grpo_harness_modes)>1): row['harness_mode']=mode
+                            self.status.append(row)
         if self.ablation:
             self.jobs = [j for j in self.jobs if j['kind'] in {'baseline','sft','grpo'} and j['condition'].endswith('with_tools')]
         order = {kind:i for i,kind in enumerate(KINDS)}
@@ -493,6 +519,16 @@ class NotebookEvaluations:
         if self._inventory_files is None: self._inventory_files = inventory_roots(self.data)
         return self._inventory_files
 
+    def _training_harness_metadata(self, job):
+        mode = job.get('harness_mode','off')
+        if mode == 'off' or job.get('checkpoint_kind',job['kind']) != 'grpo': return None
+        from dental_agent.harness.configuration import assert_harness_identity
+        name = job['adapter'].removesuffix('/grpo_policy')+'/checkpoint_meta.json'
+        if name not in self.files: raise ValueError('Harness GRPO checkpoint has no training metadata: '+name)
+        path = self.download(self.repo,name,repo_type='model',revision=self.revision,token=self.token)
+        assert_harness_identity(json.loads(Path(path).read_text()).get('extra',{}).get('harness'),mode)
+        return name
+
     def _identity(self, job):
         split = 'dev' if job['kind'] in {'rules_skills','speculative'} else self.split
         hashes = {} if not job['adapter'] else {name:_metadata_digest(self.files[name]) for name in (job['adapter']+'/adapter_config.json',job['weight'])}
@@ -500,10 +536,18 @@ class NotebookEvaluations:
             checkpoint_kind=job.get('checkpoint_kind',job['kind']),track=job.get('track','no_tools'),stage=job['stage'],k=job['k'],adapter=job['adapter'],checkpoint_files=hashes,
             base_model='Qwen/Qwen3.5-9B',software=self.software,split=split,dev_split_sha256=digest(self.dev_split) if split=='dev' else None,source_sha256=self.source,
             max_new_tokens=16384,max_tool_calls=50,max_turns=None,malformed_retries=0,seed=self.seed,size=job.get('size','canonical'))
+        from dental_agent.harness.configuration import harness_identity
+        mode = job.get('harness_mode','off')
+        if job.get('checkpoint_kind',job['kind']) == 'grpo' or job['kind'] == 'speculative':
+            identity['harness_mode'] = mode
+            if mode != 'off': identity['harness'] = harness_identity(mode)
+        meta_name = self._training_harness_metadata(job)
+        if meta_name is not None: identity['checkpoint_files'][meta_name] = _metadata_digest(self.files[meta_name])
         if self.ablation: identity['ablation'] = self.ablation
         if job['kind']=='rules_skills': identity['conditions']=['baseline','rules_only','rules_skills_index','rules_skills_full']
         if job['kind']=='speculative':
             identity['conditions']=['baseline','mtp_1']
+            identity['draft_variant']=self.draft_variant
             configured = self.spec_checkpoints.get(job['profile'],{})
             key = job['adapter']
             checkpoint = configured.get(key) if isinstance(configured,dict) else None
@@ -574,6 +618,7 @@ class NotebookEvaluations:
                 '--existing-results','resume','--max-new-tokens','16384','--max-tool-calls','50','--malformed-retries','0',
                 *runtime_flags(job['profile'], self.profile_configs), '--canonical-resize' if identity['size']=='canonical' else '--no-canonical-resize',
                 '--canonical-letterbox' if p['letterbox'] else '--no-canonical-letterbox']
+            if job.get('harness_mode','off') != 'off': command += ['--harness-mode',job['harness_mode']]
             if adapter: command += ['--adapter-path',adapter]
             suffix = '_canonical' if identity['size']=='canonical' else ''
             if self.ablation:
@@ -603,7 +648,8 @@ class NotebookEvaluations:
                 '--dev-split',str(self.dev_split),'--split','dev','--max-new-tokens','16384','--max-model-len',str(self.serving_context_length),
                 '--max-tool-calls','50','--seed',str(self.seed),'--conditions',*identity['conditions'],'--vllm-executable',self.vllm,
                 '--gpu-indices',indices,'--tensor-parallel',str(len(indices.split(','))),'--dtype',identity['serving']['dtype'],
-                '--port',str(self.port),'--existing-results','resume','--output',str(folder/'results.json')]
+                '--port',str(self.port),'--existing-results','resume','--output',str(folder/'results.json'),
+                '--harness-mode',job.get('harness_mode','off'),'--draft-variant',self.draft_variant]
             result = folder/'results.json'
         return command,result,adapter
 
@@ -746,6 +792,7 @@ def prepare_serving_targets(session, output_root='data/models/speculative', merg
     mapping = copy.deepcopy(session.spec_checkpoints)
     for job in session.jobs:
         if job['kind'] != 'speculative': continue
+        session._training_harness_metadata(job)
         profile = job['profile']; prefix = job['adapter']
         if prefix in mapping.get(profile,{}): continue
         key = fingerprint({name:_metadata_digest(session.files[name]) for name in (prefix+'/adapter_config.json',job['weight'])})[:16]
@@ -757,7 +804,10 @@ def prepare_serving_targets(session, output_root='data/models/speculative', merg
                 subprocess.run([sys.executable,'scripts/bench/merge_adapter.py','--base',str(session.model_id),'--adapter',adapter,'--output',str(target)],cwd=ROOT,check=True)
             subprocess.run([sys.executable,'scripts/bench/check_mtp.py','--base',str(session.model_id),'--checkpoint',str(target),
                 '--output',str(target.parent/(key+'_mtp_audit.json'))],cwd=ROOT,check=True)
-        if target.is_dir(): mapping.setdefault(profile,{})[prefix] = str(target.resolve())
+        if target.is_dir():
+            from dental_agent.harness.configuration import write_target_manifest
+            write_target_manifest(target,prefix,job.get('checkpoint_kind',job['kind']),job.get('harness_mode','off'))
+            mapping.setdefault(profile,{})[prefix] = str(target.resolve())
     session.spec_checkpoints = mapping
     return mapping
 
@@ -766,7 +816,7 @@ def summarize_inventory(status):
     """Read saved evidence; primary scoring stays in the existing shared matrix module."""
     output = []
     for item in status:
-        row = {k:item.get(k) for k in ('profile','kind','track','condition','stage','k','size','status','reason','hub_path','upload_status','pending_upload')}
+        row = {k:item.get(k) for k in ('profile','kind','track','condition','stage','k','size','status','reason','hub_path','upload_status','pending_upload','harness_mode')}
         folder = Path(item['path']) if item.get('path') else None
         if folder and (folder/'results.json').is_file():
             doc = json.loads((folder/'results.json').read_text())
@@ -822,13 +872,18 @@ def publish_paired_summaries(status, output_dir='data/evaluations/summaries'):
         cell = item['condition']+'@'+item['size']
         rows = jsonl_rows(file)
         if item['kind']=='baseline': baselines.setdefault(block,{})[cell]=rows
-        else: groups.setdefault((block,item['stage'],item.get('k')),{})[cell]=rows
+        else: groups.setdefault((block,item['stage'],item.get('k'),identity.get('harness_mode','off')),{})[cell]=rows
     # Pair each SFT control with each matching GRPO K; no cross-profile or cross-cohort comparisons.
-    for (block,stage,k),cells in list(groups.items()):
+    for (block,stage,k,mode),cells in list(groups.items()):
         if k is not None:
-            cells.update(groups.get((block,stage,None),{}))
+            cells.update(groups.get((block,stage,None,'off'),{}))
         cells.update(baselines.get(block,{}))
-    groups.update({(block,'base',None):cells for block,cells in baselines.items()})
+        if mode != 'off':
+            for cell,records in groups.get((block,stage,k,'off'),{}).items():
+                if cell.startswith('grpo_'):
+                    condition,size = cell.split('@')
+                    cells[condition+'_harness_off@'+size]=records
+    groups.update({(block,'base',None,'off'):cells for block,cells in baselines.items()})
     results=[]
     from huggingface_hub import HfApi
     api=HfApi(token=os.environ.get('HF_TOKEN'))
@@ -838,16 +893,23 @@ def publish_paired_summaries(status, output_dir='data/evaluations/summaries'):
     repo_type = result_repo_type(api, repo, configured_type)
     for key,cells in groups.items():
         report=build_summary(cells,n_boot=2000,seed=42)
+        from dental_agent.evaluation.matrix import paired_bootstrap_diff
+        for control in sorted(c for c in cells if '_harness_off@' in c):
+            enabled = control.replace('_harness_off@','@')
+            if enabled in cells:
+                for level in ('exact','fdi'):
+                    comparison = paired_bootstrap_diff(cells[enabled],cells[control],level=level,metric='f1',n_boot=2000,seed=42)
+                    report['comparisons'].append(dict(label='GRPO harness on minus off',a=enabled,b=control,**comparison))
         digest_key=fingerprint(dict(group=key,records=cells))
-        block, stage, k = key
-        relative = Path('dentex')/block[1]/block[0]/stage/('k'+str(k) if k is not None else 'controls')/('run_'+digest_key[:16])
+        block, stage, k, mode = key
+        relative = Path('dentex')/block[1]/block[0]/stage/('harness_'+mode)/('k'+str(k) if k is not None else 'controls')/('run_'+digest_key[:16])
         folder=Path(output_dir)/relative;folder.mkdir(parents=True,exist_ok=True)
         write(folder/'summary.json',report)
         (folder/'summary.md').write_text(summary_markdown(report),encoding='utf-8')
         from huggingface_hub import CommitOperationAdd
         prefix='evaluations/summaries/'+relative.as_posix()
         api.create_commit(repo,repo_type=repo_type,operations=[CommitOperationAdd(path_in_repo=prefix+'/'+name,path_or_fileobj=(folder/name).read_bytes()) for name in ('summary.json','summary.md')],commit_message='eval: paired cohort summaries')
-        results.append(dict(profile=key[0][0],stage=key[1],k=key[2],hub_path=prefix,local_path=str(folder)))
+        results.append(dict(profile=key[0][0],stage=key[1],k=key[2],harness_mode=key[3],hub_path=prefix,local_path=str(folder)))
     return results
 
 

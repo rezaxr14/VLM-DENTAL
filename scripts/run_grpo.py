@@ -297,7 +297,12 @@ def main() -> None:
         help="Check this exact command (SFT adapter, dev split, pool, image files, resume state, hub token, hardware) "
              "and exit without loading the model. Run it first; every FAIL would have stopped or corrupted the run.",
     )
+    from dental_agent.harness.configuration import HARNESS_MODES
+    parser.add_argument("--harness-mode", choices=HARNESS_MODES, default="off",
+                        help="Rules/skills during GRPO rollouts; off preserves the original control")
     args = parser.parse_args()
+    from dental_agent.harness.configuration import validate_harness_mode
+    validate_harness_mode(args.harness_mode, args.track)
 
     if args.preflight:
         from dental_agent.training.preflight import run_preflight
@@ -378,7 +383,7 @@ def run_worker(index: int, args: argparse.Namespace):
     resolved_sft_dir = resolve_grpo_inputs(args, cfg.data_dir)
 
     # Checkpoint directory naming: qwen3_5_9b_grpo_{track}_k{group_size}_{sft_stage}
-    target_name = grpo_name(args.track, args.group_size, args.sft_stage, args.precision, args.hf_run_tag)
+    target_name = grpo_name(args.track, args.group_size, args.sft_stage, args.precision, args.hf_run_tag, harness_mode=args.harness_mode)
     out_dir = Path(args.output_dir) / target_name
     out_dir.mkdir(parents=True, exist_ok=True)
     path_in_repo_prefix = f"grpo/{target_name}"
@@ -457,9 +462,10 @@ def run_worker(index: int, args: argparse.Namespace):
         slot_budget=slot_budget,
         resume=args.resume and can_resume(out_dir, args.track),
         max_new_tokens=args.max_new_tokens,
-        log_path=args.log_path,
+        log_path=(out_dir / "grpo_training_log.jsonl") if args.harness_mode != "off" and args.log_path == "data/grpo_training_log.jsonl" else args.log_path,
         runtime_options=runtime_from_args(args),
         gradient_checkpointing=args.gradient_checkpointing,
+        harness_mode=args.harness_mode, seed=args.seed,
     )
 
 
