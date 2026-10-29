@@ -83,6 +83,7 @@ def parse_args(argv=None):
     p.add_argument('--max-model-len',type=int,default=16384);p.add_argument('--gpu-memory-utilization',type=float,default=.9)
     p.add_argument('--max-new-tokens',type=int,default=2048);p.add_argument('--max-tool-calls',type=int,default=50);p.add_argument('--max-turns',type=int)
     p.add_argument('--seed',type=int,default=42);p.add_argument('--startup-timeout',type=int,default=600)
+    p.add_argument('--existing-results',choices=['error','resume'],default='error')
     p.add_argument('--plan-only',action='store_true',help='Write exact server commands without loading data/model')
     p.add_argument('--warmup-episodes',type=int,default=1,help='Separate full dev episodes excluded from timing; 0 disables')
     return p.parse_args(argv)
@@ -92,7 +93,8 @@ def main(argv=None):
     from dental_agent.harness.specdec import server_command,ServingReply,episode_measurements,equivalence,gpu_snapshot
     from dental_agent.harness.evaluation import atomic_json,load_dev,evaluate_episode,pooled,digest
     output=Path(args.output)
-    if output.exists():raise FileExistsError('Use a fresh output path; never overwrite benchmark evidence')
+    saved = json.loads(output.read_text()) if output.exists() else None
+    if saved and args.existing_results != 'resume':raise FileExistsError('Output exists; use --existing-results resume for this exact benchmark')
     if not args.conditions or args.conditions[0]!='baseline' or len(set(args.conditions))!=len(args.conditions):
         raise ValueError('Conditions must start with baseline and be unique')
     if args.warmup_episodes<0:raise ValueError('warmup-episodes must be nonnegative')
@@ -111,12 +113,29 @@ def main(argv=None):
     from dental_agent.harness.checkpoints import tensor_headers
     headers=tensor_headers(ck)
     if any(c.startswith('mtp') for c in args.conditions) and not any(k.startswith('mtp.') for k in headers):raise ValueError('MTP head is absent; run merge/audit before speculation')
+    from dental_agent.harness.notebook_eval import merged_signature
+    checkpoint_sha256=merged_signature(ck)
+    if saved and saved.get('checkpoint_sha256') != checkpoint_sha256: raise ValueError('Saved benchmark target content differs or lacks provenance; evidence preserved')
     immutable={str(p.relative_to(ck)):[p.stat().st_size,p.stat().st_mtime_ns] for p in ck.glob('*') if p.is_file()}
     ids,images,annotations,categories=load_dev(args.data_dir,args.dev_split,args.limit,args.seed)
-    result.update(image_ids=ids,dev_split_sha256=digest(args.dev_split),checkpoint_files=immutable)
+    result.update(image_ids=ids,dev_split_sha256=digest(args.dev_split),checkpoint_files=immutable,checkpoint_sha256=checkpoint_sha256)
+    if saved:
+        from dental_agent.harness.notebook_eval import validate_resume_settings
+        validate_resume_settings(saved, vars(args), ids)
+        if saved.get('status') in {'complete','failed_or_divergent'}:
+            print('Terminal benchmark evidence retained:', output)
+            if saved.get('status')=='failed_or_divergent': raise SystemExit(2)
+            return
+        result = saved
+        result['settings'] = vars(args); result['commands'] = commands; result['checkpoint_files'] = immutable
+        result['status'] = 'running'
     atomic_json(output,result)
     for condition,cmd in commands.items():
-        entry=dict(status='running',episodes=[]);result['conditions'][condition]=entry
+        entry = result['conditions'].setdefault(condition,dict(status='running',episodes=[]))
+        if entry.get('status') == 'complete': continue
+        entry['status'] = 'running'; entry.pop('error',None)
+        done = {int(r['image_id']) for r in entry['episodes']}
+        if len(done)!=len(entry['episodes']) or not done.issubset(ids): raise ValueError('Invalid saved benchmark cohort')
         try:
             with server(cmd,output.parent/(output.stem+'_'+condition+'.log'),args.port,args.gpu_indices,args.startup_timeout) as url:
                 from dental_agent.harness.specdec import http_json
@@ -127,6 +146,7 @@ def main(argv=None):
                     evaluate_episode(ids[j%len(ids)],images,annotations,categories,reply_fn=ServingReply(url,args.seed),seed=args.seed,
                                      max_new_tokens=args.max_new_tokens,max_tool_calls=args.max_tool_calls,max_turns=args.max_turns)
                 for iid in ids:
+                    if iid in done: continue
                     reply=ServingReply(url,args.seed);tools=[]
                     with MemoryMonitor(args.gpu_indices) as memory:
                         start=time.perf_counter()

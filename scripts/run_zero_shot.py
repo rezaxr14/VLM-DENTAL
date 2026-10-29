@@ -314,7 +314,7 @@ def _run_zero_shot_for_target(
         imgs_df, annots_df, cats_df = load_tufts_dataset(data_dir=cfg.data_dir)
     else:
         imgs_df, annots_df, cats_df = load_dentex_dataset(
-            data_dir=cfg.data_dir, split_name=split_name
+            data_dir=getattr(args, "data_dir", None) or cfg.data_dir, split_name=split_name
         )
 
     # Evaluate across ALL images in the split cohort (e.g. all 50 images in validation split:
@@ -610,6 +610,7 @@ def _run_zero_shot_for_target(
 
             if provider in {'transformers','local_hf'}:
                 record['local_runtime'] = meta.get('local_runtime', {})
+                record['evaluation_settings'] = dict(max_tokens=args.max_tokens, image_max_dim=args.image_max_dim, temperature=args.temperature)
                 record['local_timing'] = meta.get('timing', {})
 
             # Save to JSONL atomically (replaces in-place if image_id was already present)
@@ -748,6 +749,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--config", "-c", default=None, help="Path to config YAML")
     parser.add_argument("--dataset", default="dentex", help="Dataset name ('dentex' or 'tufts')")
+    parser.add_argument("--data-dir", default=None, help="Explicit local input root; omitted preserves project configuration")
     parser.add_argument("--split", default="test", help="Dataset split ('test', 'validation', 'train')")
     parser.add_argument("--provider", default=None, help="Provider ('gemini', 'nvidia_nim', 'groq', 'openrouter', 'transformers', 'local', 'openai', 'anthropic')")
     parser.add_argument("--model", default=None, help="Model name / checkpoint identifier or comma-separated list")

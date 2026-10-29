@@ -104,13 +104,15 @@ def test_all_requested_serving_profiles_and_notebooks():
         notebook=json.loads((root/'notebooks'/name).read_text())
         for i,cell in enumerate(notebook['cells']):
             if cell['cell_type']=='code':compile(''.join(cell['source']),f'{name}:{i}','exec')
-        config=next(''.join(c['source']) for c in notebook['cells'] if 'PROFILES = {' in ''.join(c['source']))
-        node=next(n for n in ast.parse(config).body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='PROFILES' for t in n.targets))
-        profiles=eval(compile(ast.Expression(node.value),'profiles','eval'),{'dict':dict})
-        assert profiles['dual_t4']['compute']=='fp16'
-        assert profiles['rtx4090_qlora']['compute']=='bf16'
-        assert profiles['rtxpro6000_48gb']['precision']=='bf16'
-        assert profiles['rtxpro6000_48gb']['tag']==profiles['workstation48_lora']['tag']=='workstation48_lora_bf16'
+        from dental_agent.harness.notebook_eval import PROFILES, ALIASES
+        source='\n'.join(''.join(c['source']) for c in notebook['cells'])
+        assert 'EVAL_PROFILES = {' in source
+        assert 'profiles=EVAL_PROFILES' in source
+        assert 'EVAL_TARGET_PROFILES' in source
+        assert PROFILES['dual_t4']['compute']=='fp16'
+        assert PROFILES['rtx4090_qlora']['compute']=='bf16'
+        assert PROFILES[ALIASES['rtxpro6000_48gb']]['precision']=='bf16'
+        assert PROFILES['workstation48_lora']['tag']=='workstation48_lora_bf16'
     command=server_command('vllm','checkpoint','mtp_1',9000,tensor_parallel=2,dtype='float16')
     assert command[command.index('--dtype')+1]=='float16'
     assert command[command.index('--tensor-parallel-size')+1]=='2'

@@ -113,7 +113,9 @@ def test_notebook_schema_syntax_and_execution_boundaries():
             ast.parse(cell.source);assert cell.execution_count is None and cell.outputs==[]
     source='\n'.join(c.source for c in n.cells)
     assert 'pkill' not in source and "'git','pull'" not in source
-    assert 'MAX_MODEL_LEN = 16384' in source and 'AGGREGATE_ONLY' in source
+    assert 'MAX_NEW_TOKENS = 16384' in source and 'RUN_MISSING_EVALUATIONS' in source
+    assert 'build_paper.py' not in source and 'BUILD_PAPER_PDF' not in source
+    assert 'NotebookEvaluations' in source
     assert 'scripts/run_zero_shot.py' not in source
 
 

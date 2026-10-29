@@ -17,6 +17,7 @@ def parse_args(argv=None):
     p.add_argument('--split',choices=['dev'],default='dev')
     p.add_argument('--output',default='paper/generated/harness_dev.json')
     p.add_argument('--conditions',nargs='+',choices=['baseline','rules_only','rules_skills_index','rules_skills_full'],default=['baseline','rules_only','rules_skills_index','rules_skills_full'])
+    p.add_argument('--existing-results',choices=['error','resume'],default='error')
     p.add_argument('--limit',type=int)
     p.add_argument('--seed',type=int,default=42)
     p.add_argument('--max-new-tokens',type=int,default=2048)
@@ -33,19 +34,33 @@ def main(argv=None):
     from dental_agent.harness.skills import SkillLibrary
     from dental_agent.model.local_runtime import runtime_from_args
     from scripts import evaluate_models as ev
-    if Path(args.output).exists():raise SystemExit('Output exists; select a fresh experiment output path')
+    saved = json.loads(Path(args.output).read_text()) if Path(args.output).exists() else None
+    if saved and args.existing_results != 'resume':raise SystemExit('Output exists; use --existing-results resume for this exact experiment')
     if not Path(args.adapter_path).is_dir():raise FileNotFoundError(args.adapter_path)
+    from dental_agent.harness.notebook_eval import adapter_signature
+    adapter_sha256=adapter_signature(args.adapter_path)
+    if saved and saved.get('adapter_sha256') != adapter_sha256: raise ValueError('Saved harness adapter content differs or lacks provenance; results preserved')
     ids,images,annotations,categories=load_dev(args.data_dir,args.dev_split,args.limit,args.seed)
+    if saved:
+        from dental_agent.harness.notebook_eval import validate_resume_settings
+        validate_resume_settings(saved, vars(args), ids)
+        if saved.get('status') == 'complete':
+            print('Complete harness result retained:', args.output); return
     device,dtype,_=ev.setup_eval_hardware(args.precision,args.qlora_compute_dtype)
     model,processor=ev.load_eval_model(args.model_id,args.adapter_path,device,dtype,args.checkpoint_kind+'_with_tools',
                                       quantize_4bit=args.precision=='qlora',runtime_options=runtime_from_args(args))
     root=Path(__file__).resolve().parents[2]
-    result=dict(schema_version=1,status='running',split='dev',image_ids=ids,settings=vars(args),
+    result=dict(schema_version=1,status='running',split='dev',image_ids=ids,settings=vars(args),adapter_sha256=adapter_sha256,
                 dev_split_sha256=digest(args.dev_split),rules_sha256=digest(root/'dental_agent/harness/rules.md'),
                 skills=[dict(name=s.name,sha256=s.sha256) for s in SkillLibrary().all()],conditions={},comparisons={})
+    if saved: result = saved
+    result['settings'] = vars(args); result['status'] = 'running'
     for condition in args.conditions:
-        records=[];result['conditions'][condition]=dict(options=asdict(CONDITIONS[condition]),records=records)
+        entry = result['conditions'].setdefault(condition, dict(options=asdict(CONDITIONS[condition]),records=[]))
+        records = entry['records']; done = {int(r['image_id']) for r in records}
+        if len(done) != len(records) or not done.issubset(ids): raise ValueError('Invalid saved harness cohort')
         for image_id in ids:
+            if image_id in done: continue
             rec,_=evaluate_episode(image_id,images,annotations,categories,model,processor,harness=CONDITIONS[condition],
                                   seed=args.seed,max_new_tokens=args.max_new_tokens,max_tool_calls=args.max_tool_calls,max_turns=args.max_turns)
             records.append(rec);atomic_json(args.output,result)
