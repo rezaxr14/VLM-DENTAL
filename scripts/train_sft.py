@@ -1145,7 +1145,8 @@ def _run_training(index: int, args: argparse.Namespace):
                 total_steps = restored["step"]
                 start_epoch = restored["epoch"]
                 best_val_loss = restored["best_val_loss"]
-                print(f"[RESUME] Resumed from HF at Epoch {start_epoch}, Step {total_steps} (best_val_loss={best_val_loss:.4f}); "
+                checkpoint_epoch = start_epoch if restored["mid_epoch"] else start_epoch - 1
+                print(f"[RESUME] Restored HF checkpoint from Epoch {checkpoint_epoch}, Step {total_steps} (best_val_loss={best_val_loss:.4f}); "
                       f"{restored['tensors']} adapter tensors restored"
                       + ("; the checkpoint was written mid-epoch, so this epoch restarts from its first batch." if restored["mid_epoch"] else "."))
             else:
@@ -1155,16 +1156,19 @@ def _run_training(index: int, args: argparse.Namespace):
         except Exception as e:
             print(f"[RESUME WARNING] Could not download a checkpoint from HF ({e}); starting at step 1.")
 
-    # Epoch bookkeeping for exact resume: ``epoch`` in a checkpoint is the epoch to run NEXT; a checkpoint written inside an epoch
+    # ``epoch`` is the resume cursor; ``checkpoint_epoch`` names the epoch that produced the saved weights.
+    # A checkpoint written inside an epoch
     # (step push, SIGTERM) also records the step the epoch began at, so resume can restart that epoch consistently.
     progress = {"epoch": start_epoch, "epoch_start_step": total_steps}
 
     def save_sft_checkpoint(epoch_num: int, is_preemption: bool = False, mid_epoch: bool = False):
         if args.debug_steps:
             return
+        checkpoint_epoch = epoch_num if mid_epoch else epoch_num - 1
         state_data = {
             "step": total_steps,
             "epoch": epoch_num,
+            "checkpoint_epoch": checkpoint_epoch,
             "track": args.track,
             "stage": args.stage,
             "best_val_loss": best_val_loss,
@@ -1181,7 +1185,7 @@ def _run_training(index: int, args: argparse.Namespace):
             xm.save(optimizer.state_dict(), out_path / "optimizer.pt")
             xm.save(scheduler.state_dict(), out_path / "scheduler.pt")
             if args.hf_repo and xm.is_master_ordinal():
-                upload_checkpoint_to_hf(out_path, args.hf_repo, total_steps, epoch_num, path_in_repo=path_in_repo, hub_base_model_id=hub_base_model_id)
+                upload_checkpoint_to_hf(out_path, args.hf_repo, total_steps, checkpoint_epoch, path_in_repo=path_in_repo, hub_base_model_id=hub_base_model_id)
         else:
             unwrap_peft_model(model).save_pretrained(str(out_path))
             torch.save(optimizer.state_dict(), out_path / "optimizer.pt")
@@ -1191,7 +1195,7 @@ def _run_training(index: int, args: argparse.Namespace):
             with open(state_file, "w") as f:
                 json.dump(state_data, f)
             if args.hf_repo:
-                upload_checkpoint_to_hf(out_path, args.hf_repo, total_steps, epoch_num, path_in_repo=path_in_repo, hub_base_model_id=hub_base_model_id)
+                upload_checkpoint_to_hf(out_path, args.hf_repo, total_steps, checkpoint_epoch, path_in_repo=path_in_repo, hub_base_model_id=hub_base_model_id)
 
     # Emergency SIGTERM handler for Kaggle 9-hour session preemption
     def sigterm_handler(signum, frame):
