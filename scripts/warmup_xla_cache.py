@@ -24,6 +24,8 @@ import warnings
 from pathlib import Path
 from typing import Any, Dict, List
 
+from dental_agent.training import tpu_diagnostics as _diag  # opt-in run report; no-op without --tpu-report-dir
+
 # Permanently suppress torch_xla / tensorflow conflict and deprecation warnings
 warnings.filterwarnings("ignore", category=UserWarning, message=".*tensorflow.*can conflict with.*torch-xla.*")
 warnings.filterwarnings("ignore", category=UserWarning, module="torch_xla.*")
@@ -369,6 +371,7 @@ def run_warmup_worker(index: int, args: argparse.Namespace):
             )
 
         log_xla_memory("Post-Model Initialization & Sharding", is_master=is_master)
+        _diag.mark("model_initialized_and_sharded")
 
         # Host RAM reclamation: force glibc to release unmapped model-loading heap memory back to OS
         gc.collect()
@@ -422,6 +425,7 @@ def run_warmup_worker(index: int, args: argparse.Namespace):
                 print(f"\n[{t_str}] [AOT COMPILATION {idx}/{len(target_buckets)}] Preparing bucket {b_len} tokens (batch_size={warmup_batch_size})...")
 
             t0 = time.time()
+            _diag.begin(f"aot_bucket_{b_len}", rows=warmup_batch_size, vision_slots=list(args.vision_slots))
             dummy_batch = build_dummy_multimodal_batch(
                 bucket_len=b_len,
                 processor=processor,
@@ -492,6 +496,7 @@ def run_warmup_worker(index: int, args: argparse.Namespace):
                 xm.rendezvous(f"bucket_{b_len}_done")
 
             elapsed = time.time() - t0
+            _diag.end(f"aot_bucket_{b_len}")
             if is_master:
                 t_str = time.strftime("%H:%M:%S")
                 print(f"[{t_str}] [AOT COMPILATION {idx}/{len(target_buckets)}] Bucket {b_len} compiled and cached in {elapsed:.1f}s.")
@@ -611,6 +616,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tpu-loss-chunk-tokens", type=int, default=0,
                         help="Opt-in TPU/SPMD fixed-shape loss chunks with recomputed backward; "
                              "0 keeps stock TPU loss. Separate from GPU --loss-chunk-tokens.")
+    _diag.add_report_arguments(parser)
     parser.add_argument("--precision", type=str, default="bf16", choices=["bf16", "fp16", "fp32"])
     parser.add_argument("--lora-target-vision", type=str, default="projector", choices=["projector", "none"])
     parser.add_argument("--lora-linear-attn", action=argparse.BooleanOptionalAction, default=True,
@@ -658,6 +664,7 @@ def parse_args() -> argparse.Namespace:
 
 def main():
     args = parse_args()
+    _diag.start_report(args, role="aot")  # None (and nothing is created) unless --tpu-report-dir is given
 
     is_tpu = False
     if os.path.exists("/dev/vfio") or os.environ.get("PJRT_DEVICE") == "TPU" or "COLAB_TPU_ADDR" in os.environ:

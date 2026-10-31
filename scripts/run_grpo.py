@@ -263,7 +263,7 @@ def main() -> None:
         type=int,
         default=2048,
         help="Token cap of ONE assistant turn during rollouts (the SFT traces contain turns up to ~2,700 tokens; the old "
-             "implicit 512 truncated about 2% of them). Use the same value as evaluation.",
+             "implicit 512 truncated about 2%% of them). Use the same value as evaluation.",
     )
     parser.add_argument(
         "--dev-split",
@@ -300,6 +300,8 @@ def main() -> None:
     from dental_agent.harness.configuration import HARNESS_MODES
     parser.add_argument("--harness-mode", choices=HARNESS_MODES, default="off",
                         help="Rules/skills during GRPO rollouts; off preserves the original control")
+    from dental_agent.training.tpu_diagnostics import add_report_arguments
+    add_report_arguments(parser)  # opt-in run report; unset --tpu-report-dir keeps everything off
     args = parser.parse_args()
     from dental_agent.harness.configuration import validate_harness_mode
     validate_harness_mode(args.harness_mode, args.track)
@@ -308,6 +310,8 @@ def main() -> None:
         from dental_agent.training.preflight import run_preflight
         sys.exit(1 if run_preflight(args, sft_reference_candidates(args.track, args.sft_stage, args.precision)) else 0)
 
+    from dental_agent.training.tpu_diagnostics import start_report
+    start_report(args, role="grpo")  # None (and nothing is created) unless --tpu-report-dir is given
     is_tpu = False
     try:
         import torch_xla  # noqa: F401 — lightweight check; do NOT import xla_model here

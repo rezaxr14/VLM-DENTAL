@@ -28,6 +28,7 @@ from tqdm import tqdm
 from dental_agent.config import ProjectConfig, TrainingConfig
 from dental_agent.model.backbone import load_model, apply_lora, safe_process_vision_info
 from dental_agent.model.checkpoints import save_checkpoint
+from dental_agent.training import tpu_diagnostics as _diag  # opt-in run report; no-op without --tpu-report-dir
 from dental_agent.agent.loop import run_agent, run_agent_no_tools, AgentTrajectory
 from dental_agent.agent.prompts import FIRST_USER_PROMPT, NO_TOOLS_SYSTEM_PROMPT, build_agent_system_prompt
 from dental_agent.agent.parsing import parse_agent_json
@@ -561,6 +562,7 @@ def grpo_step(
             apply_spmd_input_sharding(moved, spmd_mesh, num_cores=rows_per_forward)
         return moved
 
+    _diag.begin("grpo_rollouts")
     groups, all_rewards = [], []
     n_tied_groups = 0
     current_baseline = running_ema_baseline
@@ -625,6 +627,8 @@ def grpo_step(
                 UserWarning,
                 stacklevel=2,
             )
+    _diag.end("grpo_rollouts")
+    _diag.begin("grpo_update")
     model.train()
 
     total_kl = 0.0
@@ -692,6 +696,7 @@ def grpo_step(
             else:
                 optimizer.step()
 
+    _diag.end("grpo_update")
     model.eval()
     if is_tpu:
         try:
@@ -872,6 +877,7 @@ def train_grpo(
         model, processor = load_model(config)  # preserve legacy stand-in loaders in tests/callers
     else:
         model, processor = load_model(config, runtime_options=runtime_options, is_tpu=is_tpu)
+    _diag.mark("model_loaded")
     from dental_agent.model.local_runtime import configure_model, runtime_for, runtime_record
     opts = runtime_for(model)
     runtime_dtype = getattr(model, '_dental_compute_dtype', None)
@@ -1051,6 +1057,7 @@ def train_grpo(
         )
         log_grpo_step(stats, log_path=log_path, extra={"step": step, "image_id": int(img_id), "harness_mode": harness_mode})
         print(f"[GRPO Step {step}/{total_steps}] mean_reward={stats['mean_reward']:.3f} kl={stats['kl_divergence']:.4f}")
+        _diag.step(step, mean_reward=stats['mean_reward'], kl=stats['kl_divergence'])
 
         if (push_every_steps > 0 and step % push_every_steps == 0) or step == total_steps:
             step_tag = f"grpo-{track}-step-{step}"

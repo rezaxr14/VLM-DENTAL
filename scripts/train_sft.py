@@ -87,6 +87,7 @@ from dental_agent.training.gpu_debug import gpu_memory, gpu_forward_context, gpu
 from dental_agent.training.gpu_runtime import (native_bf16, resolve_compute_dtype, select_attention_backend,
                                                model_loading_context, sdpa_gqa_policy, runtime_metadata)
 from dental_agent.training.run_meta import keys_fingerprint, write_sft_run_meta
+from dental_agent.training import tpu_diagnostics as _diag  # opt-in run report; every call is a no-op without --tpu-report-dir
 
 
 def parse_args():
@@ -260,6 +261,7 @@ def parse_args():
     parser.add_argument("--tpu-loss-chunk-tokens", type=int, default=0,
                         help="Opt-in TPU/SPMD fixed-shape loss chunks with recomputed backward; "
                              "0 keeps stock TPU loss. Separate from GPU --loss-chunk-tokens.")
+    _diag.add_report_arguments(parser)
     parser.add_argument(
         "--loss-chunk-tokens",
         type=int,
@@ -936,6 +938,7 @@ def _run_training(index: int, args: argparse.Namespace):
         print(f"[DEBUG] {args.debug_steps} optimizer windows, no saves/uploads; full sequence limit={args.max_seq_len}", flush=True)
 
     log_xla_memory("Post-Model Initialization & Sharding", is_master=is_master)
+    _diag.mark("model_initialized_and_sharded")
     if is_master and not is_tpu and torch.cuda.is_available():
         # With --precision qlora, prepare_model_for_kbit_training upcasts every non-4-bit parameter to fp32; prepare_qlora_model puts the vision tower,
         # the token embedding and lm_head back to their loaded dtype, so only the norms are fp32 (a bf16 residual stream, as in the bf16 path).
@@ -1217,6 +1220,7 @@ def _run_training(index: int, args: argparse.Namespace):
     if is_master:
         print(f"\n[TRAIN] Beginning training: {len(train_dataset)} train samples, {val_size} val samples across {args.epochs} epochs...")
 
+    _diag.begin("training_loop", train_samples=len(train_dataset))
     for epoch in range(start_epoch, args.epochs + 1):
         progress["epoch"] = epoch
         progress["epoch_start_step"] = total_steps
@@ -1325,6 +1329,7 @@ def _run_training(index: int, args: argparse.Namespace):
                 step_loss = accum_loss_sum / max(accum_valid_tokens, 1)
                 accum_loss_sum = 0.0
                 accum_valid_tokens = 0
+                _diag.step(total_steps, loss=step_loss, epoch=epoch)
 
                 if is_master:
                     lr_current = scheduler.get_last_lr()[0] if scheduler.get_last_lr() else args.learning_rate
@@ -1377,6 +1382,7 @@ def _run_training(index: int, args: argparse.Namespace):
             val_loss = evaluate_loss(model, val_dataloader, device, is_tpu, spmd_mesh=spmd_mesh, loss_chunk_tokens=args.loss_chunk_tokens, compute_dtype=compute_dtype, require_efficient_sdpa=args.require_efficient_sdpa)
             print(f"\n[EPOCH {epoch} EVALUATION] val_loss = {val_loss:.4f} (previous best = {best_val_loss:.4f})")
             epoch_log = {"epoch": epoch, "step": total_steps, "epoch_end_val_loss": val_loss}
+            _diag.mark("epoch_validation", epoch=epoch, val_loss=val_loss)
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
                 best_adapter_path.mkdir(parents=True, exist_ok=True)
@@ -1459,6 +1465,7 @@ def main():
     if args.preflight:
         from dental_agent.training.preflight import run_sft_preflight
         sys.exit(1 if run_sft_preflight(args) else 0)
+    _diag.start_report(args, role="sft")  # None (and nothing is created) unless --tpu-report-dir is given
     is_tpu = False
     try:
         import torch_xla  # noqa: F401 — lightweight check; do NOT import xla_model here
