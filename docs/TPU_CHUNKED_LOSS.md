@@ -20,7 +20,7 @@ This implementation covers **SFT training, validation and AOT warmup**.
 GRPO's TPU token-log-probability path is unchanged.
 
 For TPU, keep the existing `tpu` profile, BF16, single-process SPMD/FSDPv2,
-static vision slots, canonical letterboxing, `TARGET_SEQ_LEN=16384`,
+static vision slots, canonical letterboxing, `TARGET_SEQ_LEN` (16384 when this patch was written; the TPU notebooks now use 32768, 30.3 GiB for a full FP32 `[1,32768,V]` buffer versus the same 0.237 GiB chunk),
 `LOSS_CHUNK_TOKENS=0`, `DEBUG_STEPS=0`, and `REQUIRE_EFFICIENT_SDPA=False`.
 Do not reuse the GPU chunk flag on TPU.
 

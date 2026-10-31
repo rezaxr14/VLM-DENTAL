@@ -35,9 +35,10 @@ def test_full_configuration_and_training_command_match_actual_parser(tmp_path,mo
     config=config.replace('HARDWARE_PROFILE = "dual_t4"',f'HARDWARE_PROFILE = {profile!r}',1)
     exec(compile(config,str(NOTEBOOK),'exec'),ns)
     assert ns['PRECISION']==precision and ns['QLORA_COMPUTE_DTYPE']==compute and ns['LOSS_CHUNK_TOKENS']==chunk
-    assert ns['TARGET_SEQ_LEN']==16384 and ns['SAVE_STRATEGY']=='both' and ns['PUSH_EVERY_STEPS']==5
+    # The tpu profile pads every sample to a static length that includes 7,488 vision-slot tokens; GPU profiles keep 16384.
+    assert ns['TARGET_SEQ_LEN']==(32768 if profile=='tpu' else 16384) and ns['SAVE_STRATEGY']=='both' and ns['PUSH_EVERY_STEPS']==5
     assert ns['HF_BASE_MODEL_ID']=='Qwen/Qwen3.5-9B'
-    assert ns['hf_target_folder'].endswith('_'+precision)
+    assert ns['hf_target_folder']==f"sft/qwen3_5_9b_sft_with_tools_dentex_alone_{precision}__{ns['HF_RUN_TAG']}"
     # Exercise normal training, custom local folder and optional tag, not just debug mode.
     ns.update(DEBUG_STEPS=0,OUTPUT_DIR=str(tmp_path/'custom_local'),HF_RUN_TAG='test_run')
     calls=[]
@@ -55,10 +56,15 @@ def test_full_configuration_and_training_command_match_actual_parser(tmp_path,mo
     assert args.hf_run_tag=='test_run' and args.hf_upload_check and args.output_dir==str(tmp_path/'custom_local')
     assert args.loss_chunk_tokens==chunk and args.precision==precision
     if profile=='tpu':
-        assert args.tpu_loss_chunk_tokens==256
+        assert args.max_seq_len==32768 and args.tpu_loss_chunk_tokens==256
+        assert args.tpu_report_dir=='/kaggle/working/tpu_report/sft' and args.tpu_report_hub_repo==ns['HF_REPO']
+        assert args.tpu_report_hub_subfolder=='tpu_reports/with_tools_dentex_alone/test_run/sft'   # follows HF_RUN_TAG
+        assert ns['TPU_AOT_BUCKETS']==(16384,32768)
         assert any('scripts/probe_tpu_chunked_loss.py' in c for c in calls)
     else:
         assert args.tpu_loss_chunk_tokens==0 and '--tpu-loss-chunk-tokens' not in cmd
+        assert args.max_seq_len==16384 and ns['TPU_AOT_BUCKETS']==() and ns['TPU_REPORT_DIR']==''
+        assert args.tpu_report_dir is None and not any(str(c).startswith('--tpu-report') for c in cmd)
         probe=next(c for c in calls if 'scripts/probe_sft_attention.py' in c)
         assert '--loss-chunk-tokens' not in probe and '--loader-mode' not in probe and '--debug-steps' not in probe
 
@@ -70,12 +76,19 @@ def test_aot_uses_matching_tpu_chunk_and_lora_settings(monkeypatch):
     calls=[];shell=[]
     monkeypatch.setattr(subprocess,'run',lambda command,**kwargs:(calls.append(command) or SimpleNamespace(returncode=0)))
     ns={'IS_TPU':True,'os':os,'sys':sys,'Path':Path,'MODEL_ID':'/attached/local/model','TRACK':'with_tools',
-        'PRECISION':'bf16','NUM_CORES':8,'TARGET_SEQ_LEN':16384,'PAD_VISION_TO_SLOTS':True,'VISION_SLOTS':(5,10,4),
+        'PRECISION':'bf16','NUM_CORES':8,'TARGET_SEQ_LEN':32768,'PAD_VISION_TO_SLOTS':True,'VISION_SLOTS':(5,10,4),
         'TRIANGULAR_SHIM':True,'XLA_SPMD':True,'USE_FSDP':True,'LORA_TARGET_VISION':'projector','LORA_LINEAR_ATTN':True,
         'LORA_R':16,'LORA_ALPHA':32,'LORA_DROPOUT':.07,'LEARNING_RATE':1e-5,'XLA_PALLAS':True,
         'RUN_TPU_LOSS_PROBE':True,'TPU_LOSS_CHUNK_TOKENS':256,'TPU_LOSS_PROBE_PASSED':False,
+        'TPU_AOT_BUCKETS':(16384,32768),'TPU_REPORT_DIR':'/tmp/rep','TPU_REPORT_HUB_REPO':'owner/repo','TRACK':'with_tools',
+        'STAGE':'dentex_alone','HF_RUN_TAG':'tpu_bf16','TPU_REPORT_HEARTBEAT_SECONDS':60,'TPU_REPORT_STACK_SECONDS':900,
+        'TPU_REPORT_TPU_INFO_SECONDS':300,'TPU_REPORT_STEP_SNAPSHOT_EVERY':25,'TPU_REPORT_UPLOAD_SECONDS':600,
         'get_ipython':lambda:SimpleNamespace(system=lambda command:shell.append(command))}
     from IPython.core.inputtransformer2 import TransformerManager
+    # Run the notebook's own report-flag builder, not a copy of it.
+    config=next(text(c) for c in cells() if 'def tpu_report_flags' in text(c))
+    builder=next(n for n in ast.parse(config).body if isinstance(n,ast.FunctionDef) and n.name=='tpu_report_flags')
+    exec(compile(ast.Module([builder],[]),str(NOTEBOOK),'exec'),ns)
     aot=next(text(c) for c in cells() if 'warmup_cmd = [' in text(c))
     exec(compile(TransformerManager().transform_cell(aot),str(NOTEBOOK),'exec'),ns)
     cmd=ns['warmup_cmd'];monkeypatch.setattr(sys,'argv',cmd)
@@ -84,7 +97,11 @@ def test_aot_uses_matching_tpu_chunk_and_lora_settings(monkeypatch):
     from scripts.warmup_xla_cache import parse_args
     args=parse_args()
     assert args.tpu_loss_chunk_tokens==256 and args.lora_r==16 and args.lora_alpha==32
-    assert args.lora_dropout==.07 and args.learning_rate==1e-5 and args.max_seq_len==16384
+    assert args.lora_dropout==.07 and args.learning_rate==1e-5 and args.max_seq_len==32768
+    assert args.buckets==[16384,32768]   # ascending ladder, each recorded in the run report
+    assert args.tpu_report_dir=='/tmp/rep/aot' and args.tpu_report_hub_repo=='owner/repo'
+    assert args.tpu_report_hub_subfolder=='tpu_reports/with_tools_dentex_alone/tpu_bf16/aot'
+    assert args.tpu_report_stack_seconds==900 and args.tpu_report_step_snapshot_every==25
     assert ns['TPU_LOSS_PROBE_PASSED'] and 'scripts/probe_tpu_chunked_loss.py' in calls[0]
     assert '--loss-chunk-tokens' not in cmd
     assert 'PJRT_DEVICE' not in os.environ

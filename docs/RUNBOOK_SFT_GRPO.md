@@ -246,7 +246,7 @@ python scripts/census_vision_slots.py data/traces/train_cot_traces_dentex.jsonl 
 ```
 It prints, per candidate length, how many traces fit (text + 7,488), and exits with an error listing any trace that needs more images than the slot budget.
 
-**B4. Memory test at 16384, with and without the solver replacement** (this answers whether replacing `solve_triangular` fixes the out-of-memory)
+**B4. Memory test at 16384 (the notebooks now probe 16384 then 32768 with `warmup_xla_cache.py --buckets`; see `docs/TPU_DIAGNOSTICS.md`), with and without the solver replacement** (this answers whether replacing `solve_triangular` fixes the out-of-memory)
 ```
 python scripts/warmup_xla_cache.py --spmd --fsdp --num-cores 8 --max-seq-len 16384 --pad-vision-to-slots --vision-slots 5 10 4 --triangular-shim --lora-linear-attn
 python scripts/warmup_xla_cache.py --spmd --fsdp --num-cores 8 --max-seq-len 16384 --pad-vision-to-slots --vision-slots 5 10 4 --no-triangular-shim --lora-linear-attn
