@@ -135,6 +135,11 @@ def generation_kwargs(model) -> dict[str, Any]:
 
 
 def generate_local(model, **kwargs):
+    if getattr(model, '_dental_tpu_generation', None) is not None:
+        # TPU only, opt-in (--tpu-generation-chunk-tokens): static-shape chunked prefill + fixed-cache decode, because
+        # model.generate would compile a new XLA graph for every generated token. GPU/CPU never set this attribute.
+        from dental_agent.model.tpu_generation import tpu_generate_local
+        return tpu_generate_local(model, **kwargs)
     kwargs = {**generation_kwargs(model), **kwargs}
     with local_context(model), torch.inference_mode():
         return model.generate(**kwargs)

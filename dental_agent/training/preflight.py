@@ -212,6 +212,26 @@ def _check_flags(args: Any, rep: _Report) -> None:
         ok = False
     elif tpu_lp:
         rep.add(INFO, "tpu-logprob-chunk-tokens", f"fixed positions per row={tpu_lp}; the XLA loop is checked at start, before weights load")
+    tpu_gen = int(getattr(args, "tpu_generation_chunk_tokens", 0) or 0)
+    if tpu_gen:
+        tiers = tuple(int(t) for t in getattr(args, "tpu_generation_tiers", ()) or ())
+        if tpu_gen < 0 or tpu_gen % 64:
+            rep.add(FAIL, "tpu-generation-chunk-tokens", "must be a positive multiple of 64.")
+            ok = False
+        elif not (args.spmd and args.fsdp and args.pad_vision_to_slots and args.canonical_resize):
+            rep.add(FAIL, "tpu-generation-chunk-tokens",
+                    "TPU static generation requires --spmd --fsdp --canonical-resize --pad-vision-to-slots.")
+            ok = False
+        elif not tiers or any(t % tpu_gen for t in tiers):
+            rep.add(FAIL, "tpu-generation-tiers", f"every tier must be a multiple of the chunk {tpu_gen}: {list(tiers)}.")
+            ok = False
+        else:
+            rep.add(INFO, "tpu-generation", f"chunk={tpu_gen}, cache tiers={list(tiers)}; each (batch, tier) compiles 4 programs "
+                    f"at start-up (--tpu-generation-warmup); a prompt + max-new-tokens beyond {tiers[-1]} is dropped and counted")
+            if tiers[-1] < args.max_seq_len:
+                rep.add(WARN, "tpu-generation-tiers",
+                        f"largest tier {tiers[-1]} < --max-seq-len {args.max_seq_len}: a rollout the update could still hold "
+                        "would be refused at generation time.")
     if args.pad_vision_to_slots:
         room = args.max_seq_len - slot_totals(parse_slot_budget(*args.vision_slots))["tokens"]
         rep.add(INFO, "text room", f"{room} text tokens per sample after the static vision tokens (max-seq-len {args.max_seq_len})")

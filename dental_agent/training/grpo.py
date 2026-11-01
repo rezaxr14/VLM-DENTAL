@@ -30,6 +30,9 @@ from dental_agent.model.backbone import load_model, apply_lora, safe_process_vis
 from dental_agent.model.checkpoints import save_checkpoint
 from dental_agent.training import tpu_diagnostics as _diag  # opt-in run report; no-op without --tpu-report-dir
 from dental_agent.agent.loop import run_agent, run_agent_no_tools, AgentTrajectory
+from dental_agent.model.tpu_generation import GenerationTooLong, SlotOverflow
+
+_GENERATION_REFUSED = (GenerationTooLong, SlotOverflow)
 from dental_agent.agent.prompts import FIRST_USER_PROMPT, NO_TOOLS_SYSTEM_PROMPT, build_agent_system_prompt
 from dental_agent.agent.parsing import parse_agent_json
 from dental_agent.data.fdi_utils import row_to_fdi
@@ -312,19 +315,27 @@ def collect_grpo_group_batched_with_tools(
 
     # Roll out K trajectories with KV-cache reuse enabled
     for _ in range(group_size):
-        traj = run_agent(
-            image_id=image_id,
-            images_df=images_df,
-            model=model,
-            processor=processor,
-            registry=registry,
-            max_tool_calls=max_tool_calls,
-            verbose=False,
-            canonical_resize=canonical_resize,
-            temperature=temperature,
-            max_new_tokens=max_new_tokens,
-            harness=harness,
-        )
+        try:
+            traj = run_agent(
+                image_id=image_id,
+                images_df=images_df,
+                model=model,
+                processor=processor,
+                registry=registry,
+                max_tool_calls=max_tool_calls,
+                verbose=False,
+                canonical_resize=canonical_resize,
+                temperature=temperature,
+                max_new_tokens=max_new_tokens,
+                harness=harness,
+            )
+        except _GENERATION_REFUSED as exc:
+            # TPU static generation refused a turn (context + max_new_tokens beyond the largest cache tier, or more tool
+            # images than --vision-slots). Nothing is truncated; the rollout is dropped and counted.
+            from dental_agent.model.tpu_generation import note_dropped_rollouts
+            note_dropped_rollouts(model, 1)
+            print(f"[GRPO] rollout dropped (TPU generation refused): {exc}", flush=True)
+            continue
         traj_dict = traj.to_dict() if hasattr(traj, "to_dict") else traj
         reward, _ = combine_reward(traj_dict, ground_truth, max_tool_calls=max_tool_calls)
 
@@ -569,23 +580,33 @@ def grpo_step(
     t_step_start = time.perf_counter()
 
     # 1. On-policy rollout collection
+    _gen_cfg = getattr(rollout_model, "_dental_tpu_generation", None)
+    _gen_dropped_before = _gen_cfg.stats["rollouts_dropped"] if _gen_cfg is not None else 0
     for image_id, ground_truth in image_ids_and_gts:
-        trajs, rewards, old_lps, masks = collect_grpo_group(
-            model=rollout_model,
-            processor=processor,
-            image_id=image_id,
-            images_df=images_df,
-            ground_truth=ground_truth,
-            registry=registry,
-            group_size=group_size,
-            max_tool_calls=max_tool_calls,
-            track=track,
-            canonical_resize=canonical_resize,
-            compute_old_log_probs=train_collator is None,
-            temperature=temperature,
-            max_new_tokens=max_new_tokens,
-            harness=harness,
-        )
+        try:
+            trajs, rewards, old_lps, masks = collect_grpo_group(
+                model=rollout_model,
+                processor=processor,
+                image_id=image_id,
+                images_df=images_df,
+                ground_truth=ground_truth,
+                registry=registry,
+                group_size=group_size,
+                max_tool_calls=max_tool_calls,
+                track=track,
+                canonical_resize=canonical_resize,
+                compute_old_log_probs=train_collator is None,
+                temperature=temperature,
+                max_new_tokens=max_new_tokens,
+                harness=harness,
+            )
+        except _GENERATION_REFUSED as exc:   # batched no_tools generation: the whole group was refused
+            from dental_agent.model.tpu_generation import note_dropped_rollouts
+            note_dropped_rollouts(rollout_model, group_size)
+            print(f"[GRPO] group dropped (TPU generation refused): {exc}", flush=True)
+            continue
+        if not trajs:        # every rollout of this group was dropped; nothing to learn from
+            continue
         advantages, current_baseline = compute_group_advantages(
             rewards=rewards,
             running_ema_baseline=current_baseline,
@@ -732,6 +753,7 @@ def grpo_step(
         "track": track,
         "n_dropped_overlength": n_dropped_overlength,
         "n_dropped_slot_overflow": n_dropped_slots,
+        "n_dropped_generation": (_gen_cfg.stats["rollouts_dropped"] - _gen_dropped_before) if _gen_cfg is not None else 0,
         **{f"slot_peak_{fam.lower()}": used for fam, used in slot_peak.items()},
         "n_groups": len(groups),
         "n_tied_groups": n_tied_groups,
@@ -872,6 +894,9 @@ def train_grpo(
     harness_mode: str = "off",
     seed: int | None = None,
     tpu_logprob_chunk_tokens: int = 0,
+    tpu_generation_chunk_tokens: int = 0,
+    tpu_generation_tiers: tuple[int, ...] = (8192, 16384, 32768),
+    tpu_generation_warmup: bool = True,
 ) -> str:
     """Execute Stage 2 GRPO policy optimization with dual-adapter reference and group advantage normalization."""
     from peft import PeftModel, LoraConfig
@@ -898,6 +923,11 @@ def train_grpo(
         chunk_tokens=tpu_logprob_chunk_tokens, is_tpu=is_tpu, spmd=use_spmd, fsdp=use_fsdp,
         pad_vision_to_slots=pad_vision_to_slots,
         logprob_chunk_tokens=int(getattr(runtime_options, "logprob_chunk_tokens", 0) or 0),
+    )
+    from dental_agent.model.tpu_generation import validate_tpu_generation_args
+    validate_tpu_generation_args(
+        chunk_tokens=tpu_generation_chunk_tokens, tiers=tpu_generation_tiers, is_tpu=is_tpu, spmd=use_spmd, fsdp=use_fsdp,
+        pad_vision_to_slots=pad_vision_to_slots, canonical_resize=canonical_resize,
     )
     if tpu_logprob_chunk_tokens:
         from dental_agent.training.tpu_chunked_loss import require_xla_loop
@@ -1025,8 +1055,22 @@ def train_grpo(
         if tpu_logprob_chunk_tokens:
             from dental_agent.training.tpu_chunked_logprobs import install_tpu_chunked_logprobs
             install_tpu_chunked_logprobs(model, tpu_logprob_chunk_tokens, mesh=spmd_mesh)  # before FSDP wrapping
+        if tpu_generation_chunk_tokens:
+            from dental_agent.model.tpu_generation import TPUGenerationConfig, install_tpu_generation
+            from dental_agent.utils.canonical import SLOT_BUDGET as _DEFAULT_SLOTS
+            # Rollouts and evaluation prompts carry the same canonical static vision slots as the policy update.
+            install_tpu_generation(model, TPUGenerationConfig(
+                chunk_tokens=tpu_generation_chunk_tokens, cache_tiers=tuple(tpu_generation_tiers),
+                slot_budget=dict(slot_budget or _DEFAULT_SLOTS), batch_multiple=num_cores, mesh=spmd_mesh))
         model = wrap_spmd_model(model, mesh=spmd_mesh, is_master=True)
         rows_per_forward = num_cores  # one trajectory per core in every policy forward
+        if tpu_generation_chunk_tokens and tpu_generation_warmup:
+            from dental_agent.model.tpu_generation import warmup_tpu_generation
+            model.eval()
+            _diag.begin("tpu_generation_warmup")
+            warm = warmup_tpu_generation(unwrap_peft_model(model), processor, batches=sorted({1, int(G)}))
+            _diag.end("tpu_generation_warmup")
+            print(f"[GRPO] TPU generation warm-up: {warm}", flush=True)
     else:
         model = wrap_distributed_model(model, is_tpu=is_tpu, num_cores=num_cores, use_fsdp=use_fsdp)
 
@@ -1102,10 +1146,13 @@ def train_grpo(
         )
         log_grpo_step(stats, log_path=log_path, extra={"step": step, "image_id": int(img_id), "harness_mode": harness_mode})
         print(f"[GRPO Step {step}/{total_steps}] mean_reward={stats['mean_reward']:.3f} kl={stats['kl_divergence']:.4f}"
-              + (f" dropped(slots={stats.get('n_dropped_slot_overflow', 0)}, length={stats.get('n_dropped_overlength', 0)})"
-                 if stats.get('n_dropped_slot_overflow', 0) or stats.get('n_dropped_overlength', 0) else ""))
+              + (f" dropped(slots={stats.get('n_dropped_slot_overflow', 0)}, length={stats.get('n_dropped_overlength', 0)}, "
+                 f"generation={stats.get('n_dropped_generation', 0)})"
+                 if (stats.get('n_dropped_slot_overflow', 0) or stats.get('n_dropped_overlength', 0)
+                     or stats.get('n_dropped_generation', 0)) else ""))
         _diag.step(step, mean_reward=stats['mean_reward'], kl=stats['kl_divergence'],
-                   dropped_slots=stats.get('n_dropped_slot_overflow', 0), dropped_length=stats.get('n_dropped_overlength', 0))
+                   dropped_slots=stats.get('n_dropped_slot_overflow', 0), dropped_length=stats.get('n_dropped_overlength', 0),
+                   dropped_generation=stats.get('n_dropped_generation', 0))
 
         if (push_every_steps > 0 and step % push_every_steps == 0) or step == total_steps:
             step_tag = f"grpo-{track}-step-{step}"

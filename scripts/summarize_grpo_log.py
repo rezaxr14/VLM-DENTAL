@@ -59,6 +59,7 @@ def summarize(rows: list[dict], pool_size: int, skip_first: int = 2, project_k: 
         "mean_reward": statistics.fmean(r["mean_reward"] for r in used if "mean_reward" in r),
         "dropped_overlength": sum(int(r.get("n_dropped_overlength", 0)) for r in used),
         "dropped_slot_overflow": sum(int(r.get("n_dropped_slot_overflow", 0)) for r in used),
+        "dropped_generation": sum(int(r.get("n_dropped_generation", 0)) for r in used),
         # Highest per-family image count any rollout demanded (dropped ones included): what --vision-slots must cover.
         "slot_peak": {fam: max(int(r.get(f"slot_peak_{fam}", 0)) for r in used) for fam in ("full", "crop", "compare")
                       if any(f"slot_peak_{fam}" in r for r in used)},
@@ -77,6 +78,8 @@ def format_summary(s: dict) -> str:
         f"(p90 {s['p90_step_s']:.0f} s)",
         f"Rollouts: {s['mean_turns']:.1f} turns, {s['mean_tool_calls']:.1f} tool calls per trajectory, "
         f"format ok {s['format_ok_rate']:.0%}, {s['dropped_overlength']} dropped over-length",
+        *([f"TPU generation: {s['dropped_generation']} rollouts refused (prompt + max-new-tokens beyond the largest cache tier "
+           "or over the vision-slot budget) and dropped"] if s.get("dropped_generation") else []),
         *([f"Vision slots: {s['dropped_slot_overflow']} rollouts dropped over budget; peak demand "
            + ", ".join(f"{fam.upper()} {n}" for fam, n in s["slot_peak"].items())] if s.get("slot_peak") else []),
         f"Mean reward {s['mean_reward']:.3f}",

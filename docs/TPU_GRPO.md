@@ -1,6 +1,6 @@
 # TPU GRPO (patch 0061): chunked scoring, extra vision slots, merger training
 
-Scope: the TPU **policy update and scoring**. Rollout generation on TPU is unchanged here (still dynamic shapes; patch 0062).
+Scope: the TPU **policy update and scoring**. Rollout generation on TPU is covered by patch 0062 (`docs/TPU_GENERATION.md`).
 GPU/CPU paths are untouched: every new behaviour is TPU-only and behind explicit flags.
 
 ## What changed

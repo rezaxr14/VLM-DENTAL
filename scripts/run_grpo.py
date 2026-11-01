@@ -252,6 +252,29 @@ def main() -> None:
              "--pad-vision-to-slots. Not the GPU --logprob-chunk-tokens, which TPU rejects.",
     )
     parser.add_argument(
+        "--tpu-generation-chunk-tokens",
+        type=int,
+        default=0,
+        help="TPU only: generate rollouts with the static-shape generator (chunked prefill of this many tokens, one fixed "
+             "KV cache per tier, one decode graph) instead of model.generate, which compiles a new XLA graph per generated "
+             "token. 0 = off (stock generate). Multiple of 64. Requires --spmd --fsdp --canonical-resize --pad-vision-to-slots.",
+    )
+    parser.add_argument(
+        "--tpu-generation-tiers",
+        type=int,
+        nargs="+",
+        default=[8192, 16384, 32768],
+        help="TPU static generation: KV-cache sizes (tokens, multiples of the chunk). A prompt + --max-new-tokens uses the "
+             "smallest tier that holds it; one that fits no tier is dropped and counted, never truncated.",
+    )
+    parser.add_argument(
+        "--tpu-generation-warmup",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Compile every generation tier at start-up (a real prefill at the largest tier), so a compile or memory problem "
+             "shows in the first minutes of the run report. A tier that fails is disabled instead of ending the run.",
+    )
+    parser.add_argument(
         "--triangular-shim",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -482,6 +505,9 @@ def run_worker(index: int, args: argparse.Namespace):
         gradient_checkpointing=args.gradient_checkpointing,
         harness_mode=args.harness_mode, seed=args.seed,
         tpu_logprob_chunk_tokens=args.tpu_logprob_chunk_tokens,
+        tpu_generation_chunk_tokens=args.tpu_generation_chunk_tokens,
+        tpu_generation_tiers=tuple(args.tpu_generation_tiers),
+        tpu_generation_warmup=args.tpu_generation_warmup,
     )
 
 
