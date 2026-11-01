@@ -25,6 +25,12 @@ def token_log_probs(model, enc, chunk_tokens=0):
     labels = enc['labels']
     body_inputs = {k:v for k,v in enc.items() if k not in {'labels','logits_to_keep','num_items_in_batch','return_dict'}}
     body_inputs['use_cache'] = False
+    if labels.device.type == 'xla' and getattr(model, '_dental_tpu_logprob_chunk_tokens', 0):
+        # TPU: installed by dental_agent.training.tpu_chunked_logprobs (fixed-shape XLA loop, no [B,T,V] logits). The
+        # CUDA/CPU branches below are untouched.
+        from dental_agent.training.tpu_chunked_logprobs import SCORE_KWARG
+        scored = model(**body_inputs, **{SCORE_KWARG: labels})
+        return scored.log_probs, scored.mask
     if not chunk_tokens:
         outputs = model(**body_inputs)
         logits = outputs.logits[:, :-1].float()

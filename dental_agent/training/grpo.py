@@ -603,11 +603,19 @@ def grpo_step(
     # behaviour-policy log-probs with exactly the shapes used by the update (one compiled graph, no per-length recompiles).
     groups_static: list[tuple[list[dict[str, torch.Tensor]], torch.Tensor, list[torch.Tensor]]] = []
     n_dropped_overlength = 0
+    n_dropped_slots = 0
+    slot_peak: dict[str, int] = {fam: 0 for fam in train_collator.slot_budget} if train_collator is not None else {}
     if train_collator is not None:
         for trajs, advantages, _, _ in groups:
             kept_idx, encs = [], []
             for i, traj in enumerate(trajs):
                 enc = build_full_trajectory_labels(traj, processor)
+                # Peak demand is recorded for EVERY rollout (also dropped ones): it is what --vision-slots must cover.
+                for fam, used in train_collator.slot_usage(enc).items():
+                    slot_peak[fam] = max(slot_peak[fam], used)
+                if train_collator.slot_overflow(enc):
+                    n_dropped_slots += 1   # more tool images of a family than the static budget: drop and count, never crash
+                    continue
                 if train_collator.padded_length(enc) > train_collator.max_seq_len:
                     n_dropped_overlength += 1
                     continue
@@ -619,6 +627,15 @@ def grpo_step(
                 gen_free_model, encs, train_collator, rows_per_forward, _to_device
             )
             groups_static.append((encs, advantages[torch.tensor(kept_idx, dtype=torch.long)], old_lps))
+        if n_dropped_slots:
+            import warnings
+            warnings.warn(
+                f"[GRPO] {n_dropped_slots} rollout(s) used more images than --vision-slots {dict(train_collator.slot_budget)} "
+                f"(peak demand this step {slot_peak}) and were excluded from this update (rewards/advantages unchanged). "
+                "Raise --vision-slots (extra slots stay empty and masked) if this repeats.",
+                UserWarning,
+                stacklevel=2,
+            )
         if n_dropped_overlength:
             import warnings
             warnings.warn(
@@ -714,6 +731,8 @@ def grpo_step(
         "group_size": group_size,
         "track": track,
         "n_dropped_overlength": n_dropped_overlength,
+        "n_dropped_slot_overflow": n_dropped_slots,
+        **{f"slot_peak_{fam.lower()}": used for fam, used in slot_peak.items()},
         "n_groups": len(groups),
         "n_tied_groups": n_tied_groups,
         # Cost and behaviour diagnostics. Rollout = sampling the K trajectories (incl. tool calls); update = static
@@ -852,6 +871,7 @@ def train_grpo(
     gradient_checkpointing: bool = True,
     harness_mode: str = "off",
     seed: int | None = None,
+    tpu_logprob_chunk_tokens: int = 0,
 ) -> str:
     """Execute Stage 2 GRPO policy optimization with dual-adapter reference and group advantage normalization."""
     from peft import PeftModel, LoraConfig
@@ -873,6 +893,15 @@ def train_grpo(
 
     import importlib.util
     is_tpu = importlib.util.find_spec('torch_xla') is not None and not torch.cuda.is_available()
+    from dental_agent.training.tpu_chunked_logprobs import validate_tpu_logprob_args
+    validate_tpu_logprob_args(
+        chunk_tokens=tpu_logprob_chunk_tokens, is_tpu=is_tpu, spmd=use_spmd, fsdp=use_fsdp,
+        pad_vision_to_slots=pad_vision_to_slots,
+        logprob_chunk_tokens=int(getattr(runtime_options, "logprob_chunk_tokens", 0) or 0),
+    )
+    if tpu_logprob_chunk_tokens:
+        from dental_agent.training.tpu_chunked_loss import require_xla_loop
+        require_xla_loop()  # fail before the 9B weights load; there is no Python-unrolled fallback
     if runtime_options is None:
         model, processor = load_model(config)  # preserve legacy stand-in loaders in tests/callers
     else:
@@ -978,8 +1007,24 @@ def train_grpo(
         if not use_fsdp:
             raise ValueError("SPMD shards weights through FSDPv2; use_fsdp=False would replicate 18 GB on every core.")
         from dental_agent.training.sft import freeze_and_guard_vision_tower, setup_spmd_mesh, wrap_spmd_model
-        freeze_and_guard_vision_tower(model, train_merger=False)
+        # Same rule as the CUDA branch above: the projector (merger) LoRA the SFT trained keeps training in GRPO.
+        # It used to be frozen unconditionally on TPU, so GRPO silently stopped adapting the vision projector there.
+        train_merger = any(p.requires_grad and '.visual.' in n and 'merger' in n for n, p in model.named_parameters())
+        freeze_and_guard_vision_tower(model, train_merger=train_merger)
+        print(f"[GRPO] TPU vision projector (merger LoRA) trainable: {train_merger}", flush=True)
+        if gradient_checkpointing:
+            # Same settings as the TPU SFT: without checkpointing a 32k-token policy forward keeps every layer's
+            # activations. fork_rng() looks up torch.xla even with preserve_rng_state=False, hence the registration.
+            if not hasattr(torch, "xla"):
+                import torch_xla
+                torch._register_device_module("xla", torch_xla)
+            model.enable_input_require_grads()
+            model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": True, "preserve_rng_state": False})
+            print("[GRPO] TPU gradient checkpointing enabled (use_reentrant=True, preserve_rng_state=False); rollouts run in eval mode.", flush=True)
         spmd_mesh = setup_spmd_mesh(num_cores=num_cores)
+        if tpu_logprob_chunk_tokens:
+            from dental_agent.training.tpu_chunked_logprobs import install_tpu_chunked_logprobs
+            install_tpu_chunked_logprobs(model, tpu_logprob_chunk_tokens, mesh=spmd_mesh)  # before FSDP wrapping
         model = wrap_spmd_model(model, mesh=spmd_mesh, is_master=True)
         rows_per_forward = num_cores  # one trajectory per core in every policy forward
     else:
@@ -1056,8 +1101,11 @@ def train_grpo(
             harness=harness,
         )
         log_grpo_step(stats, log_path=log_path, extra={"step": step, "image_id": int(img_id), "harness_mode": harness_mode})
-        print(f"[GRPO Step {step}/{total_steps}] mean_reward={stats['mean_reward']:.3f} kl={stats['kl_divergence']:.4f}")
-        _diag.step(step, mean_reward=stats['mean_reward'], kl=stats['kl_divergence'])
+        print(f"[GRPO Step {step}/{total_steps}] mean_reward={stats['mean_reward']:.3f} kl={stats['kl_divergence']:.4f}"
+              + (f" dropped(slots={stats.get('n_dropped_slot_overflow', 0)}, length={stats.get('n_dropped_overlength', 0)})"
+                 if stats.get('n_dropped_slot_overflow', 0) or stats.get('n_dropped_overlength', 0) else ""))
+        _diag.step(step, mean_reward=stats['mean_reward'], kl=stats['kl_divergence'],
+                   dropped_slots=stats.get('n_dropped_slot_overflow', 0), dropped_length=stats.get('n_dropped_overlength', 0))
 
         if (push_every_steps > 0 and step % push_every_steps == 0) or step == total_steps:
             step_tag = f"grpo-{track}-step-{step}"

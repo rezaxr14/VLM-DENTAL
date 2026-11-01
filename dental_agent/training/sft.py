@@ -389,6 +389,31 @@ class BucketedQwenVLCollator:
             raise ValueError("Slot padding produced shapes that differ from the configured --vision-slots budget.")
         return out
 
+    def slot_usage(self, ex: dict[str, Any]) -> dict[str, int]:
+        """Images of each canonical family ``ex`` carries (read from ``image_grid_thw``; no padding is applied).
+
+        A grid that is not a canonical family raises: that is a view-pipeline bug, not an over-budget trace."""
+        usage = {fam: 0 for fam in self.slot_budget}
+        grid = ex.get("image_grid_thw")
+        if grid is None:
+            return usage
+        for row in grid.tolist():
+            fam = family_from_grid(tuple(row))
+            if fam is None:
+                raise ValueError(
+                    f"slot_usage: image grid {tuple(row)} is not a canonical family "
+                    f"{ {f: canonical_grid_thw(f) for f in CANONICAL_SIZES} }. Enable canonical_resize."
+                )
+            usage[fam] += 1
+        return usage
+
+    def slot_overflow(self, ex: dict[str, Any]) -> dict[str, int]:
+        """Families whose image count exceeds the static budget, as ``{family: images over budget}`` (empty = fits).
+
+        ``_pad_vision_slots`` raises on such a trace (SFT must never silently lose an image). GRPO rollouts call this
+        first and drop-and-count the rollout instead, so one tool-heavy rollout cannot end a multi-hour TPU run."""
+        return {fam: n - self.slot_budget[fam] for fam, n in self.slot_usage(ex).items() if n > self.slot_budget[fam]}
+
     def padded_length(self, ex: dict[str, Any]) -> int:
         """Sequence length ``ex`` will occupy after static vision-slot padding (text + static vision tokens)."""
         ids = ex["input_ids"]

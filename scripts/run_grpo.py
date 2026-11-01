@@ -238,7 +238,18 @@ def main() -> None:
         nargs=3,
         metavar=("FULL", "CROP", "COMPARE"),
         default=[SLOT_BUDGET["FULL"], SLOT_BUDGET["CROP"], SLOT_BUDGET["COMPARE"]],
-        help="Static slot budget (must equal the SFT run's --vision-slots).",
+        help="Static slot budget. May be LARGER than the SFT run's: GRPO rollouts can return more tool images than an SFT "
+             "trace, and the extra slots stay empty and masked (zero patches, attention_mask=0, labels=-100). A rollout that "
+             "still exceeds it is dropped and counted (n_dropped_slot_overflow), never a crash. Costs vision compute in "
+             "every forward and leaves less text room under --max-seq-len.",
+    )
+    parser.add_argument(
+        "--tpu-logprob-chunk-tokens",
+        type=int,
+        default=0,
+        help="TPU only: score the policy/reference/old log-probabilities in fixed chunks of this many positions per row "
+             "(XLA while-loop, frozen-head recomputed backward, no [B,T,V] logits). 0 = off. Requires --spmd --fsdp "
+             "--pad-vision-to-slots. Not the GPU --logprob-chunk-tokens, which TPU rejects.",
     )
     parser.add_argument(
         "--triangular-shim",
@@ -470,6 +481,7 @@ def run_worker(index: int, args: argparse.Namespace):
         runtime_options=runtime_from_args(args),
         gradient_checkpointing=args.gradient_checkpointing,
         harness_mode=args.harness_mode, seed=args.seed,
+        tpu_logprob_chunk_tokens=args.tpu_logprob_chunk_tokens,
     )
 
 

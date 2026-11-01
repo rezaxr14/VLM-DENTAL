@@ -131,7 +131,13 @@ def _check_sft_consistency(args: Any, sft_dir: Path, dev_keys: set[str], rep: _R
     if meta.get("max_seq_len") not in (None, args.max_seq_len):
         rep.add(WARN, "max-seq-len vs SFT", f"SFT {meta['max_seq_len']}, GRPO {args.max_seq_len}; use the SFT value.")
     if args.pad_vision_to_slots and meta.get("vision_slots") not in (None, list(args.vision_slots)):
-        rep.add(WARN, "vision-slots vs SFT", f"SFT {meta['vision_slots']}, GRPO {list(args.vision_slots)}.")
+        sft_slots, grpo_slots = list(meta["vision_slots"]), list(args.vision_slots)
+        if len(sft_slots) == len(grpo_slots) and all(g >= s for g, s in zip(grpo_slots, sft_slots)):
+            rep.add(INFO, "vision-slots vs SFT", f"SFT {sft_slots}, GRPO {grpo_slots}: a larger budget; the extra slots stay empty and "
+                    "masked. GRPO compiles its own graph, so no SFT shape is reused or invalidated.")
+        else:
+            rep.add(WARN, "vision-slots vs SFT", f"SFT {sft_slots}, GRPO {grpo_slots}: GRPO has fewer slots of some family than SFT, "
+                    "so tool-heavy rollouts are dropped (and counted) more often.")
     sft_prec, grpo_prec = meta.get("precision"), getattr(args, "precision", None)
     if sft_prec and grpo_prec and sft_prec != grpo_prec and "qlora" in (sft_prec, grpo_prec):
         rep.add(WARN, "precision vs SFT", f"SFT was trained with --precision {sft_prec}, GRPO runs --precision {grpo_prec}: the adapter "
@@ -194,6 +200,21 @@ def _check_flags(args: Any, rep: _Report) -> None:
         if args.max_seq_len <= tokens:
             rep.add(FAIL, "max-seq-len", f"{args.max_seq_len} cannot hold the {tokens} static vision tokens of --vision-slots.")
             ok = False
+    tpu_lp = int(getattr(args, "tpu_logprob_chunk_tokens", 0) or 0)
+    if tpu_lp < 0:
+        rep.add(FAIL, "tpu-logprob-chunk-tokens", "must be nonnegative.")
+        ok = False
+    elif tpu_lp and not (args.spmd and args.fsdp and args.pad_vision_to_slots):
+        rep.add(FAIL, "tpu-logprob-chunk-tokens", "TPU chunked scoring requires --spmd --fsdp --pad-vision-to-slots (fixed shapes).")
+        ok = False
+    elif tpu_lp and getattr(args, "logprob_chunk_tokens", 0):
+        rep.add(FAIL, "tpu-logprob-chunk-tokens", "use it instead of --logprob-chunk-tokens (the GPU flag), not together with it.")
+        ok = False
+    elif tpu_lp:
+        rep.add(INFO, "tpu-logprob-chunk-tokens", f"fixed positions per row={tpu_lp}; the XLA loop is checked at start, before weights load")
+    if args.pad_vision_to_slots:
+        room = args.max_seq_len - slot_totals(parse_slot_budget(*args.vision_slots))["tokens"]
+        rep.add(INFO, "text room", f"{room} text tokens per sample after the static vision tokens (max-seq-len {args.max_seq_len})")
     if ok:
         rep.add(PASS, "flags", "combination is consistent")
     if args.max_seq_len != 16384:
