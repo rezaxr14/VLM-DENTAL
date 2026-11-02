@@ -29,8 +29,9 @@ its decoded-output/F1 gates; missing counters stay null. Use the companion specu
 for a compatible separate serving environment and optional MTP-only training. This final notebook
 only compares measured before/after files and starts no such training.
 
-The native evaluator has no sharded 9B TPU generation. It cannot treat 8×16-GB cores as pooled HBM;
-the notebook stops before loading this target on TPU. CPU/TPU aggregation works with
+On a TPU the `tpu` profile evaluates with sharded 9B static-shape generation (`docs/TPU_EVALUATION.md`):
+8×16-GB cores are never treated as pooled HBM, the weights are sharded over the mesh. Speculative
+serving has no TPU path and stays pending. CPU/TPU aggregation also works with
 AGGREGATE_ONLY=True, the original evidence profile, and AGGREGATE_SOURCE_DIR pointing to a saved
 phase folder with run_config.json/run_identity.json/cohort.json and JSONLs. CUDA profiles request
 T4 FP16 QLoRA, 4090 BF16 QLoRA and 48-GB BF16 inference. Fit/support/speed require real runtime runs.

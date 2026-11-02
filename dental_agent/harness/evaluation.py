@@ -26,10 +26,12 @@ def atomic_json(path, value):
 def pooled(records):
     tp=sum(x['exact_tp'] for x in records);fp=sum(x['exact_fp'] for x in records);fn=sum(x['exact_fn'] for x in records)
     denom=2*tp+fp+fn
+    refused=sum(1 for x in records if x.get('generation_refused'))
     return dict(exact_tp=tp,exact_fp=fp,exact_fn=fn,
                 pooled_exact_f1=2*tp/denom if denom else None,
                 invented_findings_rate=fp/(tp+fp) if tp+fp else None,
-                format_failures=sum(not x['format_ok'] for x in records),episodes=len(records))
+                format_failures=sum(not x['format_ok'] for x in records),episodes=len(records),
+                **({'generation_refused':refused} if refused else {}))   # TPU only: refused episodes score as no answer
 
 def compare_paired(left,right,seed=42,n_boot=2000):
     a={x['image_id']:x for x in left};b={x['image_id']:x for x in right}
@@ -67,7 +69,11 @@ def load_dev(data_dir,dev_split,limit=None,seed=42):
     return ids,subset,annotations,categories
 
 def evaluate_episode(image_id,images,annotations,categories,model=None,processor=None,harness=None,reply_fn=None,
-                     seed=42,max_new_tokens=2048,max_tool_calls=50,max_turns=None,registry=None,tool_observer=None):
+                     seed=42,max_new_tokens=2048,max_tool_calls=50,max_turns=None,registry=None,tool_observer=None,
+                     letterbox=False):
+    """``letterbox=False`` (default, the GPU profiles) shows padded-free canonical views; ``True`` is the TPU profile's black-bar
+    canonical views. A TPU static-generation refusal (prompt beyond the cache tiers / vision slots) is recorded as an episode
+    with no answer and ``generation_refused`` set; it is never truncated and never a crash."""
     import numpy as np
     import torch
     random.seed(seed);np.random.seed(seed);torch.manual_seed(seed)
@@ -75,10 +81,16 @@ def evaluate_episode(image_id,images,annotations,categories,model=None,processor
     from dental_agent.evaluation.ground_truth import extract_ground_truth
     from dental_agent.evaluation.metrics import extract_predicted_findings,match_multi_findings
     from dental_agent.utils.canonical import set_letterbox
-    set_letterbox(False)
-    traj=run_agent(image_id,images,model,processor,registry=registry,canonical_resize=True,temperature=0.0,
-                   max_new_tokens=max_new_tokens,max_tool_calls=max_tool_calls,max_turns=max_turns,
-                   harness=harness,reply_fn=reply_fn,tool_observer=tool_observer,verbose=False)
+    set_letterbox(bool(letterbox))
+    refused=None
+    try:
+        traj=run_agent(image_id,images,model,processor,registry=registry,canonical_resize=True,temperature=0.0,
+                       max_new_tokens=max_new_tokens,max_tool_calls=max_tool_calls,max_turns=max_turns,
+                       harness=harness,reply_fn=reply_fn,tool_observer=tool_observer,verbose=False)
+    except _refusal_types() as exc:
+        from dental_agent.model.tpu_inference import note_refusal,refused_trajectory
+        refused=note_refusal(model,image_id,exc)
+        traj=refused_trajectory(image_id,refused)
     gt=extract_ground_truth(image_id,annotations,categories)
     pred=extract_predicted_findings(traj.final_answer)
     score=match_multi_findings(gt,pred)
@@ -86,4 +98,10 @@ def evaluate_episode(image_id,images,annotations,categories,model=None,processor
                 exact_tp=score['exact_tp'],exact_fp=score['exact_fp'],exact_fn=score['exact_fn'],
                 turns=[dict(turn=t['turn'],raw_output=t['raw_output'],status=t.get('status'),tool_calls=t.get('tool_calls_this_turn',[])) for t in traj.turns],
                 final_answer=traj.final_answer,harness_events=traj.harness_events)
+    if refused:record['generation_refused']=refused
     return record,traj
+
+def _refusal_types():
+    """Raised only by the static TPU generator; on GPU/CPU nothing raises them, so every other error still propagates."""
+    from dental_agent.model.tpu_generation import GenerationTooLong,SlotOverflow
+    return (GenerationTooLong,SlotOverflow)

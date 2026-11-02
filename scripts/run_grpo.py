@@ -289,7 +289,7 @@ def main() -> None:
              "optimised on a different image distribution than it was fine-tuned on.",
     )
     from dental_agent.model.local_runtime import add_runtime_args
-    add_runtime_args(parser, scoring=True)
+    add_runtime_args(parser, scoring=True, tpu_generation=False)   # GRPO has its own --tpu-generation-* (rollouts)
     parser.add_argument('--gradient-checkpointing', action=argparse.BooleanOptionalAction, default=True)
     add_letterbox_arg(parser)
     parser.add_argument(

@@ -271,3 +271,25 @@ def test_generate_local_drop_in_shapes():
     assert out.sequences.shape[0] == 1 and torch.equal(out.sequences[:, :12], ids) and out.past_key_values is None
     with pytest.raises(ValueError):
         tg.tpu_generate_local(model, input_ids=ids, past_key_values=object(), max_new_tokens=2)
+
+
+def test_repetition_penalty_matches_stock_generate():
+    model = tiny()
+    ids = text_prompt(40, 61).unsqueeze(0)
+    mask = torch.ones_like(ids)
+    with torch.no_grad():
+        ref = model.generate(input_ids=ids, attention_mask=mask, max_new_tokens=14, do_sample=False, pad_token_id=0,
+                             repetition_penalty=1.3)[:, ids.shape[1]:]
+    tg.install_tpu_generation(model, cfg())
+    got = tg.tpu_generate(model, {"input_ids": ids, "attention_mask": mask}, max_new_tokens=14, temperature=0.0,
+                          pad_token_id=0, repetition_penalty=1.3)
+    assert equal_until_eos(ref, got), (ref, got)
+
+
+def test_streamer_is_accepted_and_ignored():
+    model = tiny()
+    tg.install_tpu_generation(model, cfg(cache_tiers=(128, 256)))
+    ids = text_prompt(10, 62).unsqueeze(0)
+    out = tg.tpu_generate_local(model, input_ids=ids, attention_mask=torch.ones_like(ids), max_new_tokens=3, do_sample=False,
+                                pad_token_id=0, streamer=object())
+    assert torch.equal(out[:, :10], ids) and 10 < out.shape[1] <= 13

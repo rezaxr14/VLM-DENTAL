@@ -219,9 +219,18 @@ def attention_masks(pad: torch.Tensor, start: torch.Tensor, q_len: int, cache_le
     return {"full_attention": full, "linear_attention": lin}
 
 
-def _sample(logits: torch.Tensor, *, temperature: float, top_k: int | None, top_p: float | None) -> torch.Tensor:
+def _penalize(logits: torch.Tensor, seen: torch.Tensor, penalty: float) -> torch.Tensor:
+    """transformers' ``RepetitionPenaltyLogitsProcessor``: every token already in the sequence is divided (positive logit) or
+    multiplied (negative logit) by ``penalty``. ``seen`` is a ``[B,V]`` bool mask carried through the loop."""
+    return torch.where(seen, torch.where(logits > 0, logits / penalty, logits * penalty), logits)
+
+
+def _sample(logits: torch.Tensor, *, temperature: float, top_k: int | None, top_p: float | None,
+            seen: torch.Tensor | None = None, repetition_penalty: float | None = None) -> torch.Tensor:
     """Next token ``[B]`` from last-position logits ``[B,V]``. ``temperature <= 0`` is greedy."""
     logits = logits.float()
+    if seen is not None and repetition_penalty not in (None, 1.0):
+        logits = _penalize(logits, seen, float(repetition_penalty))
     if temperature is None or temperature <= 0:
         return logits.argmax(-1)
     vocab = logits.shape[-1]
@@ -454,7 +463,7 @@ def _eos_list(model, eos_token_id) -> list[int]:
 def tpu_generate(model: Any, inputs: Mapping[str, Any], *, max_new_tokens: int, temperature: float | None = 0.0,
                  do_sample: bool | None = None, top_k: int | None = None, top_p: float | None = None,
                  eos_token_id: int | Sequence[int] | None = None, pad_token_id: int | None = None,
-                 config: TPUGenerationConfig | None = None) -> torch.Tensor:
+                 repetition_penalty: float | None = None, config: TPUGenerationConfig | None = None) -> torch.Tensor:
     """Generate for the rows of ``inputs`` (a processor output on the CPU). Returns the new tokens ``[B, T]`` on the CPU:
     each row up to and including its first EOS then ``pad_token_id``; ``T`` is the step at which the last row finished
     (at most ``max_new_tokens``), matching ``generate``."""
@@ -472,6 +481,12 @@ def tpu_generate(model: Any, inputs: Mapping[str, Any], *, max_new_tokens: int, 
     if pad_token_id is None:
         pad_token_id = eos[0] if eos else 0
     temperature, top_k, top_p = _resolve_sampling(model, temperature, do_sample, top_k, top_p)
+    if repetition_penalty is None:
+        gc = getattr(model, "generation_config", None) or getattr(base, "generation_config", None)
+        repetition_penalty = getattr(gc, "repetition_penalty", None)
+    use_penalty = repetition_penalty not in (None, 1.0)
+    if use_penalty and float(repetition_penalty) <= 0:
+        raise ValueError("repetition_penalty must be positive")
     q = config.chunk_tokens
     attn_impl = getattr(base.config.text_config if hasattr(base.config, "text_config") else base.config,
                         "_attn_implementation", "sdpa")
@@ -525,7 +540,17 @@ def tpu_generate(model: Any, inputs: Mapping[str, Any], *, max_new_tokens: int, 
             _pin_cache(cache, mesh)
             _step(device)
             config.stats["prefill_chunks"] += 1
-        tok = _sample(head(last_hidden), temperature=temperature, top_k=top_k, top_p=top_p)
+        seen = None
+        if use_penalty:
+            # Every real prompt token counts as "seen", exactly like input_ids in generate (host-built, uploaded once).
+            host_seen = torch.zeros((B, head.out_features), dtype=torch.bool)
+            for b in range(B):
+                host_seen[b, prepared.ids[b, int(prepared.pad[b]):P]] = True
+            seen = _shard(_to(host_seen, device), mesh, ("fsdp", None))
+        sample_kw = dict(temperature=temperature, top_k=top_k, top_p=top_p, repetition_penalty=repetition_penalty)
+        tok = _sample(head(last_hidden), seen=seen, **sample_kw)
+        if use_penalty:
+            seen = seen.scatter(1, tok.unsqueeze(1), torch.ones((B, 1), dtype=torch.bool, device=device))
         _step(device)
 
         eos_dev = torch.tensor(eos if eos else [-1], dtype=torch.long, device=device)
@@ -549,7 +574,9 @@ def tpu_generate(model: Any, inputs: Mapping[str, Any], *, max_new_tokens: int, 
             masks = attention_masks(pad, cur, 1, C, float_mask=float_mask, dtype=dtype, linear=False)
             out = body(inputs_embeds=embeds, position_ids=rope, attention_mask=masks, past_key_values=cache,
                        use_cache=True)
-            tok = _sample(head(out.last_hidden_state[:, -1]), temperature=temperature, top_k=top_k, top_p=top_p)
+            tok = _sample(head(out.last_hidden_state[:, -1]), seen=seen, **sample_kw)
+            if use_penalty:
+                seen = seen.scatter(1, tok.unsqueeze(1), torch.ones((B, 1), dtype=torch.bool, device=device))
             step = step + 1
             _pin_cache(cache, mesh)
             _step(device)
@@ -573,7 +600,9 @@ def tpu_generate_local(model: Any, **kwargs) -> Any:
     new = tpu_generate(model, inputs, max_new_tokens=int(kwargs.get("max_new_tokens", 512)),
                        temperature=kwargs.get("temperature"), do_sample=kwargs.get("do_sample"),
                        top_k=kwargs.get("top_k"), top_p=kwargs.get("top_p"),
-                       eos_token_id=kwargs.get("eos_token_id"), pad_token_id=kwargs.get("pad_token_id"), config=config)
+                       eos_token_id=kwargs.get("eos_token_id"), pad_token_id=kwargs.get("pad_token_id"),
+                       repetition_penalty=kwargs.get("repetition_penalty"), config=config)
+    # ``streamer`` (live token printing) is accepted and ignored: tokens are read back once per step, not streamed.
     sequences = torch.cat([ids.cpu(), new], dim=1)
     if kwargs.get("return_dict_in_generate"):
         return SimpleNamespace(sequences=sequences, past_key_values=None)
@@ -584,7 +613,7 @@ def tpu_generate_local(model: Any, **kwargs) -> Any:
 # Start-up warm-up
 # ---------------------------------------------------------------------------------------------------------------------
 def warmup_tpu_generation(model: Any, processor: Any, *, batches: Sequence[int] = (1,), decode_steps: int = 6,
-                          log=print) -> dict:
+                          max_new_tokens: int = 0, repetition_penalty: float | None = None, log=print) -> dict:
     """Compile every generation program once, per cache tier, before the first rollout (a real 32k-class prefill at the top
     tier, so an out-of-memory shows up in the first minutes of the run report, not after hours of queueing).
 
@@ -606,6 +635,9 @@ def warmup_tpu_generation(model: Any, processor: Any, *, batches: Sequence[int] 
     q = config.chunk_tokens
     report: dict[int, dict] = {}
     for tier in list(config.cache_tiers):
+        if tier < q + max_new_tokens:
+            report[tier] = {"status": f"skipped (cannot hold a prompt chunk plus max_new_tokens={max_new_tokens}; never selected)"}
+            continue
         length = tier - q                       # padded prompt = tier - q, so prompt + decode_steps always fits the tier
         n_text = length - n_vis - 2
         if n_text < 1 or length // q < 4:
@@ -624,7 +656,7 @@ def warmup_tpu_generation(model: Any, processor: Any, *, batches: Sequence[int] 
             t0 = time.perf_counter()
             try:
                 tpu_generate(model, inputs, max_new_tokens=decode_steps, temperature=0.0, eos_token_id=[], pad_token_id=0,
-                             config=config)
+                             repetition_penalty=repetition_penalty, config=config)
                 dt = time.perf_counter() - t0
                 report.setdefault(tier, {})[f"batch{b}_s"] = round(dt, 1)
                 log(f"[TPU GEN WARMUP] tier {tier} batch {b}: ok in {dt:.1f}s", flush=True)
@@ -634,6 +666,6 @@ def warmup_tpu_generation(model: Any, processor: Any, *, batches: Sequence[int] 
                     f"disabled: prompts that need it are dropped and counted, the run continues.", flush=True)
                 config.cache_tiers = tuple(t for t in config.cache_tiers if t != tier)
                 break
-    if not config.cache_tiers:
-        raise RuntimeError("Every TPU generation cache tier failed its warm-up; see the [TPU GEN WARMUP FAILED] lines")
+    if not any(t >= q + max_new_tokens for t in config.cache_tiers):
+        raise RuntimeError("No TPU generation cache tier is left that can hold max_new_tokens; see the [TPU GEN WARMUP FAILED] lines")
     return report

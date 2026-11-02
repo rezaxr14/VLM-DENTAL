@@ -233,6 +233,12 @@ def run_zero_shot_evaluation(args: argparse.Namespace) -> None:
         os.environ["TRANSFORMERS_REPETITION_PENALTY"] = str(args.repetition_penalty)
     load_env()
     cfg = load_config(args.config)
+    if getattr(args, "canonical_resize", False):
+        from dental_agent.utils.canonical import set_letterbox
+        set_letterbox(bool(args.canonical_letterbox))
+    if getattr(args, "tpu_generation_chunk_tokens", 0):
+        from dental_agent.model.tpu_inference import require_static_views
+        require_static_views(canonical_resize=bool(args.canonical_resize), letterbox=bool(args.canonical_letterbox), what="run_zero_shot")
 
     # 1. Expand evaluation targets
     targets: list[tuple[str, str]] = []
@@ -471,6 +477,9 @@ def _run_zero_shot_for_target(
             image = Image.open(image_path).convert("RGB")
             if dim_to_use > 0:
                 image.thumbnail((dim_to_use, dim_to_use), Image.Resampling.LANCZOS)
+            if getattr(args, "canonical_resize", False):
+                from dental_agent.utils.canonical import to_canonical
+                image = to_canonical(image, "FULL")      # the same view the SFT/GRPO policy sees; letterbox set in run_zero_shot_evaluation
 
             # 2. Max Tokens
             env_tokens = os.environ.get(f"{prefix}_MAX_TOKENS")
@@ -497,6 +506,7 @@ def _run_zero_shot_for_target(
             if provider in {'transformers','local_hf'}:
                 from dental_agent.model.local_runtime import runtime_from_args
                 local_kwargs['local_runtime'] = runtime_from_args(args,precision_attr='local_precision')
+                local_kwargs['image_id'] = image_id          # names the image in a TPU generation-refusal record
             resp_out = call_llm(
                 provider=provider,
                 model=model,
@@ -611,6 +621,12 @@ def _run_zero_shot_for_target(
             if provider in {'transformers','local_hf'}:
                 record['local_runtime'] = meta.get('local_runtime', {})
                 record['evaluation_settings'] = dict(max_tokens=args.max_tokens, image_max_dim=args.image_max_dim, temperature=args.temperature)
+                if getattr(args, "canonical_resize", False):   # absent = original image (GPU files keep their exact shape)
+                    record['image_view'] = 'canonical'
+                    record['canonical_letterbox'] = bool(args.canonical_letterbox)
+                    record['evaluation_settings'].update(image_view='canonical', canonical_letterbox=bool(args.canonical_letterbox))
+                if meta.get('generation_refused'):
+                    record['generation_refused'] = meta['generation_refused']
                 record['local_timing'] = meta.get('timing', {})
 
             # Save to JSONL atomically (replaces in-place if image_id was already present)
@@ -783,6 +799,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-majority-baseline", action="store_true", help="Also compute majority-class baseline floor on cohort")
     parser.add_argument("--generate-report", action="store_true", default=True, help="Write markdown/LaTeX report in experiments/")
 
+    parser.add_argument("--canonical-resize", action=argparse.BooleanOptionalAction, default=False,
+                        help="Show the model the canonical FULL view (1536x768) instead of the original radiograph. Off by default "
+                             "(GPU runs are unchanged). Required with --tpu-generation-chunk-tokens: static TPU vision slots exist only "
+                             "for the canonical canvases, so TPU zero-shot results are canonical-view results and are labelled so.")
+    from dental_agent.utils.canonical import add_letterbox_arg
+    add_letterbox_arg(parser)
     from dental_agent.model.local_runtime import add_runtime_args
     add_runtime_args(parser, precision_flag='--local-precision')
     return parser

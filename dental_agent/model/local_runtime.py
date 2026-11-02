@@ -24,14 +24,30 @@ class LocalRuntime:
     require_efficient_sdpa: bool = True
     logprob_chunk_tokens: int = 0
     allow_cpu_offload: bool = False
+    # TPU inference only (see dental_agent/model/tpu_inference.py). 0 = off: GPU/CPU never read the other three.
+    tpu_generation_chunk_tokens: int = 0
+    tpu_generation_tiers: tuple = (32768, 49152)
+    tpu_vision_slots: tuple = (8, 16, 6)
+    tpu_generation_warmup: bool = True
+
+    def __post_init__(self):
+        for name in ('tpu_generation_tiers', 'tpu_vision_slots'):   # argparse gives lists; the pool key needs hashable values
+            object.__setattr__(self, name, tuple(int(x) for x in getattr(self, name)))
+
+
+TPU_RUNTIME_FIELDS = ('tpu_generation_chunk_tokens', 'tpu_generation_tiers', 'tpu_vision_slots', 'tpu_generation_warmup')
 
 
 def runtime_from_args(args, *, precision_attr='precision') -> LocalRuntime:
+    # The TPU inference fields are read only from a parser built by add_runtime_args(tpu_generation=True) (evaluators). GRPO
+    # defines its own --tpu-generation-* flags (training rollouts) and must not leak them into the evaluation runtime.
+    own = hasattr(args, 'tpu_vision_slots')      # only the evaluator flags define it (GRPO's own flags do not)
     return LocalRuntime(**{name: getattr(args, precision_attr if name == 'precision' else name, field.default)
-                          for name, field in LocalRuntime.__dataclass_fields__.items()})
+                          for name, field in LocalRuntime.__dataclass_fields__.items()
+                          if own or name not in TPU_RUNTIME_FIELDS})
 
 
-def add_runtime_args(parser, *, precision_flag: str | None = None, scoring: bool = False):
+def add_runtime_args(parser, *, precision_flag: str | None = None, scoring: bool = False, tpu_generation: bool = True):
     if precision_flag:
         parser.add_argument(precision_flag, dest='local_precision', choices=['auto','qlora','bf16','fp16','fp32'], default='auto',
                             help='Native Transformers backend only; API providers/vLLM server are unchanged.')
@@ -44,9 +60,25 @@ def add_runtime_args(parser, *, precision_flag: str | None = None, scoring: bool
     import argparse
     parser.add_argument('--require-efficient-sdpa', action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument('--allow-cpu-offload', action='store_true', help='Explicitly permit slow inference CPU/disk offload; forbidden for GRPO training.')
+    if tpu_generation:
+        _add_tpu_generation_args(parser)
     if scoring:
         parser.add_argument('--logprob-chunk-tokens', type=int, default=0,
                             help='GRPO CUDA/CPU scoring: full-vocabulary log probabilities on selected tokens in chunks; 0=stock path; TPU needs 0.')
+
+
+def _add_tpu_generation_args(parser):
+    import argparse
+    parser.add_argument('--tpu-generation-chunk-tokens', type=int, default=0,
+                        help='TPU only: run generation with the static-shape generator (chunked prefill of this many tokens, a fixed KV '
+                             'cache per tier, one decode graph). 0 = off. Required for any TPU evaluation. Multiple of 64.')
+    parser.add_argument('--tpu-generation-tiers', type=int, nargs='+', default=[32768, 49152],
+                        help='TPU static generation: KV-cache sizes (multiples of the chunk). prompt + max-new-tokens must fit the largest '
+                             'or the episode is recorded as refused (never truncated).')
+    parser.add_argument('--tpu-vision-slots', type=int, nargs=3, default=[8, 16, 6], metavar=('FULL', 'CROP', 'COMPARE'),
+                        help='TPU static generation: image slots per prompt (canonical letterbox views). More images than this = refused.')
+    parser.add_argument('--tpu-generation-warmup', action=argparse.BooleanOptionalAction, default=True,
+                        help='Compile every reachable generation tier at start-up (a failing tier is disabled, not fatal).')
 
 
 def resolve_options(options: LocalRuntime | dict | None, *, load_in_4bit: bool = False, is_tpu: bool = False):
@@ -149,5 +181,9 @@ def runtime_record(model) -> dict:
     opts = runtime_for(model)
     if opts is None:
         return {}
-    return {**asdict(opts), 'effective_compute_dtype': str(getattr(model, '_dental_compute_dtype', None)),
+    record = asdict(opts)
+    if not opts.tpu_generation_chunk_tokens:      # GPU/CPU records keep their exact previous shape
+        for key in ('tpu_generation_chunk_tokens', 'tpu_generation_tiers', 'tpu_vision_slots', 'tpu_generation_warmup'):
+            record.pop(key)
+    return {**record, 'effective_compute_dtype': str(getattr(model, '_dental_compute_dtype', None)),
             'effective_attention': getattr(model, '_dental_attention_backend', None)}

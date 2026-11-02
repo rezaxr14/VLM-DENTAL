@@ -194,8 +194,12 @@ class APISessionPool:
         self._compat_clients[provider] = client
         return client
 
-    def get_transformers_pipeline(self, model_name: str, runtime_options: Any = None) -> tuple[Any, Any]:
-        """Lazily load and memoize in-process PyTorch model and processor."""
+    def get_transformers_pipeline(self, model_name: str, runtime_options: Any = None, *,
+                                  max_new_tokens: int | None = None, repetition_penalty: float | None = None) -> tuple[Any, Any]:
+        """Lazily load and memoize in-process PyTorch model and processor.
+
+        ``max_new_tokens`` / ``repetition_penalty`` matter only on a TPU (``tpu_generation_chunk_tokens > 0``): the model is then
+        sharded over the SPMD mesh and static-shape generation is installed and warmed for that generation budget."""
         from dataclasses import asdict
         from dental_agent.model.local_runtime import LocalRuntime
         load_4bit = os.environ.get("TRANSFORMERS_LOAD_IN_4BIT", "false").lower() == "true"
@@ -203,8 +207,16 @@ class APISessionPool:
         load_name = local_model_alias(model_name)
         options = runtime_options if isinstance(runtime_options,LocalRuntime) else LocalRuntime(**(runtime_options or {}))
         key = (model_name, load_name, load_4bit, tuple(sorted(asdict(options).items())))
+        tpu_generation = bool(options.tpu_generation_chunk_tokens)
+        if tpu_generation:
+            key += (max_new_tokens, repetition_penalty)      # the warm-up depends on the generation budget
         if key in self._transformers_pipelines:
             return self._transformers_pipelines[key]
+        if tpu_generation:
+            from dental_agent.model.tpu_inference import enable_spmd
+            enable_spmd()                                    # before any tensor touches the XLA device
+            if max_new_tokens is None:
+                raise ValueError("TPU static generation needs max_new_tokens when the model is loaded")
 
         import torch
         from dental_agent.model.backbone import load_model
@@ -216,6 +228,13 @@ class APISessionPool:
         cfg = ModelConfig(name=load_name, load_in_4bit=load_4bit)
 
         print(f"Loading native Transformers model '{model_name}' (device_map='auto', 4bit={load_4bit})...", flush=True)
+        if tpu_generation:
+            from dental_agent.model.tpu_inference import finalize_tpu_inference_model
+            model, processor = load_model(cfg, device_map="auto", runtime_options=options, is_tpu=True)
+            model = finalize_tpu_inference_model(model, processor, options, max_new_tokens=int(max_new_tokens),
+                                                 repetition_penalty=repetition_penalty)
+            self._transformers_pipelines[key] = (model, processor)
+            return model, processor
         model, processor = load_model(cfg, device_map="auto", runtime_options=options)
         if hasattr(model, "hf_device_map"):
             devices_used = set(model.hf_device_map.values())
@@ -227,6 +246,12 @@ class APISessionPool:
         return model, processor
 
 _POOL = APISessionPool()
+
+
+def _tpu_generation_refusals() -> tuple:
+    """Exceptions only the static TPU generator raises (a prompt beyond its cache tiers / vision slots)."""
+    from dental_agent.model.tpu_generation import GenerationTooLong, SlotOverflow
+    return (GenerationTooLong, SlotOverflow)
 
 # ---------------------------------------------------------------------------
 # Image encoding helpers
@@ -516,7 +541,13 @@ def _call_llm_once(
         elif provider in ("transformers", "local_hf"):
             import torch
             import time
-            model_obj, processor = _POOL.get_transformers_pipeline(model, kwargs.get("local_runtime"))
+            local_runtime_options = kwargs.get("local_runtime")
+            tpu_extra = {}
+            if getattr(local_runtime_options, "tpu_generation_chunk_tokens", 0):
+                # TPU only: the same repetition penalty the call below applies, and the generation budget the warm-up must fit.
+                tpu_extra = dict(max_new_tokens=int(max_tokens),
+                                 repetition_penalty=float(kwargs.get("repetition_penalty") or os.environ.get("TRANSFORMERS_REPETITION_PENALTY", "1.10")))
+            model_obj, processor = _POOL.get_transformers_pipeline(model, local_runtime_options, **tpu_extra)
             prefix = provider.upper()
             max_dim_str = os.environ.get(f"{prefix}_IMAGE_MAX_DIM")
             max_dim = int(max_dim_str) if max_dim_str is not None else 0
@@ -608,7 +639,19 @@ def _call_llm_once(
                     gen_kwargs["temperature"] = temperature
 
                 from dental_agent.model.local_runtime import generate_local, runtime_record
-                generated_ids = generate_local(model_obj, **inputs, **gen_kwargs)
+                try:
+                    generated_ids = generate_local(model_obj, **inputs, **gen_kwargs)
+                except _tpu_generation_refusals() as exc:
+                    # Static TPU generation cannot hold this prompt. Never truncated: a caller that asked for metadata gets an
+                    # empty reply flagged 'generation_refused' (recorded and counted); any other caller sees the exception.
+                    if not kwargs.get("return_metadata", False):
+                        raise
+                    from dental_agent.model.tpu_inference import note_refusal
+                    reason = note_refusal(model_obj, kwargs.get("image_id", -1), exc)
+                    return "", {"finish_reason": "generation_refused", "generation_refused": reason,
+                                "usage": {"prompt_tokens": int(prompt_tokens_count), "completion_tokens": 0,
+                                          "total_tokens": int(prompt_tokens_count)},
+                                "local_runtime": runtime_record(model_obj), "timing": {"preprocess_s": pre_elapsed}}
                 in_len = inputs["input_ids"].shape[1]
                 generated_ids_trimmed = [out_ids[in_len:] for out_ids in generated_ids]
                 full_text = processor.batch_decode(

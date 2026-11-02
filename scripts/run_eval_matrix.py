@@ -130,6 +130,12 @@ def run_matrix(args: argparse.Namespace, imgs_df, annots_df, cats_df) -> dict[st
             raise SystemExit("These result files already have records:\n  " + "\n  ".join(existing) +
                              "\nAdd --existing-results resume to continue them, or --existing-results overwrite to start again.")
 
+    if getattr(args, "tpu_generation_chunk_tokens", 0):
+        original = [matrix.cell_name(c, z) for _, cells in groups for c, z in cells if z != "canonical"]
+        if original:
+            raise SystemExit(f"TPU static generation evaluates canonical letterbox views only; drop the original-size cells {original} "
+                             "(pass --sizes canonical). Original-size evaluation is a GPU-profile cohort.")
+
     results: dict[str, list] = {}
     for ck, cells in groups:
         adapter = adapter_for(ck, args)
@@ -145,10 +151,14 @@ def run_matrix(args: argparse.Namespace, imgs_df, annots_df, cats_df) -> dict[st
                     results[matrix.cell_name(cond, size)] = list(done.values())
                     continue
             if loaded is None:
-                device, dtype, _ = ev.setup_eval_hardware(args.precision, getattr(args,"qlora_compute_dtype","auto"))
+                tpu_gen = bool(getattr(args, "tpu_generation_chunk_tokens", 0))
+                # TPU-only keywords only when TPU generation is on: the GPU/CPU calls stay exactly as they were.
+                device, dtype, _ = ev.setup_eval_hardware(args.precision, getattr(args,"qlora_compute_dtype","auto"),
+                                                          **({"spmd": True} if tpu_gen else {}))
                 from dental_agent.model.local_runtime import runtime_from_args
                 loaded = ev.load_eval_model(args.model_id, adapter, device, dtype, cond, quantize_4bit=args.precision == "qlora",
-                                            runtime_options=runtime_from_args(args))
+                                            runtime_options=runtime_from_args(args),
+                                            **({"max_new_tokens": int(args.max_new_tokens)} if tpu_gen else {}))
             results[matrix.cell_name(cond, size)] = ev.evaluate_condition(cond, ns, imgs_df, annots_df, cats_df, loaded=loaded)
         if loaded is not None:
             del loaded

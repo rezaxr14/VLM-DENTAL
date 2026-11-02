@@ -21,8 +21,13 @@ Canonical names are `dual_t4` (FP16 compute QLoRA), `rtx4090_qlora` (BF16 QLoRA)
 are aliases. `"all"` selects checkpoint cohorts; it does not change the physical GPU.
 A 48-GB CUDA runtime can attempt multiple numerical profiles; a T4 cannot execute
 native BF16 profiles. No precision is silently substituted. Unsupported jobs are
-listed as blocked. Eight TPU cores are not pooled memory: sharded 9B autoregressive
-generation is not implemented in the current evaluators, so TPU stays pending.
+listed as blocked. Eight TPU cores are not pooled memory: the `tpu` profile shards the
+merged 9B over the SPMD mesh and generates with the static-shape generator
+(`docs/TPU_EVALUATION.md`). It runs zero-shot, baseline, SFT, GRPO and rules/skills on the
+canonical letterbox views only (original-size cells are listed as `unsupported`); a prompt
+that does not fit the static cache is recorded as a refused episode, never truncated.
+Speculative decoding stays pending on TPU. The three evaluation notebooks select `tpu`
+automatically when a TPU is visible (detected without starting XLA).
 No CPU/disk offload is silently enabled to pretend an unsupported runtime fits.
 
 Generation remains **16384** for every managed local cohort, with 50 tool calls,

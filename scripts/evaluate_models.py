@@ -95,10 +95,16 @@ DEFAULT_OUTPUT_DIR = "data/evaluations"
 # Hardware Setup
 # ---------------------------------------------------------------------------
 
-def setup_eval_hardware(precision: str = "bf16", qlora_compute_dtype: str = "auto"):
-    """Detect hardware: TPU / CUDA / CPU and return (device, dtype)."""
+def setup_eval_hardware(precision: str = "bf16", qlora_compute_dtype: str = "auto", spmd: bool = False):
+    """Detect hardware: TPU / CUDA / CPU and return (device, dtype, is_tpu).
+
+    ``spmd=True`` (TPU static generation) enables SPMD BEFORE the XLA device is touched; the 9B weights are then sharded over
+    the mesh and never placed on one chip. GPU/CPU ignore it."""
     import torch
     is_tpu = False
+    if spmd:
+        from dental_agent.model.tpu_inference import enable_spmd
+        enable_spmd()
     try:
         import torch_xla.core.xla_model as xm
         device = xm.xla_device()
@@ -123,8 +129,12 @@ def setup_eval_hardware(precision: str = "bf16", qlora_compute_dtype: str = "aut
 # Model Loading
 # ---------------------------------------------------------------------------
 
-def load_eval_model(model_id: str, adapter_path: str | None, device, dtype, condition: str, quantize_4bit: bool = False, runtime_options: Any = None):
+def load_eval_model(model_id: str, adapter_path: str | None, device, dtype, condition: str, quantize_4bit: bool = False, runtime_options: Any = None,
+                    max_new_tokens: int | None = None, repetition_penalty: float | None = None):
     """Load base model and optionally attach LoRA adapter for SFT/GRPO conditions.
+
+    On a TPU the (merged) model is sharded over the SPMD mesh and static-shape generation is installed
+    (``dental_agent.model.tpu_inference``); ``max_new_tokens`` is then required so the cache tiers can be checked and warmed.
 
     Returns (model, processor).
     """
@@ -132,11 +142,20 @@ def load_eval_model(model_id: str, adapter_path: str | None, device, dtype, cond
     from dental_agent.model.backbone import load_model
     from dental_agent.model.local_runtime import LocalRuntime
     from dental_agent.config import ModelConfig
+    on_tpu = getattr(device, 'type', None) == 'xla'
+    if on_tpu:
+        # Refuse before the 9B weights are read: stock generate would recompile for every new prompt length.
+        from dental_agent.model.tpu_inference import tpu_generation_requested
+        if not tpu_generation_requested(runtime_options):
+            raise SystemExit("TPU evaluation needs --tpu-generation-chunk-tokens N (e.g. 512): stock model.generate would recompile "
+                             "for every new prompt length. See docs/TPU_EVALUATION.md.")
+        if max_new_tokens is None:
+            raise ValueError("load_eval_model on a TPU needs max_new_tokens to check and warm the cache tiers")
     if runtime_options is None:
         precision = 'qlora' if quantize_4bit else {torch.bfloat16:'bf16',torch.float16:'fp16',torch.float32:'fp32'}[dtype]
         runtime_options = LocalRuntime(precision=precision, qlora_compute_dtype='bf16' if dtype == torch.bfloat16 else 'fp16')
     model, processor = load_model(ModelConfig(name=model_id,load_in_4bit=quantize_4bit),
-                                  runtime_options=runtime_options, is_tpu=getattr(device,'type',None) == 'xla')
+                                  runtime_options=runtime_options, is_tpu=on_tpu)
 
     # Attach LoRA adapter for SFT / GRPO conditions
     if adapter_path and condition.startswith(("sft_", "grpo_")):
@@ -156,6 +175,13 @@ def load_eval_model(model_id: str, adapter_path: str | None, device, dtype, cond
             print("[MODEL] LoRA adapter merged successfully.")
 
     model.eval()
+
+    if on_tpu:
+        from dental_agent.model.tpu_inference import finalize_tpu_inference_model
+        # Never model.to(device): that would put all 9B on ONE chip. The finalizer shards while moving.
+        model = finalize_tpu_inference_model(model, processor, runtime_options, max_new_tokens=max_new_tokens,
+                                             repetition_penalty=repetition_penalty)
+        return model, processor
 
     # Move to device if not already mapped
     if not hasattr(model, "hf_device_map") or not model.hf_device_map:
@@ -384,6 +410,13 @@ def run_condition_trajectory(
     )
 
 
+def _generation_refused_types() -> tuple:
+    """Exceptions the static TPU generator raises for a prompt it cannot hold. ``generate_local`` raises them only when a
+    model carries the TPU generation config, so GPU/CPU runs never see them; every other exception still crashes the run."""
+    from dental_agent.model.tpu_generation import GenerationTooLong, SlotOverflow
+    return (GenerationTooLong, SlotOverflow)
+
+
 def findings_from_trajectory(traj) -> list[dict[str, Any]]:
     """Predicted findings of a trajectory: a list answer, a single-finding dict, or nothing."""
     final_answer = traj.final_answer
@@ -596,7 +629,20 @@ def eval_settings(args: argparse.Namespace, condition: str, adapter_path: str | 
         "malformed_retries": int(args.malformed_retries),
         "temperature": 0.0,
         "prompt": "unified",
+        **tpu_generation_settings(args),
     }
+
+
+def tpu_generation_settings(args: argparse.Namespace) -> dict[str, Any]:
+    """Static-generation settings that change what a number means (a refused episode is a failed one, and the chunk/tiers
+    decide which episodes fit). Absent when TPU generation is off, so GPU/CPU result files keep their exact settings and
+    stay resumable."""
+    chunk = int(getattr(args, "tpu_generation_chunk_tokens", 0) or 0)
+    if not chunk:
+        return {}
+    return {"tpu_generation": {"chunk_tokens": chunk,
+                               "cache_tiers": [int(t) for t in args.tpu_generation_tiers],
+                               "vision_slots": [int(s) for s in args.tpu_vision_slots]}}
 
 
 def prepare_output_file(output_path: Path, mode: str, settings: dict[str, Any]) -> dict[int, dict[str, Any]]:
@@ -690,12 +736,22 @@ def evaluate_condition(
     if done:
         print(f"[RESUME] {len(done)} image(s) already finished in {output_path.name}; running the remaining ones.")
 
+    tpu_gen = bool(getattr(args, "tpu_generation_chunk_tokens", 0))
+    if tpu_gen:
+        # Fail before the 9B weights load: static slots exist only for the canonical letterbox canvases.
+        from dental_agent.model.tpu_inference import require_static_views
+        require_static_views(canonical_resize=bool(args.canonical_resize), letterbox=bool(getattr(args, "canonical_letterbox", True)),
+                             what="evaluate_models")
+
     # Load model (unless the caller already did)
     if loaded is None:
-        device, dtype, is_tpu = setup_eval_hardware(args.precision, getattr(args,"qlora_compute_dtype","auto"))
+        # The TPU-only keywords are passed only when TPU generation is on, so the GPU/CPU call stays exactly as it was.
+        device, dtype, is_tpu = setup_eval_hardware(args.precision, getattr(args,"qlora_compute_dtype","auto"),
+                                                    **({"spmd": True} if tpu_gen else {}))
         from dental_agent.model.local_runtime import runtime_from_args
         model, processor = load_eval_model(args.model_id, adapter_path, device, dtype, condition, quantize_4bit=args.precision == "qlora",
-                                            runtime_options=runtime_from_args(args))
+                                            runtime_options=runtime_from_args(args),
+                                            **({"max_new_tokens": int(args.max_new_tokens)} if tpu_gen else {}))
     else:
         model, processor = loaded
 
@@ -725,7 +781,15 @@ def evaluate_condition(
         # requested ablation (none by default, in which case the tools behave exactly as before).
         probe = ToolProbe(registry, spec, image_id) if registry is not None else None
         t_start = time.time()
-        traj = run_condition_trajectory(model, processor, eligible_imgs, image_id, probe.registry if probe else None, args)
+        generation_refused = None
+        try:
+            traj = run_condition_trajectory(model, processor, eligible_imgs, image_id, probe.registry if probe else None, args)
+        except _generation_refused_types() as exc:
+            # The static TPU generator refused a prompt that does not fit its cache tiers / vision slots. Never truncated:
+            # the episode is recorded as one with no answer, flagged and counted (and reported in the sidecar).
+            from dental_agent.model.tpu_inference import note_refusal, refused_trajectory
+            generation_refused = note_refusal(model, image_id, exc)
+            traj = refused_trajectory(image_id, generation_refused)
         seconds = time.time() - t_start
         pred_findings = findings_from_trajectory(traj)
         raw_output = "\n---\n".join(str(t.get("raw_output", "")) for t in traj.turns)
@@ -786,12 +850,20 @@ def evaluate_condition(
             "trajectory": transcript_for_record(traj),
             "ablation": probe.summary(gt_findings, traj.turns) if probe else None,
             "timestamp": time.time(),
+            **({"generation_refused": generation_refused} if generation_refused else {}),
         })
         records.append(record)
 
         # Append incrementally to output JSONL
         with open(output_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(record) + "\n")
+
+    if tpu_gen:
+        from dental_agent.model.tpu_inference import write_generation_report
+        write_generation_report(model, output_path.with_name(f"{output_path.stem}_tpu_generation_report.json"))
+        n_refused = sum(1 for r in records if r.get("generation_refused"))
+        print(f"[TPU EVAL] {condition}: {n_refused}/{len(records)} episode(s) refused by static generation "
+              "(counted as no-answer episodes in every metric).", flush=True)
 
     # Clean up model to free memory before next condition (a caller-owned model stays loaded)
     if loaded is None:

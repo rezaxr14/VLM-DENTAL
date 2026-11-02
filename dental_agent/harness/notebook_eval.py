@@ -60,17 +60,41 @@ def select_profiles(target, profiles=None):
     return result
 
 
+# TPU static-shape generation (dental_agent/model/tpu_generation.py). Kept in code, not in the profile dict: the notebooks embed
+# their own EVAL_PROFILES copy, and these values define what a TPU result means (they are part of the result identity).
+# Eval generates up to 16384 new tokens, so only cache tiers of at least chunk + 16384 are reachable.
+TPU_GENERATION = dict(chunk_tokens=512, cache_tiers=(32768, 49152), vision_slots=(8, 16, 6))
+
+
+def tpu_generation_flags():
+    return ['--tpu-generation-chunk-tokens', str(TPU_GENERATION['chunk_tokens']),
+            '--tpu-generation-tiers', *map(str, TPU_GENERATION['cache_tiers']),
+            '--tpu-vision-slots', *map(str, TPU_GENERATION['vision_slots'])]
+
+
 def runtime_flags(profile, profiles=None):
     profiles = PROFILES if profiles is None else profiles
-    p = profiles[select_profiles(profile, profiles)[0]]
-    return ['--precision', p['precision'], '--qlora-compute-dtype', p['compute'], '--attn-implementation', p['attention'],
-            '--sdpa-repeat-kv', p['kv'], '--loader-mode', p['loader'], '--load-cpu-threads', str(p['threads']),
-            '--no-require-efficient-sdpa' if profile == 'tpu' else '--require-efficient-sdpa']
+    name = select_profiles(profile, profiles)[0]
+    p = profiles[name]
+    flags = ['--precision', p['precision'], '--qlora-compute-dtype', p['compute'], '--attn-implementation', p['attention'],
+             '--sdpa-repeat-kv', p['kv'], '--loader-mode', p['loader'], '--load-cpu-threads', str(p['threads']),
+             '--no-require-efficient-sdpa' if profile == 'tpu' else '--require-efficient-sdpa']
+    return flags + (tpu_generation_flags() if name == 'tpu' else [])
+
+
+def tpu_device_entry():
+    """The device record of a visible TPU. Detected WITHOUT initialising XLA: the evaluation child process needs the TPU."""
+    from dental_agent.model.tpu_inference import tpu_runtime_present
+    return [dict(name='TPU v5e-8', gib=0.0, capability=(0, 0), tpu=True)] if tpu_runtime_present() else []
 
 
 def hardware_reason(profile, kind, devices, profiles=None):
     """Devices contain actual name/capability/memory; never emulate BF16 or pool TPU HBM."""
-    if profile == 'tpu': return 'pending: existing evaluators have no sharded 9B TPU generation path'
+    if profile == 'tpu':
+        if kind == 'speculative': return 'pending: TPU speculative decoding is not available yet (vLLM has no TPU path here; separate patch)'
+        if not any(d.get('tpu') for d in devices): return 'pending: a Cloud TPU runtime (v5e-8) is required for the TPU profile'
+        return None
+    devices = [d for d in devices if not d.get('tpu')]      # a TPU never satisfies a CUDA profile
     if not devices: return 'pending: CUDA evaluation runtime required'
     p = (PROFILES if profiles is None else profiles)[profile]
     if (p['precision'] == 'bf16' or p['compute'] == 'bf16') and any(d['capability'][0] < 8 for d in devices):
@@ -544,6 +568,8 @@ class NotebookEvaluations:
         meta_name = self._training_harness_metadata(job)
         if meta_name is not None: identity['checkpoint_files'][meta_name] = _metadata_digest(self.files[meta_name])
         if self.ablation: identity['ablation'] = self.ablation
+        if job['profile']=='tpu':    # which episodes fit, and so what a refused (no-answer) episode costs, depends on these
+            identity['tpu_generation'] = {k:list(v) if isinstance(v,tuple) else v for k,v in TPU_GENERATION.items()}
         if job['kind']=='rules_skills': identity['conditions']=['baseline','rules_only','rules_skills_index','rules_skills_full']
         if job['kind']=='speculative':
             identity['conditions']=['baseline','mtp_1']
@@ -634,12 +660,15 @@ class NotebookEvaluations:
             command = [sys.executable,'-u','scripts/run_zero_shot.py','--provider','transformers','--model','Qwen/Qwen3.5-9B',
                 '--dataset','dentex','--split','test','--data-dir',cohort['data_dir'],'--output',str(folder/'results.jsonl'),'--output-dir',str(folder),
                 '--max-tokens','16384','--image-max-dim','0','--temperature','0','--pacing-delay','0','--git-sync-every','0','--no-retry-empty',*flags]
+            if job['profile']=='tpu':    # static TPU vision slots: the canonical FULL letterbox view (labelled image_view=canonical in every record)
+                command += ['--canonical-resize','--canonical-letterbox']
             result = folder/'results.jsonl'
         elif kind == 'rules_skills':
             command = [sys.executable,'-u','scripts/harness/run_dev.py',*common,'--adapter-path',adapter,
                 '--checkpoint-kind',identity['checkpoint_kind'],'--dev-split',str(self.dev_split),'--split','dev',
                 '--max-new-tokens','16384','--max-tool-calls','50','--seed',str(self.seed),'--conditions',*identity['conditions'],
-                *runtime_flags(job['profile'], self.profile_configs),'--existing-results','resume','--output',str(folder/'results.json')]
+                *runtime_flags(job['profile'], self.profile_configs),'--existing-results','resume','--output',str(folder/'results.json'),
+                '--canonical-letterbox' if p['letterbox'] else '--no-canonical-letterbox']
             result = folder/'results.json'
         else:
             ck = self.spec_checkpoints[job['profile']][job['adapter']]
@@ -681,10 +710,13 @@ class NotebookEvaluations:
             if torch.cuda.is_available():
                 devices = [dict(name=torch.cuda.get_device_name(i),gib=torch.cuda.get_device_properties(i).total_memory/2**30,
                     capability=torch.cuda.get_device_capability(i)) for i in range(torch.cuda.device_count())]
+            devices += tpu_device_entry()
         for rawjob in self.jobs:
             for size in (self.sizes if rawjob['kind'] in {'baseline','sft','grpo'} else ('canonical',)):
                 job = {**rawjob,'size':size}
                 row = {**job,'status':'pending'}; self.status.append(row)
+                if job['profile']=='tpu' and size=='original':
+                    row.update(status='unsupported',reason='TPU static vision slots exist only for canonical letterbox views; original-size evaluation is a GPU-profile cohort'); continue
                 if job['kind']=='zeroshot' and self.split=='dev': row.update(status='unsupported',reason='Zero-shot legacy prompt cohort is test-only'); continue
                 identity = self._identity(job)
                 prefix = result_path(identity)
@@ -776,7 +808,14 @@ def validate_resume_settings(saved, settings, ids):
     """Extension runners may move filesystem paths, but never decoding settings or cohort."""
     old = saved.get('settings') or {}
     portable_paths = {'output','adapter_path','model_id','data_dir','dev_split','checkpoint','vllm_executable','existing_results'}
+    # Settings added for TPU evaluation are absent from results saved before they existed. With TPU generation off (and the
+    # padded-free default letterbox) they change nothing, so such an old file stays resumable; with TPU on they must match.
+    absent_ok = set() if settings.get('tpu_generation_chunk_tokens') else \
+        {'tpu_generation_chunk_tokens','tpu_generation_tiers','tpu_vision_slots','tpu_generation_warmup'}
+    if settings.get('canonical_letterbox') is False:
+        absent_ok.add('canonical_letterbox')
     for key,value in settings.items():
+        if key in absent_ok and key not in old: continue
         if key not in portable_paths and old.get(key) != value:
             raise ValueError('Resume settings changed: '+key)
     if list(saved.get('image_ids',[])) != list(ids): raise ValueError('Resume cohort/order changed')

@@ -24,6 +24,9 @@ def parse_args(argv=None):
     p.add_argument('--max-tool-calls',type=int,default=50)
     p.add_argument('--max-turns',type=int)
     p.add_argument('--precision',choices=['qlora','bf16','fp16','fp32'],default='qlora')
+    p.add_argument('--canonical-letterbox',action=argparse.BooleanOptionalAction,default=False,
+                   help='Black-bar canonical views (the TPU profile). Default off: the GPU profiles use padded-free canonical views. '
+                        'Required with --tpu-generation-chunk-tokens.')
     from dental_agent.model.local_runtime import add_runtime_args
     add_runtime_args(p)
     return p.parse_args(argv)
@@ -46,9 +49,15 @@ def main(argv=None):
         validate_resume_settings(saved, vars(args), ids)
         if saved.get('status') == 'complete':
             print('Complete harness result retained:', args.output); return
-    device,dtype,_=ev.setup_eval_hardware(args.precision,args.qlora_compute_dtype)
+    tpu_gen=bool(args.tpu_generation_chunk_tokens)
+    if tpu_gen:
+        from dental_agent.model.tpu_inference import require_static_views
+        require_static_views(canonical_resize=True,letterbox=args.canonical_letterbox,what='run_dev')   # before the 9B loads
+    # TPU-only keywords only when TPU generation is on: the GPU/CPU calls stay exactly as they were.
+    device,dtype,_=ev.setup_eval_hardware(args.precision,args.qlora_compute_dtype,**({'spmd':True} if tpu_gen else {}))
     model,processor=ev.load_eval_model(args.model_id,args.adapter_path,device,dtype,args.checkpoint_kind+'_with_tools',
-                                      quantize_4bit=args.precision=='qlora',runtime_options=runtime_from_args(args))
+                                      quantize_4bit=args.precision=='qlora',runtime_options=runtime_from_args(args),
+                                      **({'max_new_tokens':args.max_new_tokens} if tpu_gen else {}))
     root=Path(__file__).resolve().parents[2]
     result=dict(schema_version=1,status='running',split='dev',image_ids=ids,settings=vars(args),adapter_sha256=adapter_sha256,
                 dev_split_sha256=digest(args.dev_split),rules_sha256=digest(root/'dental_agent/harness/rules.md'),
@@ -62,9 +71,13 @@ def main(argv=None):
         for image_id in ids:
             if image_id in done: continue
             rec,_=evaluate_episode(image_id,images,annotations,categories,model,processor,harness=CONDITIONS[condition],
-                                  seed=args.seed,max_new_tokens=args.max_new_tokens,max_tool_calls=args.max_tool_calls,max_turns=args.max_turns)
+                                  seed=args.seed,max_new_tokens=args.max_new_tokens,max_tool_calls=args.max_tool_calls,max_turns=args.max_turns,
+                                  letterbox=args.canonical_letterbox)
             records.append(rec);atomic_json(args.output,result)
         result['conditions'][condition]['summary']=pooled(records)
+        if tpu_gen:
+            from dental_agent.model.tpu_inference import write_generation_report
+            write_generation_report(model,Path(args.output).with_name(Path(args.output).stem+'_tpu_generation_report.json'))
     reference='baseline' if 'baseline' in result['conditions'] else args.conditions[0]
     for name in args.conditions:
         if name!=reference:result['comparisons'][name]=compare_paired(result['conditions'][reference]['records'],result['conditions'][name]['records'],args.seed)
