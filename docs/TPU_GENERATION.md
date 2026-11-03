@@ -64,3 +64,5 @@ Not proved (needs the TPU, read it from the warm-up lines and the run report): t
 chip (no fused TPU SDPA kernel is assumed, so a chunk attends to the whole `C`-sized cache with a mask), real decode throughput with
 FSDP-sharded weights (each step gathers the weights; expect tens of milliseconds per token per layer-gather, slow by design),
 the compile time of each tier, and TPU-only lowering of the reference Gated-DeltaNet loop.
+
+Speculative (n-gram) decoding on top of this generator: `docs/TPU_SPECULATIVE.md`.

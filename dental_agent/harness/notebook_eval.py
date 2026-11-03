@@ -63,6 +63,7 @@ def select_profiles(target, profiles=None):
 # TPU static-shape generation (dental_agent/model/tpu_generation.py). Kept in code, not in the profile dict: the notebooks embed
 # their own EVAL_PROFILES copy, and these values define what a TPU result means (they are part of the result identity).
 # Eval generates up to 16384 new tokens, so only cache tiers of at least chunk + 16384 are reachable.
+TPU_SPEC_CONDITIONS = ('baseline','ngram_2','ngram_3','ngram_5')    # mtp_* needs the native MTP head, which transformers does not load
 TPU_GENERATION = dict(chunk_tokens=512, cache_tiers=(32768, 49152), vision_slots=(8, 16, 6))
 
 
@@ -91,7 +92,6 @@ def tpu_device_entry():
 def hardware_reason(profile, kind, devices, profiles=None):
     """Devices contain actual name/capability/memory; never emulate BF16 or pool TPU HBM."""
     if profile == 'tpu':
-        if kind == 'speculative': return 'pending: TPU speculative decoding is not available yet (vLLM has no TPU path here; separate patch)'
         if not any(d.get('tpu') for d in devices): return 'pending: a Cloud TPU runtime (v5e-8) is required for the TPU profile'
         return None
     devices = [d for d in devices if not d.get('tpu')]      # a TPU never satisfies a CUDA profile
@@ -570,8 +570,15 @@ class NotebookEvaluations:
         if self.ablation: identity['ablation'] = self.ablation
         if job['profile']=='tpu':    # which episodes fit, and so what a refused (no-answer) episode costs, depends on these
             identity['tpu_generation'] = {k:list(v) if isinstance(v,tuple) else v for k,v in TPU_GENERATION.items()}
-        if job['kind']=='rules_skills': identity['conditions']=['baseline','rules_only','rules_skills_index','rules_skills_full']
-        if job['kind']=='speculative':
+        if job['kind']=='speculative' and job['profile']=='tpu':
+            # No vLLM and no pre-merged target on TPU: the in-process static generator merges adapter + base in memory. The MTP head is
+            # not in the Hugging Face model, so only the n-gram conditions run here (the vLLM profiles keep baseline + mtp_1).
+            identity['conditions']=list(TPU_SPEC_CONDITIONS)
+            identity['draft_variant']='ngram'
+            identity['backend']='tpu_static_generation'
+            identity['merged_files']=None
+        elif job['kind']=='rules_skills': identity['conditions']=['baseline','rules_only','rules_skills_index','rules_skills_full']
+        elif job['kind']=='speculative':
             identity['conditions']=['baseline','mtp_1']
             identity['draft_variant']=self.draft_variant
             configured = self.spec_checkpoints.get(job['profile'],{})
@@ -670,6 +677,13 @@ class NotebookEvaluations:
                 *runtime_flags(job['profile'], self.profile_configs),'--existing-results','resume','--output',str(folder/'results.json'),
                 '--canonical-letterbox' if p['letterbox'] else '--no-canonical-letterbox']
             result = folder/'results.json'
+        elif job['profile']=='tpu':
+            command = [sys.executable,'-u','scripts/bench/spec_decode_bench_tpu.py',*common,'--adapter-path',adapter,
+                '--checkpoint-kind',identity['checkpoint_kind'],'--dev-split',str(self.dev_split),'--split','dev',
+                '--max-new-tokens','16384','--max-tool-calls','50','--seed',str(self.seed),'--conditions',*identity['conditions'],
+                *runtime_flags(job['profile'], self.profile_configs),'--existing-results','resume','--output',str(folder/'results.json'),
+                '--harness-mode',job.get('harness_mode','off'),'--canonical-letterbox']
+            result = folder/'results.json'
         else:
             ck = self.spec_checkpoints[job['profile']][job['adapter']]
             indices = self.gpu_indices or '0'
@@ -735,8 +749,8 @@ class NotebookEvaluations:
                     self._upload_results(folder,prefix,identity,payloads,progress,True,row,attempts=3)
                     row.update(status=('failed_or_divergent_reused' if job['kind']=='speculative' and json.loads(portable.read_text()).get('status')=='failed_or_divergent' else 'complete_reused'),episodes=progress); self._save_inventory(); print('[SKIP FINISHED]',prefix); continue
                 reason = hardware_reason(job['profile'],job['kind'],devices,self.profile_configs) if execute else None
-                if job['kind']=='speculative' and not shutil.which(self.vllm): reason = 'pending: configure the compatible isolated VLLM_EXECUTABLE'
-                if job['kind']=='speculative' and identity['merged_files'] is None: reason = 'pending: provide SPEC_CHECKPOINTS[profile][exact_adapter_prefix] for an audited merged target'
+                if job['kind']=='speculative' and job['profile']!='tpu' and not shutil.which(self.vllm): reason = 'pending: configure the compatible isolated VLLM_EXECUTABLE'
+                if job['kind']=='speculative' and job['profile']!='tpu' and identity['merged_files'] is None: reason = 'pending: provide SPEC_CHECKPOINTS[profile][exact_adapter_prefix] for an audited merged target'
                 if not execute or reason:
                     row.update(status='pending' if not execute else 'blocked_runtime',reason=reason or 'inventory only',episodes=progress); self._save_inventory(); continue
                 cohort = self._input(identity['split'])

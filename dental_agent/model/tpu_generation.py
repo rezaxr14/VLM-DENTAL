@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import contextlib
 import math
+import time
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any, Mapping, Sequence
@@ -65,6 +66,7 @@ class TPUGenerationConfig:
     slot_budget: Mapping[str, int] = field(default_factory=lambda: dict(SLOT_BUDGET))
     batch_multiple: int = 1                       # set to the number of cores under SPMD
     mesh: Any = None                              # optional xs.Mesh with axes ('fsdp', 'model'); batch is sharded on 'fsdp'
+    speculative: Any = None                       # tpu_speculative.SpeculativeConfig: greedy prompt-lookup speculation (None = off)
     stats: dict = field(default_factory=lambda: {"calls": 0, "prefill_chunks": 0, "decode_steps": 0, "too_long": 0,
                                                  "slot_overflow": 0, "rollouts_dropped": 0, "tiers": {}})
 
@@ -492,7 +494,14 @@ def tpu_generate(model: Any, inputs: Mapping[str, Any], *, max_new_tokens: int, 
                         "_attn_implementation", "sdpa")
     float_mask = attn_impl == "eager"
 
-    prepared, B, B0, pix, grid = _prepare(base, config, inputs, max_new_tokens, pad_token_id)
+    spec = config.speculative
+    if spec is not None and (temperature or 0.0) > 0:
+        raise ValueError("TPU speculative decoding is greedy only (temperature 0): exactness is the point of the verification")
+    t_start = time.perf_counter()
+    # a speculative round writes up to k positions beyond the last real token, so the tier must hold them too
+    prepared, B, B0, pix, grid = _prepare(base, config, inputs, max_new_tokens + (spec.k if spec is not None else 0), pad_token_id)
+    if spec is not None and B0 != 1:
+        raise ValueError("TPU speculative decoding generates one sequence at a time (batch of 1)")
     P, C = prepared.prompt_len, prepared.cache_len
     config.stats["calls"] += 1
     config.stats["tiers"][C] = config.stats["tiers"].get(C, 0) + 1
@@ -553,6 +562,23 @@ def tpu_generate(model: Any, inputs: Mapping[str, Any], *, max_new_tokens: int, 
             seen = seen.scatter(1, tok.unsqueeze(1), torch.ones((B, 1), dtype=torch.bool, device=device))
         _step(device)
 
+        if spec is not None:
+            from dental_agent.model.tpu_speculative import speculative_decode
+            first = int(tok[0].cpu())                                    # also the prefill/first-token boundary of the timing
+            t_first = time.perf_counter()
+            history = [int(x) for x in prepared.ids[0, int(prepared.pad[0]):P]]
+            tokens, counters = speculative_decode(
+                spec=spec, body=body, head=head, cache=cache, mesh=mesh, pin_cache=_pin_cache, step_fn=_step, shard=_shard,
+                attention_masks=attention_masks, float_mask=float_mask, dtype=dtype, device=device, pad=pad, base_pos=base_pos,
+                prompt_dev=prompt_dev, zero=zero, cache_len=C, tok=tok, seen=seen, repetition_penalty=repetition_penalty,
+                sample=lambda logits, s: _sample(logits, seen=s, **sample_kw), eos=eos, max_new_tokens=max_new_tokens,
+                history=history, stats=config.stats, batch=B)
+            assert tokens[0] == first
+            config.stats["last_call"] = dict(
+                prompt_tokens=int(prepared.real_len[0]), generated_tokens=len(tokens), prefill_seconds=t_first - t_start,
+                decode_seconds=time.perf_counter() - t_first, speculative=spec.record(), **counters)
+            return torch.tensor([tokens], dtype=torch.long)
+
         eos_dev = torch.tensor(eos if eos else [-1], dtype=torch.long, device=device)
         done = torch.zeros(B, dtype=torch.bool, device=device)
         pad_dev = zero + int(pad_token_id)
@@ -563,6 +589,8 @@ def tpu_generate(model: Any, inputs: Mapping[str, Any], *, max_new_tokens: int, 
             emitted = torch.where(done, pad_dev.expand(B), tok)
             done = done | (tok.unsqueeze(-1) == eos_dev).any(-1)
             host = emitted.cpu()
+            if s == 0:
+                t_first = time.perf_counter()
             generated.append(host[:B0])
             finished_host = done.cpu()[:B0]
             config.stats["decode_steps"] += 1
@@ -580,6 +608,9 @@ def tpu_generate(model: Any, inputs: Mapping[str, Any], *, max_new_tokens: int, 
             step = step + 1
             _pin_cache(cache, mesh)
             _step(device)
+    config.stats["last_call"] = dict(
+        prompt_tokens=int(max(prepared.real_len)), generated_tokens=len(generated), prefill_seconds=t_first - t_start,
+        decode_seconds=time.perf_counter() - t_first, speculative=None, rounds=0, plain_steps=len(generated) - 1, drafted=0, accepted=0)
     return torch.stack(generated, 1).long()
 
 

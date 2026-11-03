@@ -74,3 +74,7 @@ The conservative greedy gate requires exact decoded text across all turns, ident
 4. The stitch audit checks that all non-MTP target bytes remain unchanged and that MTP tensors remain present. Repeat the identical benchmark against the stitched checkpoint and use `compare_acceptance.py` to report before/after rates only with paired settings and successful equivalence/F1 gates.
 
 Actual fine-tuning, device compatibility, acceptance improvement, dev F1 and serving speed are **[pending]**. Build-time tests use tiny serialized tensors, synthetic images/scripted responses and a local test HTTP server. They verify plumbing, not physical hardware performance. The generated table is not automatically inserted into the frozen experiment section.
+
+## TPU
+
+The `tpu` profile has no vLLM path. Its speculative job runs `scripts/bench/spec_decode_bench_tpu.py` in-process on the static TPU generator with the exact n-gram conditions `baseline, ngram_2, ngram_3, ngram_5`; MTP conditions are GPU-only because the Hugging Face model does not load the MTP head. Same equivalence gate; see `docs/TPU_SPECULATIVE.md`.

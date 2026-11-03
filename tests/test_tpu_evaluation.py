@@ -26,7 +26,7 @@ def test_tpu_profile_needs_a_tpu_and_never_runs_on_cuda():
     assert ne.hardware_reason("tpu", "sft", TPU_DEVICE) is None
     assert ne.hardware_reason("tpu", "zeroshot", TPU_DEVICE) is None
     assert ne.hardware_reason("tpu", "rules_skills", TPU_DEVICE) is None
-    assert "speculative" in ne.hardware_reason("tpu", "speculative", TPU_DEVICE)
+    assert ne.hardware_reason("tpu", "speculative", TPU_DEVICE) is None          # 0064: runs on the static generator, no vLLM
 
 
 def test_a_tpu_never_satisfies_a_cuda_profile_and_cuda_results_are_unchanged():

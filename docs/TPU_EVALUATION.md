@@ -10,7 +10,7 @@ Every evaluator now runs on a Cloud TPU v5e-8 (8 x 16 GB HBM) through the static
 | `scripts/evaluate_models.py`, `scripts/run_eval_matrix.py` (zero-shot-unified baseline, SFT, GRPO; with and without tools) | yes |
 | `scripts/harness/run_dev.py` (rules / skills, dev split) | yes |
 | `scripts/run_zero_shot.py --provider transformers` (legacy zero-shot prompt) | yes, canonical FULL view |
-| speculative decoding (vLLM) | no: patch 0064 |
+| speculative decoding (`ngram_2/3/5`, in-process, `scripts/bench/spec_decode_bench_tpu.py`) | yes, patch 0064: `docs/TPU_SPECULATIVE.md` (MTP head: not available) |
 
 The notebooks (`Final_Evaluation`, `Rules_Skills`, `ZeroShot`) detect a TPU **without starting XLA** (the evaluation child process needs it) and
 select the `tpu` profile. `EVAL_SIZES` becomes `["canonical"]`.
