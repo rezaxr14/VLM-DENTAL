@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """TPU speculative-decoding benchmark: the same paired, fixed-dev, greedy dynamic-tool episodes as ``spec_decode_bench.py`` (vLLM, GPU),
-run in-process on the TPU static-shape generator. Conditions ``baseline`` / ``ngram_2`` / ``ngram_3`` / ``ngram_5`` (the vLLM
-``method=ngram`` configurations; ``mtp_*`` needs the native MTP head, which Hugging Face does not load, and is not available here).
+run in-process on the TPU static-shape generator. Conditions ``baseline``, ``mtp_1/2/3`` (the checkpoint's native MTP head, rebuilt in ``tpu_mtp`` because Hugging Face does not load it) and
+``ngram_2/3/5`` (the vLLM ``method=ngram`` configurations).
 
 Same result schema, same equivalence gate (decoded text, tool actions, final answer, pooled exact F1 must equal the baseline's).
 Exactness of speculation on XLA is therefore CHECKED here, not assumed. Canonical black-bar letterbox views, as every TPU evaluation.
@@ -19,7 +19,7 @@ import sys
 import time
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-CONDITIONS = ('baseline', 'ngram_2', 'ngram_3', 'ngram_5')
+CONDITIONS = ('baseline', 'mtp_1', 'mtp_2', 'mtp_3', 'ngram_2', 'ngram_3', 'ngram_5')
 
 
 def parse_args(argv=None):
@@ -31,7 +31,7 @@ def parse_args(argv=None):
     p.add_argument('--dev-split', default='data/splits/dentex_dev.json')
     p.add_argument('--split', choices=['dev'], default='dev')
     p.add_argument('--limit', type=int)
-    p.add_argument('--conditions', nargs='+', choices=CONDITIONS, default=list(CONDITIONS))
+    p.add_argument('--conditions', nargs='+', choices=CONDITIONS, default=list(CONDITIONS), help='baseline first, then any of the others')
     p.add_argument('--output', default='paper/generated/spec_decode_bench_tpu.json')
     p.add_argument('--existing-results', choices=['error', 'resume'], default='error')
     p.add_argument('--max-new-tokens', type=int, default=2048)
@@ -116,6 +116,9 @@ def main(argv=None):
     config = tg.find_attr(model, tg.ATTR)
     if config is None:
         raise RuntimeError('The loaded model has no TPU generator installed')
+    if any(c.startswith('mtp') for c in args.conditions):
+        from dental_agent.model.tpu_mtp import attach_mtp_head
+        attach_mtp_head(model, args.model_id)                      # strict: a layout mismatch stops here, before any episode
     packages = {}
     for name in ['torch', 'torch_xla', 'transformers', 'peft']:
         try:

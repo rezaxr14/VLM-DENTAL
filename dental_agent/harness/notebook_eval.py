@@ -63,7 +63,7 @@ def select_profiles(target, profiles=None):
 # TPU static-shape generation (dental_agent/model/tpu_generation.py). Kept in code, not in the profile dict: the notebooks embed
 # their own EVAL_PROFILES copy, and these values define what a TPU result means (they are part of the result identity).
 # Eval generates up to 16384 new tokens, so only cache tiers of at least chunk + 16384 are reachable.
-TPU_SPEC_CONDITIONS = ('baseline','ngram_2','ngram_3','ngram_5')    # mtp_* needs the native MTP head, which transformers does not load
+TPU_SPEC_CONDITIONS = ('baseline','mtp_1','mtp_2','mtp_3','ngram_2','ngram_3','ngram_5')    # mtp_*: head rebuilt in tpu_mtp from the base snapshot
 TPU_GENERATION = dict(chunk_tokens=512, cache_tiers=(32768, 49152), vision_slots=(8, 16, 6))
 
 
@@ -571,8 +571,8 @@ class NotebookEvaluations:
         if job['profile']=='tpu':    # which episodes fit, and so what a refused (no-answer) episode costs, depends on these
             identity['tpu_generation'] = {k:list(v) if isinstance(v,tuple) else v for k,v in TPU_GENERATION.items()}
         if job['kind']=='speculative' and job['profile']=='tpu':
-            # No vLLM and no pre-merged target on TPU: the in-process static generator merges adapter + base in memory. The MTP head is
-            # not in the Hugging Face model, so only the n-gram conditions run here (the vLLM profiles keep baseline + mtp_1).
+            # No vLLM and no pre-merged target on TPU: the in-process static generator merges adapter + base in memory, and the MTP
+            # head is loaded from the base snapshot (the adapter never touches it). The vLLM profiles keep baseline + mtp_1.
             identity['conditions']=list(TPU_SPEC_CONDITIONS)
             identity['draft_variant']='ngram'
             identity['backend']='tpu_static_generation'

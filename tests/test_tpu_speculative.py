@@ -36,7 +36,7 @@ def test_conditions_match_the_vllm_benchmark_names():
     assert parse_condition("baseline") is None
     spec = parse_condition("ngram_5")
     assert (spec.k, spec.prompt_lookup_min, spec.prompt_lookup_max, spec.width) == (5, 1, 5, 6)
-    for bad in ("mtp_1", "ngram", "ngram_x", "lookup_3"):
+    for bad in ("mtp", "ngram", "ngram_x", "lookup_3"):
         with pytest.raises(ValueError):
             parse_condition(bad)
     with pytest.raises(ValueError):

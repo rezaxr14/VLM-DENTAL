@@ -14,8 +14,7 @@ therefore CHECKED (``docs/TPU_SPECULATIVE.md``), never assumed: the benchmark ga
 
 Draft source: ``ngram_k`` = vLLM's ``method=ngram`` configuration (``num_speculative_tokens=k``, ``prompt_lookup_min=1``,
 ``prompt_lookup_max=k``): the longest suffix of the context (``k`` down to 1 tokens) that occurred earlier, most recent occurrence
-first, proposes the tokens that followed it. No draft = an ordinary decode step. The native MTP head needs weights the Hugging Face
-model does not load; it is not part of this patch.
+first, proposes the tokens that followed it. No draft = an ordinary decode step. ``mtp_k`` (the native MTP head) lives in ``tpu_mtp``.
 """
 from __future__ import annotations
 
@@ -25,7 +24,7 @@ from typing import Any
 
 import torch
 
-CONDITION = re.compile(r"^(ngram)_(\d+)$")
+CONDITION = re.compile(r"^(ngram|mtp)_(\d+)$")
 
 
 @dataclass(frozen=True)
@@ -36,8 +35,8 @@ class SpeculativeConfig:
     prompt_lookup_max: int = 3
 
     def __post_init__(self):
-        if self.method != "ngram":
-            raise ValueError(f"unsupported speculative method {self.method!r}: only 'ngram' runs on TPU (MTP needs the native head)")
+        if self.method not in {"ngram", "mtp"}:
+            raise ValueError(f"unsupported speculative method {self.method!r}: 'ngram' or 'mtp'")
         if not 1 <= self.k <= 8:
             raise ValueError("speculative k must be in 1..8")
         if not 1 <= self.prompt_lookup_min <= self.prompt_lookup_max:
@@ -48,19 +47,22 @@ class SpeculativeConfig:
         return self.k + 1
 
     def record(self) -> dict:
+        if self.method == "mtp":
+            return dict(method="mtp", num_speculative_tokens=self.k)
         return dict(method=self.method, num_speculative_tokens=self.k, prompt_lookup_min=self.prompt_lookup_min,
                     prompt_lookup_max=self.prompt_lookup_max)
 
 
 def parse_condition(name: str) -> SpeculativeConfig | None:
-    """``baseline`` -> None; ``ngram_3`` -> SpeculativeConfig(k=3, lookup 1..3) like ``specdec.speculative_config``."""
+    """``baseline`` -> None; ``ngram_3`` -> SpeculativeConfig(k=3, lookup 1..3) and ``mtp_2`` -> SpeculativeConfig('mtp', k=2), like
+    ``specdec.speculative_config``."""
     if name == "baseline":
         return None
     match = CONDITION.match(name)
     if not match:
-        raise ValueError(f"unknown TPU speculation condition {name!r} (baseline, ngram_2, ngram_3, ngram_5; mtp_* is not available on TPU)")
-    k = int(match.group(2))
-    return SpeculativeConfig(method="ngram", k=k, prompt_lookup_min=1, prompt_lookup_max=k)
+        raise ValueError(f"unknown TPU speculation condition {name!r} (baseline, ngram_<k>, mtp_<k>)")
+    method, k = match.group(1), int(match.group(2))
+    return SpeculativeConfig(method=method, k=k, prompt_lookup_min=1, prompt_lookup_max=k)
 
 
 def ngram_draft(history: list[int], k: int, min_n: int, max_n: int) -> list[int]:

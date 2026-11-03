@@ -1,4 +1,4 @@
-# TPU speculative decoding (patch 0064)
+# TPU speculative decoding (patches 0064, 0065)
 
 vLLM has no TPU path for this model here, so speculation runs inside the static-shape generator of patch 0062
 (`docs/TPU_GENERATION.md`), in the same process as every other TPU evaluation. GPU/CPU paths, flags, result files and identities are
@@ -10,7 +10,7 @@ unchanged; the vLLM benchmark (`scripts/bench/spec_decode_bench.py`) is untouche
 |---|---|---|
 | `baseline` | yes | the ordinary 0062 decode loop |
 | `ngram_2`, `ngram_3`, `ngram_5` | yes | prompt-lookup drafts, greedy, exact verification (names and parameters mirror vLLM's `method=ngram`: `num_speculative_tokens=k`, lookup 1..k) |
-| `mtp_*` | **no** | the Hugging Face model does not implement Qwen3.5's native MTP head; it needs a separate patch (0065) |
+| `mtp_1`, `mtp_2`, `mtp_3` | yes, patch 0065 | the checkpoint's native MTP head, rebuilt in `dental_agent/model/tpu_mtp.py` (Hugging Face drops the `mtp.*` tensors); `mtp_k` = `k` chained draft tokens |
 
 Entry points: `scripts/bench/spec_decode_bench_tpu.py` (same JSON schema, same equivalence gate as the vLLM benchmark), the
 `speculative` kind of `NotebookEvaluations` on the `tpu` profile, and `Speculative_Decoding.ipynb` with
@@ -35,6 +35,28 @@ position (each position sees the drafts before it as accepted), which is what se
 Cache tiers must hold `max_new_tokens + k` (the last round may write `k` rejected positions); a request that fits only without the
 overrun is refused with the ordinary `GenerationTooLong` (recorded and counted as in 0063, never truncated).
 
+## Native MTP head (`mtp_k`)
+
+Head (one full-attention layer + dense MLP, its own KV cache; same architecture vLLM serves): for the pair (target hidden state `h_i` after
+the final norm, embedding of the token `x_{i+1}` that followed it) it predicts `x_{i+2}`:
+`fc(concat[pre_fc_norm_embedding(embed(x_{i+1})), pre_fc_norm_hidden(h_i)])` -> decoder layer (rotary position of `h_i`) -> `norm` ->
+the target's own `lm_head`. Draft 1 comes from the last verified pair, draft `i` from (previous head output, previous draft) at the next
+position, `k` times. The head's cache is filled during prefill (pairs of every prompt position) and refilled after each verified block
+(pairs `(h_j, embed(t_j))` for the accepted `j`, the rest rewound), so a round is one program: verify `k + 1` tokens, roll the hybrid state
+back, refill the head cache, draft `k` more; drafts never visit the host.
+
+Weights: `mtp.*` tensors of the local base snapshot (the LoRA adapter never touches them), loaded **strictly** by name and shape into the
+head built from the text config; any mismatch stops the benchmark before the first episode and prints missing / unexpected / wrong-shape
+tensors. The names (`fc`, `norm`, `pre_fc_norm_hidden`, `pre_fc_norm_embedding`, `layers.0.{input_layernorm, self_attn.{q,k,v,o}_proj,
+q_norm, k_norm, post_attention_layernorm, mlp.{gate,up,down}_proj}`) come from the public vLLM/MLX implementations, **not** from the real
+9B checkpoint, which could not be opened offline: the first TPU run is also the first load of the real head.
+
+What is verified offline: tokens are always the target's own greedy tokens (equality with the baseline for a randomly initialised head,
+partial and full acceptances via an oracle seam, EOS, boundaries, repetition penalty, images); every head output of a decode (prefill
+fill, refill, rewind, chain) equals running the head over the whole sequence at once; zero new XLA programs after settling. What is not:
+that vLLM wires the pairing / hidden-state choice exactly like this. A deviation can only lower the acceptance rate (visible in the
+benchmark's `acceptance_rate`), never change an output. If acceptance for `mtp_1` is near zero, suspect the head wiring first.
+
 ## Exactness is checked, not assumed
 
 Equality with non-speculative decoding is proven on CPU (eager) and on 8 virtual XLA-CPU devices through PEFT + FSDPv2 for many
@@ -56,7 +78,7 @@ with GPU serving numbers.
 
 ## What the tests prove, and what they do not
 
-Proved offline: CPU equality (23 tests), XLA-CPU equality and **zero new XLA programs** across prompt lengths, draft lengths and
+Proved offline: CPU equality (23 n-gram + 24 MTP tests), XLA-CPU equality and **zero new XLA programs** across prompt lengths, draft lengths and
 acceptance patterns once settled (`tests/test_tpu_speculative_xla_cpu.py`; the counter used is `UncachedCompile`, because
 `CompileTime` also counts per-execution handle creation), coordinator identity / command / parser wiring.
 

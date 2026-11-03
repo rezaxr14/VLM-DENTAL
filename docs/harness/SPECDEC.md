@@ -77,4 +77,4 @@ Actual fine-tuning, device compatibility, acceptance improvement, dev F1 and ser
 
 ## TPU
 
-The `tpu` profile has no vLLM path. Its speculative job runs `scripts/bench/spec_decode_bench_tpu.py` in-process on the static TPU generator with the exact n-gram conditions `baseline, ngram_2, ngram_3, ngram_5`; MTP conditions are GPU-only because the Hugging Face model does not load the MTP head. Same equivalence gate; see `docs/TPU_SPECULATIVE.md`.
+The `tpu` profile has no vLLM path. Its speculative job runs `scripts/bench/spec_decode_bench_tpu.py` in-process on the static TPU generator with `baseline, mtp_1, mtp_2, mtp_3, ngram_2, ngram_3, ngram_5`; the MTP head is rebuilt from the base snapshot's `mtp.*` tensors (`dental_agent/model/tpu_mtp.py`) because Hugging Face does not load it. Same equivalence gate; see `docs/TPU_SPECULATIVE.md`.

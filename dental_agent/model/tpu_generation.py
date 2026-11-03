@@ -66,7 +66,8 @@ class TPUGenerationConfig:
     slot_budget: Mapping[str, int] = field(default_factory=lambda: dict(SLOT_BUDGET))
     batch_multiple: int = 1                       # set to the number of cores under SPMD
     mesh: Any = None                              # optional xs.Mesh with axes ('fsdp', 'model'); batch is sharded on 'fsdp'
-    speculative: Any = None                       # tpu_speculative.SpeculativeConfig: greedy prompt-lookup speculation (None = off)
+    speculative: Any = None                       # tpu_speculative.SpeculativeConfig: greedy prompt-lookup / MTP speculation (None = off)
+    mtp_head: Any = None                          # tpu_mtp.MTPHead (attach_mtp_head); needed for speculative method 'mtp'
     stats: dict = field(default_factory=lambda: {"calls": 0, "prefill_chunks": 0, "decode_steps": 0, "too_long": 0,
                                                  "slot_overflow": 0, "rollouts_dropped": 0, "tiers": {}})
 
@@ -497,6 +498,8 @@ def tpu_generate(model: Any, inputs: Mapping[str, Any], *, max_new_tokens: int, 
     spec = config.speculative
     if spec is not None and (temperature or 0.0) > 0:
         raise ValueError("TPU speculative decoding is greedy only (temperature 0): exactness is the point of the verification")
+    if spec is not None and spec.method == "mtp" and config.mtp_head is None:
+        raise ValueError("speculative method 'mtp' needs the native head: tpu_mtp.attach_mtp_head(model, <local Qwen3.5 snapshot>)")
     t_start = time.perf_counter()
     # a speculative round writes up to k positions beyond the last real token, so the tier must hold them too
     prepared, B, B0, pix, grid = _prepare(base, config, inputs, max_new_tokens + (spec.k if spec is not None else 0), pad_token_id)
@@ -538,6 +541,12 @@ def tpu_generate(model: Any, inputs: Mapping[str, Any], *, max_new_tokens: int, 
             gathered = vision.gather(1, vi.unsqueeze(-1).expand(-1, -1, vision.shape[-1]))
             return torch.where(iv.unsqueeze(-1), gathered, tok), idx
 
+        drafter = None
+        if spec is not None and spec.method == "mtp":
+            from dental_agent.model.tpu_mtp import MTPDrafter
+            drafter = MTPDrafter(config.mtp_head, text_config=text_config, body=body, lm_head=head, mesh=mesh, pin_cache=_pin_cache,
+                                 attention_masks=attention_masks, float_mask=float_mask, dtype=dtype, device=device, pad=pad,
+                                 base_pos=base_pos, prompt_dev=prompt_dev, cache_len=C, batch=B, k=spec.k)
         last_hidden = None
         for j in range(P // q):
             start = zero + j * q
@@ -546,6 +555,8 @@ def tpu_generate(model: Any, inputs: Mapping[str, Any], *, max_new_tokens: int, 
             out = body(inputs_embeds=embeds, position_ids=pos.index_select(2, idx), attention_mask=masks,
                        past_key_values=cache, use_cache=True)
             last_hidden = out.last_hidden_state[:, -1]
+            if drafter is not None:                                     # the head's own cache over the prompt (pairs h_i, x_{i+1})
+                drafter.prefill_chunk(out.last_hidden_state, ids, pos.index_select(2, idx), idx, start, P)
             _pin_cache(cache, mesh)
             _step(device)
             config.stats["prefill_chunks"] += 1
@@ -562,6 +573,23 @@ def tpu_generate(model: Any, inputs: Mapping[str, Any], *, max_new_tokens: int, 
             seen = seen.scatter(1, tok.unsqueeze(1), torch.ones((B, 1), dtype=torch.bool, device=device))
         _step(device)
 
+        if spec is not None and spec.method == "mtp":
+            from dental_agent.model.tpu_mtp import mtp_decode
+            drafts = drafter.start(last_hidden, tok, pos.index_select(2, (prompt_dev - 1).reshape(1)))
+            _step(device)
+            first = int(tok[0].cpu())
+            t_first = time.perf_counter()
+            tokens, counters = mtp_decode(
+                spec=spec, drafter=drafter, body=body, head=head, cache=cache, mesh=mesh, pin_cache=_pin_cache, step_fn=_step, device=device,
+                attention_masks=attention_masks, float_mask=float_mask, dtype=dtype, pad=pad, base_pos=base_pos, prompt_dev=prompt_dev,
+                zero=zero, cache_len=C, tok=tok, seen=seen, drafts=drafts,
+                sample=lambda logits, s: _sample(logits, seen=s, **sample_kw), eos=eos, max_new_tokens=max_new_tokens,
+                stats=config.stats, batch=B)
+            assert tokens[0] == first
+            config.stats["last_call"] = dict(
+                prompt_tokens=int(prepared.real_len[0]), generated_tokens=len(tokens), prefill_seconds=t_first - t_start,
+                decode_seconds=time.perf_counter() - t_first, speculative=spec.record(), **counters)
+            return torch.tensor([tokens], dtype=torch.long)
         if spec is not None:
             from dental_agent.model.tpu_speculative import speculative_decode
             first = int(tok[0].cpu())                                    # also the prefill/first-token boundary of the timing

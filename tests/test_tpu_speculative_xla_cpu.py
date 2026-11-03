@@ -83,3 +83,54 @@ def test_speculation_matches_baseline_through_fsdp_and_stops_recompiling():
     print("new speculative compilations across prompts, draft lengths and acceptance patterns:", extra, flush=True)
     assert extra == 0, "speculation triggered a recompilation"
     assert cfg.stats["spec_rounds"] > 0 and cfg.stats["spec_plain_steps"] > 0
+
+
+def test_mtp_speculation_matches_baseline_through_fsdp_and_stops_recompiling():
+    import torch
+    torch_xla, xm, xs, mesh = _setup()
+    import test_tpu_generation as T
+    from dental_agent.model import tpu_generation as tg
+    from dental_agent.model.tpu_mtp import MTPHead
+    from dental_agent.model.tpu_speculative import parse_condition
+    from dental_agent.training.sft import wrap_spmd_model
+    from dental_agent.training.xla_patches import install_xla_solve_triangular_shim
+    install_xla_solve_triangular_shim()
+
+    cpu = T.tiny().eval()
+    model = copy.deepcopy(cpu)
+    cfg = T.cfg(batch_multiple=8, mesh=mesh, cache_tiers=(512,))
+    tg.install_tpu_generation(model, cfg)
+    torch.manual_seed(3)
+    head = MTPHead(cpu.config.get_text_config()).eval().requires_grad_(False)
+    for p in head.parameters():
+        p.data.normal_(0, 0.1)
+    cfg.mtp_head = head.to(torch_xla.device())                      # replicated: unannotated tensors are replicated under SPMD
+    model = model.to(torch_xla.device())
+    wrapped = wrap_spmd_model(model, mesh=mesh)
+
+    def run(name, ids, new):
+        cfg.speculative = parse_condition(name)
+        out = tg.tpu_generate(wrapped, {"input_ids": ids, "attention_mask": torch.ones_like(ids)}, max_new_tokens=new,
+                              temperature=0.0, pad_token_id=0)
+        xm.wait_device_ops()
+        return out
+
+    ids = T.text_prompt(100, 5).unsqueeze(0)
+    want = T.stock(cpu, ids, torch.ones_like(ids), 60)
+    base = run("baseline", ids, 60)
+    assert T.equal_until_eos(want, base)
+    for name in ("mtp_1", "mtp_3"):
+        spec = run(name, ids, 60)
+        assert torch.equal(base, spec), (name, base, spec)
+    # XLA settles per prefill chunk count (1, 2 and 3 chunks of 64 differ), so warm up one prompt of each, then measure other lengths
+    for seed, length in ((6, 60), (7, 110), (8, 150)):
+        run("mtp_3", T.text_prompt(length, seed).unsqueeze(0), 40)
+    cases = ((9, 130, 50), (10, 40, 40), (5, 100, 60))
+    bases = {c: run("baseline", T.text_prompt(c[1], c[0]).unsqueeze(0), c[2]) for c in cases}
+    before = _compiles()
+    for c in cases:
+        s = run("mtp_3", T.text_prompt(c[1], c[0]).unsqueeze(0), c[2])
+        assert torch.equal(bases[c], s), (c, bases[c], s)
+    extra = _compiles() - before
+    print("new MTP compilations across prompts and acceptance patterns:", extra, flush=True)
+    assert extra == 0, "MTP speculation triggered a recompilation"

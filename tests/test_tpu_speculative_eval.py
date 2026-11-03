@@ -46,13 +46,13 @@ def test_tpu_speculative_job_needs_no_vllm_and_no_merged_target(tmp_path):
     jobs = [j for j in session.jobs if j["kind"] == "speculative"]
     assert len(jobs) == 1 and jobs[0]["profile"] == "tpu"
     identity = session._identity({**jobs[0], "size": "canonical"})
-    assert identity["conditions"] == ["baseline", "ngram_2", "ngram_3", "ngram_5"]
+    assert identity["conditions"] == ["baseline", "mtp_1", "mtp_2", "mtp_3", "ngram_2", "ngram_3", "ngram_5"]
     assert identity["backend"] == "tpu_static_generation" and identity["merged_files"] is None and "serving" not in identity
     assert identity["tpu_generation"]["cache_tiers"] == [32768, 49152]
     command, result, adapter = session._command({**jobs[0], "size": "canonical"}, identity, tmp_path)
     assert command[1:3] == ["-u", "scripts/bench/spec_decode_bench_tpu.py"] and adapter == "/exact/adapter"
     assert "--vllm-executable" not in command and "--checkpoint" not in command and "--tpu-generation-chunk-tokens" in command
-    assert command[command.index("--conditions") + 1:command.index("--conditions") + 5] == ["baseline", "ngram_2", "ngram_3", "ngram_5"]
+    assert command[command.index("--conditions") + 1:command.index("--conditions") + 8] == ["baseline", "mtp_1", "mtp_2", "mtp_3", "ngram_2", "ngram_3", "ngram_5"]
     assert result == tmp_path / "results.json"
 
 
@@ -63,15 +63,15 @@ def test_the_benchmark_parser_accepts_exactly_what_the_coordinator_sends(tmp_pat
     sys.path.insert(0, str(ROOT))
     from scripts.bench import spec_decode_bench_tpu as bench
     args = bench.parse_args(command[3:])
-    assert args.conditions == ["baseline", "ngram_2", "ngram_3", "ngram_5"] and args.tpu_generation_chunk_tokens == 512
+    assert args.conditions == ["baseline", "mtp_1", "mtp_2", "mtp_3", "ngram_2", "ngram_3", "ngram_5"] and args.tpu_generation_chunk_tokens == 512
     assert args.canonical_letterbox is True and args.max_new_tokens == 16384 and args.checkpoint_kind == "grpo"
 
 
-def test_the_benchmark_refuses_mtp_and_a_missing_baseline():
+def test_the_benchmark_refuses_unknown_conditions_and_a_missing_baseline():
     sys.path.insert(0, str(ROOT))
     from scripts.bench import spec_decode_bench_tpu as bench
     with pytest.raises(SystemExit):
-        bench.parse_args(["--model-id", "m", "--adapter-path", "a", "--conditions", "baseline", "mtp_1"])
+        bench.parse_args(["--model-id", "m", "--adapter-path", "a", "--conditions", "baseline", "mtp_4"])
     with pytest.raises(ValueError, match="start with baseline"):
         bench.main(["--model-id", "m", "--adapter-path", "a", "--conditions", "ngram_3", "--tpu-generation-chunk-tokens", "512"])
 
