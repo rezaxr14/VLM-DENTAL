@@ -28,22 +28,15 @@ ending without a parseable answer, and expected calibration error (ECE) \citep{g
 between stated confidence and correctness.
 
 \paragraph{Conditions.}
-Every condition is a checkpoint (base, SFT, GRPO) with or without tool access, evaluated under
-the input geometry used in training (original images for native-trained checkpoints; the
-canonical views of \cref{fig:inputgeom} for canonically trained ones; tools always operate on
-the native image) and additionally at original size. The no-tools arms use the \emph{same} SFT and GRPO recipe on the
+Every condition is a checkpoint (base, SFT, GRPO) with or without tool access, evaluated on the original images;
+tools always operate on the native image. The no-tools arms use the \emph{same} SFT and GRPO recipe on the
 1{,}847 single-turn traces, so tool contribution is not confounded with training recipe. \cref{fig:design} summarizes the
 design.
 
 \begin{figure}[tbp]
   \centering
-  \includegraphics[width=\linewidth]{fig_design}
-  \caption{Experimental design. The four conditions form a $2\times2$ (SFT vs.\ SFT$+$GRPO, with
-  vs.\ without tools) trained with one recipe, so H1 (tools help) compares rows within a column
-  and H2 (RL helps) compares columns within a row; H3 positions the full system against a
-  supervised specialist, next to the zero-shot references of \cref{tab:zeroshot}. Result cells
-  are pending the first hardware run, as in \cref{tab:main}; the protocol is frozen
-  (\cref{sec:eval}).}
+  \includegraphics[width=\linewidth]{fig_design_2x2}
+  \caption{Experimental design: SFT or SFT+GRPO, with or without tools. H1 compares rows, H2 columns, and H3 the full system with a supervised specialist, next to the zero-shot references of \cref{tab:zeroshot}. Result cells are pending the first hardware run, as in \cref{tab:main}; the protocol is frozen (\cref{sec:eval}).}
   \label{fig:design}
 \end{figure}
 
@@ -79,7 +72,7 @@ design.
 \cref{tab:zeroshot} motivates additional inspection without identifying a causal error
 mechanism. The best pooled exact F1 is 0.222; the 46.0\% image-level exact hit rate answers
 a different question and is not finding recall or complete-case correctness. Tool-specific
-benefits require the controlled trained-policy comparisons, not extrapolation from baselines.
+benefits require the controlled trained-agent comparisons, not extrapolation from baselines.
 
 \subsection{Main results}
 \label{sec:mainresults}
@@ -149,14 +142,8 @@ reference center (cosine $>0.3$), \emph{away} if against it, \emph{rescaling} ot
 
 \begin{figure}[tbp]
   \centering
-  \includegraphics[width=\linewidth]{fig_nudge_tier}
-  \caption{(a) Corrective \texttt{nudge\_crop} usage rises monotonically with perturbation
-  severity on the ground-truth-anchored subset (bars, with Wilson 95\% intervals; the rates of
-  \cref{tab:nudgetier}); diamonds give the same rate over all locate returns, including
-  detector-anchored ones. (b) Paired mean IoU with the reference box before and after correction, over the
-  corrected locates (the same episodes), with 95\% intervals of the mean. The ``none'' bars
-  reflect the few corrective nudges on clean boxes (1.1\% of that tier), which are mostly
-  reframing rescales rather than corrections.}
+  \includegraphics[width=\linewidth]{fig_correction_behaviour}
+  \caption{Correction behaviour by perturbation tier (rates in \cref{tab:nudgetier}). (a)~Corrective \texttt{nudge\_crop} rate on the ground-truth-anchored subset (Wilson 95\% intervals); diamonds: all locate returns. (b)~IoU with the expert box before and after correction, same episodes (95\% intervals of the mean). The few nudges on clean boxes are mostly reframing rescales.}
   \label{fig:nudgetier}
 \end{figure}
 
@@ -169,7 +156,7 @@ the zoom margin often absorbing a small offset (the paired mean IoU of those epi
 0.45 $\to$ 0.45). On corrected large offsets, mean IoU against the expert box improves from
 0.088 to 0.243 on the same 573 episodes --- partial on average, because a
 single nudge rarely lands perfectly --- with individual recoveries as large as IoU 0.066
-$\to$ 0.938 on a DENTEX training image (\cref{fig:concept}; further episodes in \cref{fig:gallery}). The remaining gap is visible in
+$\to$ 0.937 on a DENTEX training image (\cref{fig:mechanism}; further episodes in \cref{fig:gallery}). The remaining gap is visible in
 the audit: uncorrected spatial drifts are what the verifier's third rejection category (11
 traces) caught and repaired during corpus construction.
 
@@ -177,7 +164,7 @@ Two further observations qualify these results. First, the split by reference ty
 \cref{app:mechanism}): on
 \emph{detector-anchored} locates (exploratory calls during healthy-scan full-arch surveys, where
 the reference is the detector's own box), correction is much rarer (5.0\% on large offsets vs.\
-38.4\% ground-truth-anchored) ; during rapid systematic surveys the teacher surveys broadly
+38.4\% ground-truth-anchored); during rapid systematic surveys the teacher surveys broadly
 and inspects each exploratory box less carefully. The demonstrated skill this paper targets is the
 ground-truth-anchored pathology workflow. Second,
 nudge \emph{rescales} skew small (scale $<1$): the dominant corrective pattern is
@@ -185,18 +172,8 @@ tighten-after-shift, which resembles zooming into a suspected lesion after cente
 
 \begin{figure}[!tb]
   \centering
-  \includegraphics[width=\linewidth]{fig_gallery}
-  \caption{Six verified with-tools episodes from the released corpus (five pathology, one healthy
-  negative control), from two institutions. Each pathology panel shows the episode in context
-  (expert box green, box returned by \texttt{locate\_tooth} blue, box after the
-  \texttt{nudge\_crop} chain orange) and the crops the policy inspected before and after
-  correcting; the header gives the offset tier, the number of nudges, and the IoU with the
-  full-tooth expert box. (a) A three-nudge inspect--correct--re-inspect loop; (b) one nudge among
-  15 findings and 42 tool calls; (c) a deep-caries tooth with a three-step chain; (d) a Tufts
-  periapical lesion; (e) a small-offset judgment call; (f) a healthy scan cleared without a
-  hallucinated finding. Tiers are the logged perturbation tiers (confirmed by the box geometry), and a policy that also rescales to focus can show a
-  lower IoU than the displacement it recovered. Crops are native-resolution views of the box with
-  30\% padding (illustrative of the zoom tool, not the canonical-view geometry).}
+  \includegraphics[width=\linewidth]{fig_gallery_episodes}
+  \caption{Six verified episodes (five pathology, one healthy control) from two institutions: expert box green, box returned by \texttt{locate\_tooth} blue, box after the \texttt{nudge\_crop} chain orange, with the crops the agent inspected before and after. (a)~Three nudges; (b)~one nudge among 15 findings; (c)~deep caries; (d)~Tufts periapical lesion; (e)~small offset; (f)~healthy scan cleared without a hallucinated finding. Tiers are the logged perturbation tiers.}
   \label{fig:gallery}
 \end{figure}
 
@@ -218,7 +195,7 @@ Every \texttt{locate\_tooth} box at evaluation time is displaced by a fixed pseu
 fraction of its own size (the same wrong box for the same image and tooth across conditions, so
 comparisons stay paired), and we report the IoU of the agent's working box against the annotated
 tooth before and after its last \texttt{nudge\_crop}, plus how much of the annotated tooth the
-last \texttt{zoom\_crop} actually shows. This is a stress test of the trained policy's
+last \texttt{zoom\_crop} actually shows. This is a stress test of the trained agent's
 self-correction --- the deployed version of \cref{sec:mechanism}. \todo{pending}
 
 \paragraph{Group-size sweep.}

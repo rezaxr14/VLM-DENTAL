@@ -1,0 +1,31 @@
+{
+ "region_map": [
+  760,
+  480,
+  760,
+  320
+ ],
+ "region_strip": [
+  760,
+  520,
+  760,
+  200
+ ],
+ "center_range": [
+  0,
+  255
+ ],
+ "width_range": [
+  20,
+  250
+ ],
+ "strength_range": [
+  0.0,
+  1.0
+ ],
+ "factor_range": [
+  1.0,
+  3.0
+ ],
+ "slices": 96
+}

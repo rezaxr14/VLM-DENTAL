@@ -14,38 +14,29 @@ Tool-using systems in medical and general domains provide relevant precedents
 \citep{wu2026vtool,li2024mmedagent,zhang2025octotools,oralgptplus2026,oralagent2026}.
 We focus on one failure point: a learned grounding model can return a plausible box for the
 wrong region, and every subsequent crop inherits that error. Instead of treating the box as an
-authoritative observation, the policy should be able to inspect and revise it. Whether a
-trained policy acquires this behavior, and whether it improves diagnosis, are empirical
+authoritative observation, the agent should be able to inspect and revise it. Whether a
+trained agent acquires this behavior, and whether it improves diagnosis, are empirical
 questions that the frozen evaluation design is built to answer.
 
 This paper develops \sys{}, an agentic VLM for OPG diagnosis built on a different contract
-between the policy and its tools: \emph{grounding is a hypothesis, not an answer}
-(\cref{fig:concept}). \cref{fig:architecture,fig:training} show the system (agent loop and
-offline training stack), and \cref{fig:evidence,fig:traces} contrast the two trace arms on one
-image. Our contributions are:
+between the agent and its tools: \emph{grounding is a hypothesis, not an answer}
+(\cref{fig:mechanism}). \cref{fig:overview} shows the system, \cref{fig:internals} opens its model,
+and \cref{fig:evidence} contrasts the two trace arms on one image. Our contributions are:
 
 \begin{figure}[tbp]
   \centering
-  \includegraphics[width=\linewidth]{fig_concept}
-  \caption{The central idea, on a real episode from the corpus (DENTEX image 127, an impacted FDI
-  tooth 48). (a) When a grounding box is taken as an answer, the crop of that box looks
-  authoritative and every later observation inherits its error : here the returned box (blue)
-  sits 0.92 box-sizes from the expert box (green; IoU 0.07). (b) \sys{} treats the box as a
-  hypothesis: the policy sees a crop dominated by an upper molar, judges the box ``about one arch
-  too high'', corrects it with one box-relative \texttt{nudge\_crop} (orange; IoU 0.94), and
-  answers from the corrected view. Crops are native-resolution views of the box with 30\% padding. Further episodes are
-  shown in \cref{fig:gallery}; the full with-tools trace of another image is dissected in
-  \cref{fig:evidence,fig:traces}.}
-  \label{fig:concept}
+  \includegraphics[width=\linewidth]{fig_correction_mechanism}
+  \caption{Grounding is a hypothesis, not an answer (DENTEX image 127, impacted FDI tooth 48). (a)~\texttt{nudge\_crop} shifts a wrong box (blue, 0.92 box-sizes from the expert box, green) onto the tooth. (b)~The demonstrations were generated with a tiered perturbation of the shown box. (c)~The agent inspects, judges (``about one arch too high''), corrects, and answers from the corrected view (IoU 0.07$\to$0.94).}
+  \label{fig:mechanism}
 \end{figure}
 
 \begin{enumerate}[leftmargin=*,itemsep=2pt,topsep=3pt]
 \item \textbf{A self-correcting grounding tool (\texttt{nudge\_crop}, \cref{sec:nudge}).}
-The policy can shift and rescale a box it was \emph{already given}, whether by the grounding
+The agent can shift and rescale a box it was \emph{already given}, whether by the grounding
 model or by a previous correction, using box-relative fractional arguments (\texttt{dx\_frac},
 \texttt{dy\_frac}, \texttt{scale}) that a VLM can reason about in words (``shift right about
 half a tooth-width''), without re-running detection. Box revision thus becomes an explicit,
-inspectable action rather than an implicit change in the policy's internal localization.
+inspectable action rather than an implicit change in the model's internal localization.
 \item \textbf{A tiered perturbation mechanism that makes self-correction learnable
 (\cref{sec:perturbation}).} Demonstrating correction behavior requires a demonstrator that
 \emph{experiences} tool error. During trace generation we return the expert-verified box for
@@ -55,7 +46,7 @@ demonstrator}: 45\% clean, 25\% small offsets (12--28\% of box size), and 30\% l
 demonstrations do not go stale as the detector improves, and errors are never announced
 verbally, so correction has to be elicited by the returned image rather than by an explicit
 error message.
-Transfer of this behavior to the trained policy remains to be measured. A corpus-level analysis (\cref{sec:mechanism}) shows the mechanism elicits exactly the
+Transfer of this behavior to the trained agent remains to be measured. A corpus-level analysis (\cref{sec:mechanism}) shows the mechanism elicits exactly the
 intended behavior gradient in 3{,}694 generated demonstrations: corrective use of
 \texttt{nudge\_crop} on 38.4\% of large offsets, 13.6\% of small ones (intermediate offsets),
 and 1.1\% of clean boxes, on ground-truth-anchored pathology locates.
@@ -64,7 +55,7 @@ and 1.1\% of clean boxes, on ground-truth-anchored pathology locates.
 $\in[0,1]$)}, \texttt{window\_level} with exact \texttt{center}/\texttt{width} values as an
 override on top of presets, a multiplicative \texttt{enhance\_contrast} factor, and a tunable
 \texttt{zoom\_crop} context margin. Tool calls therefore carry information beyond tool
-identity, and the policy can match processing intensity to image characteristics.
+identity, and the agent can match processing intensity to image characteristics.
 \item \textbf{A ground-truth-anchored, correction-friendly reward (\cref{sec:reward}).} GRPO
 training \citep{deepseek2025r1} uses a composite reward whose dominant term is a hard,
 non-LLM-judge match against expert labels with multi-finding greedy one-to-one matching

@@ -9,7 +9,7 @@ learned weights, procedural context at inference, and decoding implementation.
 
 \subsection{Versioned rules and progressive procedural context}
 \label{sec:rules-skills}
-\Cref{fig:rules-skills-mechanism} shows how the harness supplies procedural context and audits its use. The harness contract extracts existing system/tool instructions and verifier/reward constraints
+\Cref{fig:overview} (Extension~1) places the harness in the agent loop; it supplies procedural context and audits its use. The harness contract extracts existing system/tool instructions and verifier/reward constraints
 into \texttt{rules.md}. Versioned rule identifiers link statements to
 prompt rendering or enforcement checks. A byte-level test requires the default file-based rendering
 to reproduce the existing system prompt exactly; inventory checks bind verifier/reward
@@ -29,16 +29,6 @@ still applies. Loaded skill versions, content digests, and turn/timing events ar
 optional trace metadata. Old traces remain readable without that metadata.
 
 
-\begin{figure}[tbp]
-\centering
-\includegraphics[width=\linewidth]{fig_rules_skills_mechanism}
-\caption{Rules and skills in the policy context. (a) Contract entries specify structured
-output, FDI tooth identity and complete findings. (b--c) Rule rendering and the five-file skill index
-construct the initial context. (d) A policy request is validated and dispatched; the returned skill
-body and references are appended to conversation history. (e) Disclosure events record which
-content was supplied and when. The excerpt is from the existing caries skill.}
-\label{fig:rules-skills-mechanism}
-\end{figure}
 
 \subsection{Paired evaluation without reopening the primary protocol}
 The extension (\cref{tab:harness-dev}) uses only the fixed, training-derived dev split. A frozen checkpoint is evaluated
@@ -65,7 +55,7 @@ Speculative decoding accelerates autoregressive generation by proposing several 
 and checking them together with the target model \citep{leviathan2023fast,chen2023accelerating}.
 Accepted proposals extend the output without the same number of sequential target-decoding
 steps. Its role in this system is confined to the local serving backend
-(\cref{fig:speculative-mechanism}): the agent still consumes the image and conversation,
+(\cref{fig:overview}, Extension~2, and the MTP block of \cref{fig:internals}): the agent still consumes the image and conversation,
 produces a structured turn, invokes the shared dispatcher, and receives real tool observations.
 Image prefill and diagnostic-tool execution remain separate costs; proposal overhead and
 rejected tokens can offset decoding gains.
@@ -77,22 +67,11 @@ and checkpoint identity accompany the result artifact. When the selected serving
 uses the native MTP head, the checkpoint audit checks its tensors against the original base
 before execution.
 
-\begin{figure}[tbp]
-\centering
-\includegraphics[width=\linewidth]{fig_speculative_mechanism}
-\caption{Speculative decoding and planned draft training. (a) A trained draft proposes a token
-block from committed context. (b) The visibility mask exposes the cached prefix and only earlier
-draft positions to each next-token prediction. (c) The symbolic greedy example accepts A and B,
-replaces the first mismatch with target token X, and discards the dependent suffix. (d) Planned
-draft training uses training contexts and frozen-target continuations, then deploys the draft
-alongside the unchanged target. No measured hit rate or speedup is implied.}
-\label{fig:speculative-mechanism}
-\end{figure}
 
 The planned draft-training stage uses with-tools training contexts and continuations generated
 by the trained target. The target remains frozen while draft parameters learn to predict its
 continuations. Dev and test images do not enter this stage. The resulting draft supplies proposals
-in \cref{fig:speculative-mechanism}; the target continues to verify them. Acceptance and
+in \cref{fig:overview}; the target continues to verify them. Acceptance and
 end-to-end efficiency require measurements after training; no completed draft-training result
 is claimed here.
 

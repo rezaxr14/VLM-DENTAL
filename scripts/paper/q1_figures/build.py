@@ -23,6 +23,12 @@ FIGURES = {
     "trace": ("fig_trace_pipeline", "fig_trace_pipeline"),
     "training": ("fig_training_reward", "fig_training_reward"),
     "model": ("fig_model_internals", "fig_model_internals"),
+    "data": ("fig_data_detector", "fig_data_detector"),
+    "tools": ("fig_tools_output", "fig_tools_output"),
+    "evidence": ("fig_evidence_trail", "fig_evidence_trail"),
+    "design": ("fig_design_2x2", "fig_design_2x2"),
+    "behaviour": ("fig_correction_behaviour", "fig_correction_behaviour"),
+    "gallery": ("fig_gallery_episodes", "fig_gallery_episodes"),
 }
 
 

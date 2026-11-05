@@ -9,7 +9,7 @@ together with automated checks of reasoning grounding by a cross-family LLM judg
 validates against expert labels, not against a prospective, blinded review by practicing
 clinicians on new cases. A reader study is the natural next step.
 
-\paragraph{Pending trained-policy results.}
+\paragraph{Pending trained-agent results.}
 The training-side evaluations (SFT, GRPO, and ablations on the trained agent) are designed,
 frozen, and implemented, but the runs are not complete. Those cells are marked as pending
 instead of extrapolated. The completed evidence (zero-shot baselines, grounding-tool
@@ -29,8 +29,8 @@ not replace measuring it.
 
 \paragraph{Demonstrated vs.\ learned correction.}
 \cref{sec:mechanism} measures the \emph{teacher's} behavior in the demonstrations, which is the
-skill the student is trained to acquire, not the trained policy's behavior at inference. The
-policy-side version of the same analysis is the grounding-perturbation probe, which awaits the
+skill the student is trained to acquire, not the trained agent's behavior at inference. The
+agent-side version of the same analysis is the grounding-perturbation probe, which awaits the
 trained checkpoint. Demonstrated behavior is necessary but not sufficient for learned behavior.
 
 \paragraph{Scale and scope.}
