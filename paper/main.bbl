@@ -19,16 +19,6 @@ Negin Baghbanzadeh, Pritam Sarkar, Michael Colacci, Abeer Badawi, Adibvafa
   vision-language models.
 \newblock \emph{arXiv preprint arXiv:2606.12169}, 2026.
 
-\bibitem[Bai et~al.(2025)Bai, Chen, Liu, Wang, Ge, Song, Dang, Wang, Wang,
-  Tang, Zhong, Zhu, Yang, Li, Wan, Wang, Ding, Fu, Xu, Ye,
-  et~al.]{bai2025qwen25vl}
-Shuai Bai, Keqin Chen, Xuejing Liu, Ruiqi Wang, Wenbin Ge, Sibo Song, Kai Dang,
-  Peng Wang, Shijie Wang, Jun Tang, Humen Zhong, Yuanzhi Zhu, Mingkun Yang,
-  Zhaohai Li, Jianqiang Wan, Pengfei Wang, Wei Ding, Zheren Fu, Yiheng Xu,
-  Jiabo Ye, et~al.
-\newblock {Qwen3-VL} technical report.
-\newblock \emph{arXiv preprint arXiv:2511.21631}, 2025.
-
 \bibitem[Chen et~al.(2023)Chen, Borgeaud, Irving, Lespiau, Sifre, and
   Jumper]{chen2023accelerating}
 Charlie Chen, Sebastian Borgeaud, Geoffrey Irving, Jean-Baptiste Lespiau,
@@ -93,12 +83,6 @@ Jing Hao, Siyuan Dai, Yongxin Zhang, Yuci Liang, Jiamin Wu, Jiahao Bao, Yuxuan
   dental textbooks; evaluated on MMOral-Uni / MMOral-OPG / OralQA-ZH, not
   DENTEX.
 
-\bibitem[Hu et~al.(2025)]{hu2025medvlmr1}
-Ziqian Hu et~al.
-\newblock {MedVLM-R1}: Incentivizing multimodal medical reasoning capability of
-  vision-language models via reinforcement learning.
-\newblock \emph{arXiv preprint arXiv:2502.19645}, 2025.
-
 \bibitem[Kuhn(1955)]{kuhn1955hungarian}
 Harold~W. Kuhn.
 \newblock The {Hungarian} method for the assignment problem.
@@ -144,6 +128,20 @@ Pan Lu, Bowen Chen, Sheng Liu, Rahul Thapa, Joseph Boen, and James Zou.
   reasoning.
 \newblock \emph{arXiv preprint arXiv:2502.11271}, 2025.
 \newblock Accepted to ACL 2026.
+
+\bibitem[Pan et~al.(2025)Pan, Liu, Wu, Liu, Zhu, Li, Chen, Ouyang, and
+  Rueckert]{pan2025medvlmr1}
+Jiazhen Pan, Che Liu, Junde Wu, Fenglin Liu, Jiayuan Zhu, Hongwei~Bran Li, Chen
+  Chen, Cheng Ouyang, and Daniel Rueckert.
+\newblock {MedVLM-R1}: Incentivizing medical reasoning capability of
+  vision-language models ({VLMs}) via reinforcement learning.
+\newblock \emph{arXiv preprint arXiv:2502.19634}, 2025.
+
+\bibitem[{Qwen Team}(2026)]{qwen2026qwen35}
+{Qwen Team}.
+\newblock {Qwen3.5}: Towards native multimodal agents.
+\newblock Blog post and model card, February 2026.
+\newblock URL \url{https://qwen.ai/blog?id=qwen3.5}.
 
 \bibitem[{Tufts University School of Dental Medicine}(2023)]{tuftsdatabase}
 {Tufts University School of Dental Medicine}.

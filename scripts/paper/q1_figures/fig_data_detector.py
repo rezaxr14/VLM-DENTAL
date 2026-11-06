@@ -1,7 +1,7 @@
-"""Figure 6: data sources, grounding pool, YOLOv8m detector, its validation, candidates, corpus cohorts.
+"""Figure 4: data sources, grounding pool, YOLOv8m detector, its validation, candidates, corpus cohorts.
 
 One left-to-right data path (two real sources -> grounding pool -> trained detector -> locate_tooth box and crop),
-with the detector's cross-validation and held-out numbers on the right and the unused candidate datasets and the
+with the detector's 5-fold cross-validation on the right and the unused candidate datasets and the
 corpus cohorts underneath. Real radiographs with real expert boxes (DENTEX image 127, Tufts image 975).
 """
 from common import *
@@ -121,11 +121,12 @@ def build(path):
     text(472, 487, 'trained', 12.5, False, 'start', INK, maxw=90)
 
     # ============================ detector validation (right) ============================
-    rect(664, 16, 320, 292, GRAY, rx=14)
-    text(680, 41, 'In-fold CV, target mAP50', 14, True, maxw=290)
+    rect(664, 16, 320, 504, GRAY, rx=14)
+    text(680, 41, '5-fold cross-validation, target mAP50', 14, True, maxw=296)
     for yy, col, lab in ((62, BLD, 'DENTEX-only, mean 0.9508'), (80, ORD, 'DENTEX + Tufts, mean 0.9376')):
         dot(686, yy - 4, col, 5); text(698, yy, lab, 12.5, False, 'start', INK, maxw=270)
-    yv = lambda v: 100 + (1.0 - v) * 933.3
+    text(680, 98, 'the folds are close: which fold is used hardly matters', 12, False, 'start', MUTE, italic=True, maxw=296)
+    yv = lambda v: 140 + (1.0 - v) * 2000
     for gv in (0.85, 0.90, 0.95, 1.00):
         add(f'<line x1="700" y1="{yv(gv):.1f}" x2="968" y2="{yv(gv):.1f}" stroke="#DADDE3" stroke-width="1"/>')
         text(694, yv(gv) + 4, f'{gv:.2f}', 11.5, False, 'end', MUTE, maxw=30)
@@ -138,31 +139,9 @@ def build(path):
         add(f'<line x1="{x}" y1="{yv(a):.1f}" x2="{x}" y2="{yv(b):.1f}" stroke="#9AA3AE" stroke-width="3"/>')
         add(f'<circle cx="{x}" cy="{yv(a):.1f}" r="6" fill="{BLD}" stroke="#FFFFFF" stroke-width="1.4"/>')
         add(f'<circle cx="{x}" cy="{yv(b):.1f}" r="6" fill="{ORD}" stroke="#FFFFFF" stroke-width="1.4"/>')
-        text(x, 262, f'fold {i}', 12, False, 'middle', MUTE, maxw=50)
-        text(x, 279, f'{a:.3f}', 12, True, 'middle', BLD, maxw=50)
-        text(x, 295, f'{b:.3f}', 12, True, 'middle', ORD, maxw=50)
-
-    # ============================ held-out + co-training ============================
-    rect(664, 320, 320, 200, GRAY, rx=14)
-    text(680, 345, 'Co-training with Tufts', 13.5, True, maxw=170)
-    def pair(y, label, a, b, fa, fb):
-        text(680, y, label, 12.5, False, 'start', MUTE, maxw=150)
-        for k, (v, col, s) in enumerate(((a, BLD, fa), (b, ORD, fb))):
-            yy = y + 8 + k * 14
-            add(f'<rect x="680" y="{yy}" width="{v * 118:.1f}" height="10" rx="2" fill="{col}"/>')
-            text(680 + v * 118 + 6, yy + 9, s, 11.5, True, 'start', col, maxw=48)
-    pair(372, 'raw val mAP50', 0.5820, 0.8695, '0.5820', '0.8695')
-    pair(422, 'precision', 0.9637, 0.9680, '0.9637', '0.9680')
-    text(680, 474, 'protocol differs from the CV', 12, False, 'start', MUTE, italic=True, maxw=170)
-
-    text(906, 345, 'Held-out val', 13.5, True, 'middle', maxw=120)
-    for cx, v, lab, vs in ((876, 0.9593, 'mAP50', '0.9593'), (940, 0.9864, 'precision', '0.9864')):
-        add(f'<circle cx="{cx}" cy="400" r="24" fill="none" stroke="#DADDE3" stroke-width="7"/>')
-        arc(cx, 400, 24, -90, -90 + 360 * v - 0.01, TR, 7)
-        text(cx, 444, vs, 12.5, True, 'middle', INK, maxw=60)
-        text(cx, 460, lab, 12, False, 'middle', MUTE, maxw=62)
-    text(680, 496, '50 images, 46 pathological, 182 target boxes', 12, False, 'start', MUTE, maxw=296)
-    text(680, 512, 'best: DENTEX + Tufts, fold 1; deployed backend', 12, False, 'start', MUTE, maxw=296)
+        text(x, 466, f'fold {i}', 12, False, 'middle', MUTE, maxw=50)
+        text(x, 486, f'{a:.3f}', 12, True, 'middle', BLD, maxw=50)
+        text(x, 504, f'{b:.3f}', 12, True, 'middle', ORD, maxw=50)
 
     # ============================ candidates, not used ============================
     rect(16, 534, 634, 206, GRAY, rx=14)

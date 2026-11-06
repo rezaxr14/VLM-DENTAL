@@ -67,30 +67,29 @@ reference boxes on the clean tier gave zero mean coordinate error.
 \section{Grounding tool validation}
 \label{app:grounding}
 
-\cref{tab:grounding} summarizes the grounding tool's validation.
+\cref{tab:grounding} gives the 5-fold cross-validation of the grounding tool. The detector is
+not a contribution of this work, so it is not evaluated on the official DENTEX validation images;
+the folds are close to each other and the choice of fold makes no real difference.
 
 \begin{table}[htbp]
   \centering
   \small
-  \caption{YOLOv8m grounding tool (32 FDI classes), 5-fold cross-validation on the combined
-  DENTEX+Tufts pool (2{,}339 images, 46{,}808 boxes) and evaluation on the held-out target
-  benchmark (50 images, 182 annotated targets, greedy one-to-one target matching). ``Target
-  mAP50'' restricts evaluation to detections on annotated target teeth.}
+  \caption{YOLOv8m grounding tool (32 FDI classes), 5-fold cross-validation on all DENTEX images
+  (DENTEX-only) and on the combined DENTEX+Tufts pool (2{,}339 images, 46{,}808 boxes): target mAP50 per fold.
+  ``Target mAP50'' restricts evaluation to detections on annotated target teeth.}
   \label{tab:grounding}
-  \begin{tabular}{lrrrr}
+  \begin{tabular}{lrrrrrr}
     \toprule
-    Model & Target mAP50 & Target mAP50-95 & Precision & Recall@0.50 \\
+    Model & Fold 0 & Fold 1 & Fold 2 & Fold 3 & Fold 4 & Mean \\
     \midrule
-    DENTEX-only (5-fold mean) & 0.909 & 0.638 & 0.939 & 0.818 \\
-    DENTEX+Tufts (5-fold mean) & 0.926 & 0.644 & 0.963 & 0.775 \\
-    Best fold (DENTEX+Tufts, fold 1) & \textbf{0.959} & \textbf{0.650} & \textbf{0.986} & 0.797 \\
+    DENTEX-only & 0.953 & 0.941 & 0.961 & 0.956 & 0.942 & 0.951 \\
+    DENTEX+Tufts & 0.968 & 0.950 & 0.938 & 0.950 & 0.881 & 0.938 \\
     \bottomrule
   \end{tabular}
 \end{table}
 
-The precision/recall profile is the intended operating point for a grounding \emph{tool} inside
-an agent loop: high precision so crops are plausible, non-perfect recall so that correction
-(\cref{sec:nudge}) and re-location remain useful.
+Because the grounding tool sits inside an agent loop, an occasionally shifted box is acceptable: it
+is exactly what correction (\cref{sec:nudge}) is designed to handle.
 
 \section{Verifier rejection taxonomy}
 \label{app:verifier}

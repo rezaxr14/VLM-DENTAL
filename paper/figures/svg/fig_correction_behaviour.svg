@@ -132,5 +132,5 @@
 <path d="M784.0,418.0 L823.0,418.0" fill="none" stroke="#D9822B" stroke-width="2.4" stroke-linejoin="round"/>
 <polygon points="832.0,418.0 823.0,421.8 823.0,414.2" fill="#D9822B"/>
 <text x="740.0" y="483" font-size="12.5" font-weight="bold" text-anchor="middle" fill="#3B6BB5">IoU 0.066</text>
-<text x="876.0" y="483" font-size="12.5" font-weight="bold" text-anchor="middle" fill="#B8620F">IoU 0.937</text>
+<text x="876.0" y="483" font-size="12.5" font-weight="bold" text-anchor="middle" fill="#B8620F">IoU 0.938</text>
 </svg>

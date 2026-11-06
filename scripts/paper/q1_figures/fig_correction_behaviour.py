@@ -122,7 +122,7 @@ def build(path):
     dot(QX0 + 8, PY0 - 12, '#6B7280', 5); text(QX0 + 18, PY0 - 8, 'before', 12, False, 'start', INK, maxw=70)
     dot(QX0 + 94, PY0 - 12, GREEN, 5); text(QX0 + 104, PY0 - 8, 'after the nudges', 12, False, 'start', INK, maxw=130)
     # one real recovery
-    f = meta['flagship']['focus']
+    ex = json.load(open(str(ROOT) + '/paper/assets_summary.json'))['perturbation_example']
     cb_ = Image.open(SC + 'flagship/crop_before.jpg').convert('RGB'); ca_ = Image.open(SC + 'flagship/crop_after.jpg').convert('RGB')
     EY = PY1 + 52
     text(532, EY + 12, 'one recovery', 13.5, True, 'start', INK, maxw=140)
@@ -132,8 +132,8 @@ def build(path):
     x1 = 700; image(x1, EY, wb, hb, cb_); frame(x1, EY, wb, hb, BL, 2.2)
     x2 = x1 + wb + 56; image(x2, EY, wa, hb, ca_); frame(x2, EY, wa, hb, OR, 2.2)
     arrow([(x1 + wb + 4, EY + hb / 2), (x2 - 4, EY + hb / 2)], col=OR, sw=2.4, head=9)
-    text(x1 + wb / 2, EY + hb + 17, f"IoU {f['iou_before']:.3f}", 12.5, True, 'middle', BL, maxw=90)
-    text(x2 + wa / 2, EY + hb + 17, f"IoU {f['iou_after']:.3f}", 12.5, True, 'middle', '#B8620F', maxw=90)
+    text(x1 + wb / 2, EY + hb + 17, f"IoU {ex['iou_before']:.3f}", 12.5, True, 'middle', BL, maxw=90)
+    text(x2 + wa / 2, EY + hb + 17, f"IoU {ex['iou_after']:.3f}", 12.5, True, 'middle', '#B8620F', maxw=90)
 
     add('</svg>')
     write(path)

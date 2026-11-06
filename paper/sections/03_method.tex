@@ -52,7 +52,7 @@ convolutions and \texttt{lm\_head} stay frozen.
 \begin{figure}[tbp]
   \centering
   \includegraphics[width=\linewidth]{fig_data_detector}
-  \caption{Data and the grounding detector: two real sources feed one grounding pool and the YOLOv8m detector behind \texttt{locate\_tooth} (five-fold validation, held-out result); eight candidate datasets are not used; the corpus cohorts are shown as a donut.}
+  \caption{Data and the grounding detector: two real sources feed one grounding pool and the YOLOv8m detector behind \texttt{locate\_tooth} (five-fold cross-validation); eight candidate datasets are not used; the corpus cohorts are shown as a donut.}
   \label{fig:data}
 \end{figure}
 
@@ -118,9 +118,10 @@ tool-call stream is more informative to train on and to audit.
 The grounding tool is a YOLOv8m detector fine-tuned on 2{,}339 DENTEX+Tufts images with 46{,}808
 tooth boxes, trained with 5-fold cross-validation (one class per FDI quadrant--position pair)
 (\cref{fig:data}; full per-fold numbers in \cref{app:grounding}).
-The detector is accurate (held-out \emph{target} mAP50 of 0.93--0.96 with precision up to 0.986
-on annotated teeth), but it is a 32-class detector with per-fold variance, and its errors
-propagate into downstream reasoning: a box shifted by half a tooth-width yields a crop that
+The detector is not a contribution of this work but a tool that grounds the agent. We trained it on the
+whole DENTEX and Tufts data with 5-fold cross-validation; the folds are close to each other (mean
+\emph{target} mAP50 0.951 for DENTEX-only and 0.938 with Tufts), so which fold is used makes no real
+difference. It is still a 32-class detector, and its errors propagate into downstream reasoning: a box shifted by half a tooth-width yields a crop that
 still \emph{looks} like a plausible anatomical region while showing the wrong tooth.
 
 
@@ -279,7 +280,7 @@ hindsight rationalization than to blind discovery (\cref{sec:traces}).
 \subsection{Training: SFT then GRPO with a correction-friendly reward}
 \label{sec:reward}
 
-Stage 1 (SFT) fine-tunes Qwen3.5-9B \citep{bai2025qwen25vl} with QLoRA \citep{dettmers2023qlora}
+Stage 1 (SFT) fine-tunes Qwen3.5-9B \citep{qwen2026qwen35} with QLoRA \citep{dettmers2023qlora}
 on the verified with-tools traces (\cref{fig:training}), teaching the \emph{shape} of the behavior: well-formed
 reasoning, well-formed tool calls with continuous parameters, and structured multi-finding final
 answers. Multi-turn trajectories interleave the real crops the tools produced, and loss is
