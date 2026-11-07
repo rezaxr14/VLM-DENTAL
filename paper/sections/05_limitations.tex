@@ -9,6 +9,17 @@ together with automated checks of reasoning grounding by a cross-family LLM judg
 validates against expert labels, not against a prospective, blinded review by practicing
 clinicians on new cases. A reader study is the natural next step.
 
+\paragraph{Single-dataset evaluation and benchmarks to add.}
+All completed and planned evaluation uses the 50-image DENTEX validation set, so the paper has no external
+validation, and DENTEX itself contains missing and incorrect diagnosis labels \citep{nistelrooij2024combining}.
+The systems closest to ours report results on other panoramic benchmarks, and the trained agent can be run on the same
+ones: MMOral-OPG \citep{hao2025mmoral}, an open-ended panoramic VQA benchmark (teeth, pathology, jaw, summary,
+report) used by OralGPT-Plus, OralAgent, and OPGAgent; MMOral-X \citep{oralgptplus2026}, 300 open-ended questions with
+686 region annotations in three difficulty levels; MMOral-Uni \citep{hao2025oralgptomni}, used by OralAgent; and
+OPG-Bench \citep{yu2026opgagent}, a structured-report protocol that audits hallucinations. Their scores come from
+LLM-judge or report-based protocols, so the agent's structured findings would need a matching output adapter and the
+same judge model before numbers are comparable.
+
 \paragraph{Pending trained-agent results.}
 The training-side evaluations (SFT, GRPO, and ablations on the trained agent) are designed,
 frozen, and implemented, but the runs are not complete. Those cells are marked as pending

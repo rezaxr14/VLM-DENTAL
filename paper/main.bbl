@@ -1,4 +1,4 @@
-\begin{thebibliography}{21}
+\begin{thebibliography}{36}
 \providecommand{\natexlab}[1]{#1}
 \providecommand{\url}[1]{\texttt{#1}}
 \expandafter\ifx\csname urlstyle\endcsname\relax
@@ -10,6 +10,14 @@
 \newblock Agent skills: Specification.
 \newblock \url{https://agentskills.io/specification}, 2026.
 \newblock Accessed 2026-10-28.
+
+\bibitem[Ar{\i}k et~al.(2017)Ar{\i}k, Ibragimov, and
+  Xing]{arik2017cephalometry}
+Sercan~{\"O}. Ar{\i}k, Bulat Ibragimov, and Lei Xing.
+\newblock Fully automated quantitative cephalometry using convolutional neural
+  networks.
+\newblock \emph{Journal of Medical Imaging}, 4\penalty0 (1):\penalty0 014501,
+  2017.
 
 \bibitem[Baghbanzadeh et~al.(2026)Baghbanzadeh, Sarkar, Colacci, Badawi,
   Fallahpour, Afkanpour, Sigal, Etemad, and Dolatabadi]{openmedreason2026}
@@ -54,23 +62,42 @@ Yuxuan Fan, Jing Hao, Hong Chen, Jiahao Bao, Yihua Shao, Yuci Liang, Kuo~Feng
   learning for panoramic x-ray analysis.
 \newblock In \emph{Proceedings of the IEEE/CVF Conference on Computer Vision
   and Pattern Recognition (CVPR)}, 2026.
-\newblock arXiv:2603.06366; concurrent work; evaluates on MMOral-X with an
-  LLM-judge-scored reward.
+\newblock arXiv:2603.06366; concurrent work; evaluates on MMOral-X and
+  MMOral-OPG with an LLM judge.
 
 \bibitem[Guo et~al.(2017)Guo, Pleiss, Sun, and Weinberger]{guo2017calibration}
 Chuan Guo, Geoff Pleiss, Yu~Sun, and Kilian~Q. Weinberger.
 \newblock On calibration of modern neural networks.
 \newblock In \emph{International Conference on Machine Learning (ICML)}, 2017.
 
-\bibitem[Hamamci et~al.(2024)Hamamci, Er, Simsar, Yuksel,
-  et~al.]{hamamci2024dentex}
-Ibrahim~Ethem Hamamci, Sezgin Er, Enis Simsar, Atif~Emre Yuksel, et~al.
-\newblock {DENTEX}: An abnormal tooth detection with enumeration and diagnosis
-  benchmark for panoramic dental radiographs.
-\newblock In \emph{Medical Image Computing and Computer Assisted Intervention
-  (MICCAI)}, 2024.
-\newblock arXiv:2305.19112; DENTEX 2023 challenge; hierarchical
+\bibitem[Hamamci et~al.(2023)Hamamci, Er, Simsar, Yuksel, Gultekin, Ozdemir,
+  Yang, Li, Pati, Stadlinger, et~al.]{hamamci2024dentex}
+Ibrahim~Ethem Hamamci, Sezgin Er, Enis Simsar, Atif~Emre Yuksel, Sadullah
+  Gultekin, Serife~Damla Ozdemir, Kaiyuan Yang, Hongwei~Bran Li, Sarthak Pati,
+  Bernd Stadlinger, et~al.
+\newblock {DENTEX}: An abnormal tooth detection with dental enumeration and
+  diagnosis benchmark for panoramic x-rays.
+\newblock \emph{arXiv preprint arXiv:2305.19112}, 2023.
+\newblock DENTEX challenge at MICCAI 2023; hierarchical
   quadrant--enumeration--diagnosis task.
+
+\bibitem[Hao et~al.(2025{\natexlab{a}})Hao, Fan, Sun, Guo, Lin, Yang, Ai, Wong,
+  Tang, and Hung]{hao2025mmoral}
+Jing Hao, Yuxuan Fan, Yanpeng Sun, Kaixin Guo, Lizhuo Lin, Jinrong Yang,
+  Qi~Yong~H. Ai, Lun~M. Wong, Hao Tang, and Kuo~Feng Hung.
+\newblock Towards better dental {AI}: A multimodal benchmark and instruction
+  dataset for panoramic x-ray analysis.
+\newblock In \emph{Advances in Neural Information Processing Systems (NeurIPS),
+  Datasets and Benchmarks Track}, 2025{\natexlab{a}}.
+\newblock arXiv:2509.09254; MMOral and MMOral-Bench (MMOral-OPG).
+
+\bibitem[Hao et~al.(2025{\natexlab{b}})Hao, Liang, Lin, Fan, Zhou, Guo, Ye,
+  Sun, Zhang, Yang, et~al.]{hao2025oralgptomni}
+Jing Hao, Yuci Liang, Lizhuo Lin, Yuxuan Fan, Wenkai Zhou, Kaixin Guo, Zanting
+  Ye, Yanpeng Sun, Xinyu Zhang, Yanqi Yang, et~al.
+\newblock {OralGPT-Omni}: A versatile dental multimodal large language model.
+\newblock \emph{arXiv preprint arXiv:2511.22055}, 2025{\natexlab{b}}.
+\newblock Introduces the MMOral-Uni benchmark.
 
 \bibitem[Hao et~al.(2026)Hao, Dai, Zhang, Liang, Wu, Bao, Fan,
   et~al.]{oralagent2026}
@@ -82,6 +109,19 @@ Jing Hao, Siyuan Dai, Yongxin Zhang, Yuci Liang, Jiamin Wu, Jiahao Bao, Yuxuan
 \newblock Concurrent work; ReAct-orchestrated specialist tools with RAG over
   dental textbooks; evaluated on MMOral-Uni / MMOral-OPG / OralQA-ZH, not
   DENTEX.
+
+\bibitem[Hu et~al.(2022)Hu, Shen, Wallis, Allen-Zhu, Li, Wang, Wang, and
+  Chen]{hu2022lora}
+Edward~J. Hu, Yelong Shen, Phillip Wallis, Zeyuan Allen-Zhu, Yuanzhi Li, Shean
+  Wang, Lu~Wang, and Weizhu Chen.
+\newblock {LoRA}: Low-rank adaptation of large language models.
+\newblock In \emph{International Conference on Learning Representations
+  (ICLR)}, 2022.
+
+\bibitem[Jocher et~al.(2023)Jocher, Chaurasia, and Qiu]{jocher2023yolov8}
+Glenn Jocher, Ayush Chaurasia, and Jingnan Qiu.
+\newblock Ultralytics {YOLOv8}.
+\newblock \url{https://github.com/ultralytics/ultralytics}, 2023.
 
 \bibitem[Kuhn(1955)]{kuhn1955hungarian}
 Harold~W. Kuhn.
@@ -107,6 +147,11 @@ Yuxiang Lai, Jike Zhong, Ming Li, Shitian Zhao, Yuheng Li, Konstantinos
 \newblock \emph{IEEE Transactions on Medical Imaging}, 2026.
 \newblock arXiv:2503.13939.
 
+\bibitem[{LangChain, Inc.}(2024)]{langgraph}
+{LangChain, Inc.}
+\newblock Langgraph: Building stateful, multi-actor applications with {LLMs}.
+\newblock \url{https://github.com/langchain-ai/langgraph}, 2024.
+
 \bibitem[Leviathan et~al.(2023)Leviathan, Kalman, and
   Matias]{leviathan2023fast}
 Yaniv Leviathan, Matan Kalman, and Yossi Matias.
@@ -129,6 +174,17 @@ Pan Lu, Bowen Chen, Sheng Liu, Rahul Thapa, Joseph Boen, and James Zou.
 \newblock \emph{arXiv preprint arXiv:2502.11271}, 2025.
 \newblock Accepted to ACL 2026.
 
+\bibitem[{Meta AI}(2024)]{meta2024llama32}
+{Meta AI}.
+\newblock {Llama 3.2}: Vision models.
+\newblock \url{https://llama.meta.com}, 2024.
+
+\bibitem[{Moonshot AI}(2026)]{moonshotkimi}
+{Moonshot AI}.
+\newblock Kimi {K3}: Open frontier intelligence.
+\newblock Model release and technical report, July 2026, 2026.
+\newblock Accessed via the NVIDIA NIM API.
+
 \bibitem[Pan et~al.(2025)Pan, Liu, Wu, Liu, Zhu, Li, Chen, Ouyang, and
   Rueckert]{pan2025medvlmr1}
 Jiazhen Pan, Che Liu, Junde Wu, Fenglin Liu, Jiayuan Zhu, Hongwei~Bran Li, Chen
@@ -137,24 +193,80 @@ Jiazhen Pan, Che Liu, Junde Wu, Fenglin Liu, Jiayuan Zhu, Hongwei~Bran Li, Chen
   vision-language models ({VLMs}) via reinforcement learning.
 \newblock \emph{arXiv preprint arXiv:2502.19634}, 2025.
 
+\bibitem[Panetta et~al.(2022)Panetta, Rajendran, Ramesh, Rao, and
+  Agaian]{panetta2022tufts}
+Karen Panetta, Rahul Rajendran, Aruna Ramesh, Shishir~Paramathma Rao, and Sos
+  Agaian.
+\newblock Tufts dental database: A multimodal panoramic x-ray dataset for
+  benchmarking diagnostic systems.
+\newblock \emph{IEEE Journal of Biomedical and Health Informatics}, 26\penalty0
+  (4):\penalty0 1650--1659, 2022.
+\newblock \doi{10.1109/JBHI.2021.3117575}.
+
 \bibitem[{Qwen Team}(2026)]{qwen2026qwen35}
 {Qwen Team}.
 \newblock {Qwen3.5}: Towards native multimodal agents.
 \newblock Blog post and model card, February 2026.
 \newblock URL \url{https://qwen.ai/blog?id=qwen3.5}.
 
-\bibitem[{Tufts University School of Dental Medicine}(2023)]{tuftsdatabase}
-{Tufts University School of Dental Medicine}.
-\newblock The tufts dental database, 2023.
-\newblock 1,000 expert-annotated panoramic radiographs; registration-gated
-  access.
+\bibitem[Redmon et~al.(2016)Redmon, Divvala, Girshick, and
+  Farhadi]{redmon2016yolo}
+Joseph Redmon, Santosh Divvala, Ross Girshick, and Ali Farhadi.
+\newblock You only look once: Unified, real-time object detection.
+\newblock In \emph{IEEE/CVF Conference on Computer Vision and Pattern
+  Recognition (CVPR)}, pages 779--788, 2016.
 
-\bibitem[Uribe et~al.(2024)]{uribe2024systematic}
-Sergio~E. Uribe et~al.
-\newblock Systematic review of publicly available dental imaging datasets.
+\bibitem[Ren et~al.(2017)Ren, He, Girshick, and Sun]{ren2015faster}
+Shaoqing Ren, Kaiming He, Ross Girshick, and Jian Sun.
+\newblock Faster {R-CNN}: Towards real-time object detection with region
+  proposal networks.
+\newblock \emph{IEEE Transactions on Pattern Analysis and Machine
+  Intelligence}, 39\penalty0 (6):\penalty0 1137--1149, 2017.
+
+\bibitem[Ronneberger et~al.(2015)Ronneberger, Fischer, and
+  Brox]{ronneberger2015unet}
+Olaf Ronneberger, Philipp Fischer, and Thomas Brox.
+\newblock {U-Net}: Convolutional networks for biomedical image segmentation.
+\newblock In \emph{Medical Image Computing and Computer-Assisted Intervention
+  (MICCAI)}, pages 234--241, 2015.
+
+\bibitem[Schulman(2020)]{schulman2025kl}
+John Schulman.
+\newblock Approximating {KL} divergence.
+\newblock \url{http://joschu.net/blog/kl-approx.html}, 2020.
+\newblock Blog post; defines the unbiased $k_3$ estimator.
+
+\bibitem[Tuzoff et~al.(2019)Tuzoff, Tuzova, Bornstein, Krasnov, Kharchenko,
+  Nikolenko, Sveshnikov, and Bednenko]{tuzoff2019tooth}
+Dmitry~V. Tuzoff, Lyudmila~N. Tuzova, Michael~M. Bornstein, Alexey~S. Krasnov,
+  Maxim~A. Kharchenko, Sergey~I. Nikolenko, Mikhail~M. Sveshnikov, and
+  Georgiy~B. Bednenko.
+\newblock Tooth detection and numbering in panoramic radiographs using
+  convolutional neural networks.
+\newblock \emph{Dentomaxillofacial Radiology}, 48\penalty0 (4):\penalty0
+  20180051, 2019.
+
+\bibitem[Uribe et~al.(2024)Uribe, Issa, Sohrabniya, Denny, Kim, Dayo,
+  Chaurasia, Sofi-Mahmudi, B{\"u}ttner, and Schwendicke]{uribe2024systematic}
+Sergio~E. Uribe, Julien Issa, Fatemeh Sohrabniya, Alexander Denny, Nicola~N.
+  Kim, Aiza~F. Dayo, Akhilanand Chaurasia, Ahmad Sofi-Mahmudi, Martha
+  B{\"u}ttner, and Falk Schwendicke.
+\newblock Publicly available dental image datasets for artificial intelligence.
 \newblock \emph{Journal of Dental Research}, 103\penalty0 (13):\penalty0
   1365--1374, 2024.
-\newblock PMC11633071; screened 131,028 records, identified 16 public datasets.
+\newblock \doi{10.1177/00220345241272052}.
+\newblock Screened 131,028 records and identified 16 public datasets.
+
+\bibitem[van Nistelrooij et~al.(2024)van Nistelrooij, El~Ghoul, Xi, Saha,
+  Kempers, Cenci, Loomans, Fl{\"u}gge, van Ginneken, and
+  Vinayahalingam]{nistelrooij2024combining}
+Niels van Nistelrooij, Khalid El~Ghoul, Tong Xi, Anindo Saha, Steven Kempers,
+  Max Cenci, Bas Loomans, Tabea Fl{\"u}gge, Bram van Ginneken, and Shankeeth
+  Vinayahalingam.
+\newblock Combining public datasets for automated tooth assessment in panoramic
+  radiographs.
+\newblock \emph{BMC Oral Health}, 24:\penalty0 387, 2024.
+\newblock \doi{10.1186/s12903-024-04129-5}.
 
 \bibitem[Wu et~al.(2026)Wu, Yang, Jiang, Li, Yan, Yu, Zhang, Zhai, and
   Nahrstedt]{wu2026vtool}
@@ -166,5 +278,13 @@ Mingyuan Wu, Jingcheng Yang, Jize Jiang, Meitang Li, Kaizhuo Yan, Hanchao Yu,
   (ICLR)}, 2026.
 \newblock arXiv:2505.19255; GRPO-trained visual tool use; chart/table QA,
   64.7\% -> 71.7\% over zero-shot.
+
+\bibitem[Yu et~al.(2026)Yu, Yang, Babicka, Hu, Hao, Huang, Huang, Jin, Wu, and
+  Ge]{yu2026opgagent}
+Zhaolin Yu, Litao Yang, Ben Babicka, Ming Hu, Jing Hao, Anthony Huang, James
+  Huang, Yueming Jin, Jiasong Wu, and Zongyuan Ge.
+\newblock {OPGAgent}: An agent for auditable dental panoramic x-ray
+  interpretation.
+\newblock \emph{arXiv preprint arXiv:2603.00462}, 2026.
 
 \end{thebibliography}

@@ -69,7 +69,7 @@ def build(path):
     add('<g id="grpo">')
     circ_num(472, 36, 2); text(490, 42, 'GRPO with live tool rollouts', 15, True, maxw=300)
     image(466, 92, 118, 62, opg.resize((472, 248), Image.LANCZOS)); frame(466, 92, 118, 62, '#6B7280', 1.2)
-    text(466, 176, 'one image,', 12.5, False, 'start', MUTE); text(466, 192, 'K = 4 rollouts', 12.5, False, 'start', MUTE)
+    text(466, 176, 'one image,', 12.5, False, 'start', MUTE); text(466, 192, 'K rollouts (4 shown)', 12.5, False, 'start', MUTE)
     text(466, 214, 'real tools,', 12.5, False, 'start', MUTE); text(466, 230, 'same dispatcher', 12.5, False, 'start', MUTE)
     text(598, 76, 'rollouts', 12.5, True, 'start', INK); text(758, 76, 'reward', 12.5, True, 'start', INK); text(920, 76, 'advantage', 12.5, True, 'middle', INK)
     rewards = [0.92, 0.55, 0.78, 0.20]

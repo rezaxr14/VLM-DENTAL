@@ -12,7 +12,7 @@ numbers. All configuration choices --- checkpoint selection, ablation conditions
 sweeps --- are made on a fixed dev split of $\sim$70 training images drawn once with a fixed
 seed, so that no choice leaks into the test result. Healthy images are evaluated with ground
 truth $\emptyset$: an invented finding on a healthy image is charged to precision. Cross-dataset context comes from the Tufts Dental Database
-\citep{tuftsdatabase}, which contributes training traces and grounding training data but is not
+\citep{panetta2022tufts}, which contributes training traces and grounding training data but is not
 used for test-time evaluation in this work.
 
 \paragraph{Metrics.}
@@ -30,7 +30,7 @@ between stated confidence and correctness.
 \paragraph{Conditions.}
 Every condition is a checkpoint (base, SFT, GRPO) with or without tool access, evaluated on the original images;
 tools always operate on the native image. The no-tools arms use the \emph{same} SFT and GRPO recipe on the
-1{,}847 single-turn traces, so tool contribution is not confounded with training recipe. \cref{fig:design} summarizes the
+1{,}847 single-turn traces, so tool contribution is not confounded with training recipe. Every stage can be rerun from the repository notebooks (\cref{app:repro}). \cref{fig:design} summarizes the
 design.
 
 \begin{figure}[tbp]
@@ -57,8 +57,8 @@ design.
     \toprule
     Model & $N$ & FDI hit & Exact hit & Exact F1 & 95\% CI & ECE \\
     \midrule
-    Moonshot Kimi-k3 & 50 & 64.0\% & \textbf{46.0\%} & \textbf{0.222} & [32.0, 60.0] & \textbf{0.214} \\
-    Meta Llama 3.2 90B & 46 & 45.7\% & 37.0\% & 0.098 & [23.9, 52.2] & 0.395 \\
+    Moonshot Kimi-k3 \citep{moonshotkimi} & 50 & 64.0\% & \textbf{46.0\%} & \textbf{0.222} & [32.0, 60.0] & \textbf{0.214} \\
+    Meta Llama 3.2 90B \citep{meta2024llama32} & 46 & 45.7\% & 37.0\% & 0.098 & [23.9, 52.2] & 0.395 \\
     Gemini 3.5 Flash & 50 & 62.0\% & 36.0\% & 0.188 & [22.0, 50.0] & 0.560 \\
     MiniMax M3 & 50 & 62.0\% & 32.0\% & 0.110 & [20.0, 44.0] & 0.493 \\
     Gemini 3.5 Flash Lite & 50 & 54.0\% & 32.0\% & 0.166 & [18.0, 46.0] & 0.596 \\

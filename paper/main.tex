@@ -49,7 +49,7 @@
   \quad \todo{Third author name}\\[4pt]
   \todo{affiliations}
 }
-\date{October 2026}
+\date{November 2026}
 
 % ---------------------------------------------------------------------------
 \begin{document}
@@ -61,18 +61,18 @@ correct tooth. In our zero-shot evaluation on DENTEX, the strongest baseline rea
 exact finding-level F1 of only 0.222, which motivates methods that can revisit localized image
 evidence. We present \textbf{VLM-DENTAL}, a tool-using vision-language pipeline built on one
 principle: \emph{grounding is a hypothesis to interrogate, not an answer to trust}.
-An eight-tool interface lets a policy inspect native-resolution regions and revise a proposed
+An eight-tool interface lets an agent inspect native-resolution regions and revise a proposed
 box through box-relative shifts and scales (\texttt{nudge\_crop}). During demonstration
 synthesis, tiered spatial perturbations expose the teacher to imperfect grounding without
 verbal error cues, and a ground-truth-anchored reward is designed to preserve corrective tool
 use during reinforcement learning. The released corpus contains 3{,}694 verified,
 decontaminated synthetic traces. On ground-truth-anchored pathology locates, the teacher
 issues corrective nudges on 38.4\% of large offsets, 13.6\% of small offsets, and 1.1\% of
-clean boxes; these are demonstration statistics, not trained-policy results. We further
+clean boxes; these are demonstration statistics, not trained-agent results. We further
 specify a versioned rules-and-skills harness and a separately gated speculative-decoding
 benchmark, which keep inference-time procedural context distinct from model training and
 serving optimization. Evaluation follows a frozen protocol with DENTEX-native set matching and
-paired image-level bootstrap intervals; trained-policy, harness, and serving results are
+paired image-level bootstrap intervals; trained-agent, harness, and serving results are
 pending and are not claimed.
 \end{abstract}
 

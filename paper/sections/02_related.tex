@@ -3,13 +3,14 @@
 \label{sec:related}
 
 \paragraph{Supervised dental AI.}
-Dental radiograph analysis has been dominated by narrow, single-task supervised models: CNN and
-Faster R-CNN cephalometric landmark detectors, U-Net-style segmentation, FDI tooth-numbering
-classifiers, and YOLO-family or Faster R-CNN detectors for caries, periapical lesions, and
-impactions \citep{hamamci2024dentex}. The DENTEX benchmark consolidated these into a
+Dental radiograph analysis has been dominated by narrow, single-task supervised models: CNN
+cephalometric landmark detectors \citep{arik2017cephalometry}, U-Net-style segmentation
+\citep{ronneberger2015unet}, FDI tooth-numbering networks \citep{tuzoff2019tooth}, and
+YOLO-family or Faster R-CNN detectors \citep{redmon2016yolo,ren2015faster} for caries,
+periapical lesions, and impactions \citep{hamamci2024dentex}. The DENTEX benchmark consolidated these into a
 hierarchical quadrant--enumeration--diagnosis task with expert-verified labels
 \citep{hamamci2024dentex} and remains the most structured public benchmark for our problem.
-These supervised tasks differ from our episode-level setting, in which a policy can request
+These supervised tasks differ from our episode-level setting, in which an agent can request
 additional views and revise a grounding hypothesis. A systematic review of public dental
 imaging datasets \citep{uribe2024systematic} screened 131{,}028 records and found only 16
 datasets that met a minimal bar, which motivates our synthetic-trace approach.
@@ -22,7 +23,7 @@ not reliably improve accuracy, so reward alignment matters more than reasoning l
 \citep{wang2025medr1}. HuatuoGPT-o1 \citep{chen2024huatuo} and OpenMedReason
 \citep{openmedreason2026} build reasoning supervision by using a frontier model as a
 \emph{verifier} of evidence-grounded traces. These works motivate our training recipe; we add
-the interaction between a reasoning policy and revisable visual observations.
+the interaction between a reasoning agent and revisable visual observations.
 
 \paragraph{Agentic tool use in VLMs.}
 MMedAgent trains an LLM to select among grounding, segmentation, and report tools
@@ -31,16 +32,19 @@ MMedAgent trains an LLM to select among grounding, segmentation, and report tool
 VLM with GRPO to call Python-based visual-editing tools during reasoning and improves chart and
 table QA from 64.7\% to 71.7\%. Its tools are generic image-editing primitives, its reward is a
 single outcome-accuracy term, and its domain is not medical. Two concurrent dental systems are
-closest to our work. \textbf{OralGPT-Plus} \citep{oralgptplus2026} combines trained
-chain-of-thought, two callable image tools (zoom-in and contralateral mirror), and GRPO-style RL
-with a composite reward. It evaluates on its own benchmark with an LLM-judge-scored reward,
-whose documented reward-hacking failure motivates our ground-truth-anchored accuracy term
-(\cref{sec:reward}), and it does not cleanly separate the effects of tool use and RL.
-\textbf{OralAgent} \citep{oralagent2026} is a broader prompted ReAct orchestrator around an
-off-the-shelf model, not an RL-trained tool-use policy. Our contribution is a box-relative
-corrective action and a controlled evaluation of tools and RL; we do not claim to originate
-dental agents or medical tool use. Comparisons should account for differences in datasets,
-available supervision, and scoring protocols.
+closest to our work. \textbf{OralGPT-Plus} \citep{oralgptplus2026} combines instruction tuning on expert
+trajectories, two callable image tools (zoom-in and contralateral mirror), and GRPO with a hybrid reward
+whose accuracy term is a rubric score from an LLM judge. It evaluates on its own MMOral-X benchmark and on
+MMOral-OPG \citep{hao2025mmoral}, and reports that without its conditioned reward term, training collapses toward
+invoking a single tool and answering without inspection. It ablates its training stages, reward terms, and
+mirror tool, but to our knowledge has no paired no-tools arm trained with the same recipe, so the effect of tool
+use itself is not isolated. \textbf{OralAgent} \citep{oralagent2026} is a broader prompted ReAct orchestrator
+around an off-the-shelf model with 22 tools and retrieval over dental textbooks, not an RL-trained tool-use
+policy; it evaluates on MMOral-Uni, MMOral-OPG, and OralQA-ZH. A third system, OPGAgent
+\citep{yu2026opgagent}, likewise plans with a prompted model over a toolbox of detectors and dental vision experts,
+and evaluates on its own OPG-Bench and MMOral-OPG. Our contribution is a box-relative corrective action and a
+controlled evaluation of tools and RL; we do not claim to originate dental agents or medical tool use.
+Comparisons should account for differences in datasets, available supervision, and scoring protocols.
 
 \paragraph{Procedural context and speculative serving.}
 The rules-and-skills extension follows the inspectable \texttt{SKILL.md} convention with

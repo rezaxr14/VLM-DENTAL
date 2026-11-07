@@ -1,4 +1,4 @@
-﻿% ---------------------------------------------------------------------------
+% ---------------------------------------------------------------------------
 \appendix
 
 \section{Perturbation configuration}
@@ -44,7 +44,9 @@ accuracy so that improving the detector never invalidates existing demonstration
   pathology cohorts) and the reference box is the expert box. \emph{Detector-anchored}:
   exploratory calls (dominated by healthy-scan full-arch surveys), where the reference is the
   detector's own box. During rapid surveys the teacher corrects far less often per box, a
-  difference in behavior that pooled rates would hide.}
+  difference in behavior that pooled rates would hide. IoU before is the mean over all locates with a
+  recovered shown box; IoU after is the mean over the corrected locates only. \cref{tab:nudgetier} pairs both
+  over the corrected locates, so its before values differ.}
   \label{tab:mechanismsplit}
   \begin{tabular}{llrrrr}
     \toprule
@@ -115,3 +117,39 @@ In a separate decontamination pass, 105 traces in which the generator echoed its
 ground-truth directive in its reasoning were excised and regenerated under a dual gate (zero-leak
 audit + verifier re-approval); the canonical corpus contains zero directive leaks and exact
 1:1 parity between the with-tools and no-tools cohorts.
+
+\section{Model access}
+\label{app:access}
+
+\cref{tab:access} lists how each hosted model was reached: Gemini models through Google, GLM and MiniMax models through
+OpenRouter, and all other hosted models through NVIDIA. Locally run models (the Qwen3.5-9B backbone and the
+YOLOv8m grounding tool) are described in \cref{app:repro}.
+
+\begin{table}[htbp]
+  \centering
+  \small
+  \caption{Hosted models: role and access route.}
+  \label{tab:access}
+  \begin{tabular}{lll}
+    \toprule
+    Model & Role & Access \\
+    \midrule
+    Gemini 3.5 Flash Lite & teacher; zero-shot baseline & Google \\
+    MiniMax M3 & teacher; zero-shot baseline & OpenRouter \\
+    Moonshot Kimi-k3 & zero-shot baseline & NVIDIA \\
+    Gemini 3.5 Flash & zero-shot baseline & Google \\
+    Meta Llama 3.2 90B and 11B & zero-shot baselines & NVIDIA \\
+    Cross-family verifier & trace verification & \todo{verifier model} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\section{Reproducibility}
+\label{app:repro}
+
+Every stage of the pipeline has a notebook in the repository that reruns it end to end on a single GPU:
+zero-shot baselines, trace generation, the YOLOv8m grounding tool, SFT, GRPO, final evaluation, the
+rules-and-skills harness, and speculative decoding. The base configuration targets a 16\,GB GPU (4-bit QLoRA on
+Qwen3.5-9B); a 24\,GB RTX~4090 override raises the GRPO group size and the detector batch size. The group-size
+ablation reruns GRPO with $K \in \{1, 2, 4, 8, 16\}$ rollouts per image (\cref{sec:ablations}). Tables and figure
+data in this paper are regenerated from the released corpus by the scripts under \texttt{scripts/paper}.

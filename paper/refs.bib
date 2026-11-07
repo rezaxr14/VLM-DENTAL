@@ -5,34 +5,48 @@
 
 % ----------------------------- Benchmark & datasets -----------------------------
 
-@inproceedings{hamamci2024dentex,
-  author    = {Hamamci, Ibrahim Ethem and Er, Sezgin and Simsar, Enis and Yuksel, Atif Emre and others},
-  title     = {{DENTEX}: An Abnormal Tooth Detection with Enumeration and Diagnosis Benchmark for Panoramic Dental Radiographs},
-  booktitle = {Medical Image Computing and Computer Assisted Intervention (MICCAI)},
-  year      = {2024},
-  note      = {arXiv:2305.19112; DENTEX 2023 challenge; hierarchical quadrant--enumeration--diagnosis task},
+@article{hamamci2024dentex,
+  author  = {Hamamci, Ibrahim Ethem and Er, Sezgin and Simsar, Enis and Yuksel, Atif Emre and Gultekin, Sadullah and Ozdemir, Serife Damla and Yang, Kaiyuan and Li, Hongwei Bran and Pati, Sarthak and Stadlinger, Bernd and others},
+  title   = {{DENTEX}: An Abnormal Tooth Detection with Dental Enumeration and Diagnosis Benchmark for Panoramic X-rays},
+  journal = {arXiv preprint arXiv:2305.19112},
+  year    = {2023},
+  note    = {DENTEX challenge at MICCAI 2023; hierarchical quadrant--enumeration--diagnosis task},
 }
-% Verified against the arXiv listing via the OralGPT-Plus reference list.
 
 @article{uribe2024systematic,
-  author  = {Uribe, Sergio E. and others},
-  title   = {Systematic Review of Publicly Available Dental Imaging Datasets},
+  author  = {Uribe, Sergio E. and Issa, Julien and Sohrabniya, Fatemeh and Denny, Alexander and Kim, Nicola N. and Dayo, Aiza F. and Chaurasia, Akhilanand and Sofi-Mahmudi, Ahmad and B{\"u}ttner, Martha and Schwendicke, Falk},
+  title   = {Publicly Available Dental Image Datasets for Artificial Intelligence},
   journal = {Journal of Dental Research},
   volume  = {103},
   number  = {13},
   pages   = {1365--1374},
   year    = {2024},
-  note    = {PMC11633071; screened 131,028 records, identified 16 public datasets},
+  doi     = {10.1177/00220345241272052},
+  note    = {Screened 131,028 records and identified 16 public datasets},
 }
-% TODO-verify: full author list and exact title.
 
-@misc{tuftsdatabase,
-  author = {{Tufts University School of Dental Medicine}},
-  title  = {The Tufts Dental Database},
-  year   = {2023},
-  note   = {1,000 expert-annotated panoramic radiographs; registration-gated access},
+@article{panetta2022tufts,
+  author  = {Panetta, Karen and Rajendran, Rahul and Ramesh, Aruna and Rao, Shishir Paramathma and Agaian, Sos},
+  title   = {Tufts Dental Database: A Multimodal Panoramic X-Ray Dataset for Benchmarking Diagnostic Systems},
+  journal = {IEEE Journal of Biomedical and Health Informatics},
+  volume  = {26},
+  number  = {4},
+  pages   = {1650--1659},
+  year    = {2022},
+  doi     = {10.1109/JBHI.2021.3117575},
 }
-% TODO-verify: canonical citation for the Tufts Dental Database.
+
+@article{nistelrooij2024combining,
+  author  = {van Nistelrooij, Niels and El Ghoul, Khalid and Xi, Tong and Saha, Anindo and Kempers, Steven and Cenci, Max and Loomans, Bas and Fl{\"u}gge, Tabea and van Ginneken, Bram and Vinayahalingam, Shankeeth},
+  title   = {Combining Public Datasets for Automated Tooth Assessment in Panoramic Radiographs},
+  journal = {BMC Oral Health},
+  volume  = {24},
+  pages   = {387},
+  year    = {2024},
+  doi     = {10.1186/s12903-024-04129-5},
+}
+
+% (the Tufts Dental Database is cited as panetta2022tufts)
 
 % ----------------------------- Backbone & training ------------------------------
 
@@ -68,12 +82,12 @@
 }
 
 @misc{schulman2025kl,
-  author = {Schulman, John},
-  title  = {Approximating {KL} Divergence},
-  year   = {2020},
-  note   = {Technical note on the k3 unbiased KL estimator},
+  author       = {Schulman, John},
+  title        = {Approximating {KL} Divergence},
+  year         = {2020},
+  howpublished = {\url{http://joschu.net/blog/kl-approx.html}},
+  note         = {Blog post; defines the unbiased $k_3$ estimator},
 }
-% TODO-verify: preferred canonical reference for the k3 KL estimator.
 
 @misc{jocher2023yolov8,
   author = {Jocher, Glenn and Chaurasia, Ayush and Qiu, Jingnan},
@@ -153,7 +167,7 @@
   title     = {{OralGPT-Plus}: Learning to Use Visual Tools via Reinforcement Learning for Panoramic X-ray Analysis},
   booktitle = {Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},
   year      = {2026},
-  note      = {arXiv:2603.06366; concurrent work; evaluates on MMOral-X with an LLM-judge-scored reward},
+  note      = {arXiv:2603.06366; concurrent work; evaluates on MMOral-X and MMOral-OPG with an LLM judge},
 }
 % Verified via arXiv + CVF open access.
 
@@ -185,12 +199,12 @@
 }
 
 @misc{moonshotkimi,
-  author = {{Moonshot AI}},
-  title  = {Kimi Multimodal Models},
-  year   = {2026},
-  note   = {Accessed via the NVIDIA NIM API},
+  author       = {{Moonshot AI}},
+  title        = {Kimi {K3}: Open Frontier Intelligence},
+  year         = {2026},
+  howpublished = {Model release and technical report, July 2026},
+  note         = {Accessed via the NVIDIA NIM API},
 }
-% TODO-verify: canonical model citation.
 
 % ----------------------------- Evaluation methodology ---------------------------
 
@@ -212,14 +226,7 @@
 
 % ----------------------------- Dental AI background -----------------------------
 
-@inproceedings{merlin2024combining,
-  author    = {Merlin, Théo and others},
-  title     = {Combining Tooth Instance Segmentation Datasets for Improved Panoramic Radiograph Analysis},
-  booktitle = {BMC Oral Health},
-  year      = {2024},
-  note      = {10.1186/s12903-024-04129-5},
-}
-% TODO-verify: exact title and full author list.
+% (merlin2024combining was a mis-attributed entry; the paper is nistelrooij2024combining above.)
 
 % Harness and serving references: primary specifications and original methods.
 @inproceedings{leviathan2023fast,
@@ -246,4 +253,75 @@
   title={Agent Skills: Specification}, author={{Agent Skills contributors}},
   howpublished={\url{https://agentskills.io/specification}},
   note={Accessed 2026-10-28}, year={2026}
+}
+
+% ----------------------------- Panoramic benchmarks and concurrent agents -------------
+@inproceedings{hao2025mmoral,
+  author    = {Hao, Jing and Fan, Yuxuan and Sun, Yanpeng and Guo, Kaixin and Lin, Lizhuo and Yang, Jinrong and Ai, Qi Yong H. and Wong, Lun M. and Tang, Hao and Hung, Kuo Feng},
+  title     = {Towards Better Dental {AI}: A Multimodal Benchmark and Instruction Dataset for Panoramic X-ray Analysis},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS), Datasets and Benchmarks Track},
+  year      = {2025},
+  note      = {arXiv:2509.09254; MMOral and MMOral-Bench (MMOral-OPG)},
+}
+
+@article{hao2025oralgptomni,
+  author  = {Hao, Jing and Liang, Yuci and Lin, Lizhuo and Fan, Yuxuan and Zhou, Wenkai and Guo, Kaixin and Ye, Zanting and Sun, Yanpeng and Zhang, Xinyu and Yang, Yanqi and others},
+  title   = {{OralGPT-Omni}: A Versatile Dental Multimodal Large Language Model},
+  journal = {arXiv preprint arXiv:2511.22055},
+  year    = {2025},
+  note    = {Introduces the MMOral-Uni benchmark},
+}
+
+@article{yu2026opgagent,
+  author  = {Yu, Zhaolin and Yang, Litao and Babicka, Ben and Hu, Ming and Hao, Jing and Huang, Anthony and Huang, James and Jin, Yueming and Wu, Jiasong and Ge, Zongyuan},
+  title   = {{OPGAgent}: An Agent for Auditable Dental Panoramic X-ray Interpretation},
+  journal = {arXiv preprint arXiv:2603.00462},
+  year    = {2026},
+}
+
+% ----------------------------- Classical dental and detection references --------------
+@inproceedings{ronneberger2015unet,
+  author    = {Ronneberger, Olaf and Fischer, Philipp and Brox, Thomas},
+  title     = {{U-Net}: Convolutional Networks for Biomedical Image Segmentation},
+  booktitle = {Medical Image Computing and Computer-Assisted Intervention (MICCAI)},
+  year      = {2015},
+  pages     = {234--241},
+}
+
+@article{ren2015faster,
+  author  = {Ren, Shaoqing and He, Kaiming and Girshick, Ross and Sun, Jian},
+  title   = {Faster {R-CNN}: Towards Real-Time Object Detection with Region Proposal Networks},
+  journal = {IEEE Transactions on Pattern Analysis and Machine Intelligence},
+  volume  = {39},
+  number  = {6},
+  pages   = {1137--1149},
+  year    = {2017},
+}
+
+@inproceedings{redmon2016yolo,
+  author    = {Redmon, Joseph and Divvala, Santosh and Girshick, Ross and Farhadi, Ali},
+  title     = {You Only Look Once: Unified, Real-Time Object Detection},
+  booktitle = {IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},
+  year      = {2016},
+  pages     = {779--788},
+}
+
+@article{tuzoff2019tooth,
+  author  = {Tuzoff, Dmitry V. and Tuzova, Lyudmila N. and Bornstein, Michael M. and Krasnov, Alexey S. and Kharchenko, Maxim A. and Nikolenko, Sergey I. and Sveshnikov, Mikhail M. and Bednenko, Georgiy B.},
+  title   = {Tooth Detection and Numbering in Panoramic Radiographs Using Convolutional Neural Networks},
+  journal = {Dentomaxillofacial Radiology},
+  volume  = {48},
+  number  = {4},
+  pages   = {20180051},
+  year    = {2019},
+}
+
+@article{arik2017cephalometry,
+  author  = {Ar{\i}k, Sercan {\"O}. and Ibragimov, Bulat and Xing, Lei},
+  title   = {Fully Automated Quantitative Cephalometry Using Convolutional Neural Networks},
+  journal = {Journal of Medical Imaging},
+  volume  = {4},
+  number  = {1},
+  pages   = {014501},
+  year    = {2017},
 }

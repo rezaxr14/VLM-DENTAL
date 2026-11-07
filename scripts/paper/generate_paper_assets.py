@@ -543,6 +543,11 @@ def latex_escape(s: str) -> str:
     return s.replace("%", "\\%").replace("_", "\\_")
 
 
+def _tex_int(n):
+    """Integer with a LaTeX thousands separator (3{,}694), matching the running text."""
+    return f"{n:,}".replace(",", "{,}") if isinstance(n, int) else n
+
+
 def write_corpus_table(out_dir: Path, per_cohort: dict, no_tools_counts: dict):
     lines = [
         "\\begin{tabular}{lrrrrrr}",
@@ -558,8 +563,8 @@ def write_corpus_table(out_dir: Path, per_cohort: dict, no_tools_counts: dict):
         n = no_tools_counts.get(cohort)
         parity = "\\checkmark" if n == c["traces"] else "\\textbf{mismatch}"
         lines.append(
-            f"{latex_escape(COHORT_LABELS[cohort])} & {c['traces']} & {n if n is not None else '--'}~{parity} & "
-            f"{c['findings']} & {c['healthy_traces']} & {c['avg_turns']:.1f} & {c['avg_tool_calls']:.1f} \\\\"
+            f"{latex_escape(COHORT_LABELS[cohort])} & {_tex_int(c['traces'])} & {_tex_int(n) if n is not None else '--'}~{parity} & "
+            f"{_tex_int(c['findings'])} & {_tex_int(c['healthy_traces'])} & {c['avg_turns']:.1f} & {c['avg_tool_calls']:.1f} \\\\"
         )
         tot_w += c["traces"]
         tot_n += n or 0
@@ -567,7 +572,7 @@ def write_corpus_table(out_dir: Path, per_cohort: dict, no_tools_counts: dict):
         tot_h += c["healthy_traces"]
     lines += [
         "\\midrule",
-        f"Total & {tot_w} & {tot_n}~\\checkmark & {tot_f} & {tot_h} & -- & -- \\\\",
+        f"Total & {_tex_int(tot_w)} & {_tex_int(tot_n)}~\\checkmark & {_tex_int(tot_f)} & {_tex_int(tot_h)} & -- & -- \\\\",
         "\\bottomrule",
         "\\end{tabular}",
     ]
