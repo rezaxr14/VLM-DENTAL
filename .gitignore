@@ -43,6 +43,7 @@ data/yolo_*/
 data/sample_images/
 data/tool_verification/
 data/qwen3_5_tokenizer/
+data/evaluations_flat*/
 data/*.parquet
 data/*.zip
 *.zip
