@@ -28,17 +28,18 @@ merged 9B over the SPMD mesh and generates with the static-shape generator
 (`docs/TPU_EVALUATION.md`). It runs zero-shot, baseline, SFT, GRPO and rules/skills on the
 canonical letterbox views only (original-size cells are listed as `unsupported`); a prompt
 that does not fit the static cache is recorded as a refused episode, never truncated.
-Speculative decoding stays pending on TPU. The three evaluation notebooks select `tpu`
+TPU speculative decoding runs in-process on the static-shape generator; it does not use
+vLLM or a merged serving checkpoint. The three evaluation notebooks select `tpu`
 automatically when a TPU is visible (detected without starting XLA).
 No CPU/disk offload is silently enabled to pretend an unsupported runtime fits.
 
-Generation remains **16384** for every managed local cohort, with 50 tool calls,
-zero malformed retries and no sample limit. Speculative serving exposes a separate
-**32768** total context capacity, because a 16384-token output request plus nonempty
-text/image input cannot fit a 16384 total context. This changes no training length or
-generation headroom. Long histories can still exceed the selected serving capacity;
-no prompt truncation or automatic output-budget reduction is introduced. VRAM fit and
-kernel support must be verified on the actual serving hardware/environment.
+Generation is selected by hardware profile: **24576 new tokens on TPU** and **16384
+on every GPU profile**, with 50 tool calls, zero malformed retries and no sample limit.
+GPU speculative serving retains a separate **32768** total context capacity. TPU uses
+its static KV cache tiers (32768, 49152); prompt plus the full 24576-token output must
+fit a tier or the episode is refused, never truncated. This changes no training length
+or generation headroom. VRAM/HBM fit and kernel support must be verified on the actual
+serving hardware/environment.
 
 ## Cohorts and reuse
 

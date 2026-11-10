@@ -43,8 +43,8 @@ class Hub:
         self.n+=1;self.commits.append(kwargs)
 
 
-def ident(kind='baseline'):
-    return dict(profile='dual_t4',kind=kind,condition='base_no_tools',split='test',image_ids=[90001,90002],base_model='Qwen/Qwen3.5-9B',adapter=None)
+def ident(kind='baseline', profile='dual_t4'):
+    return dict(profile=profile,kind=kind,condition='base_no_tools',split='test',image_ids=[90001,90002],base_model='Qwen/Qwen3.5-9B',adapter=None,max_new_tokens=w.generation_budget(profile))
 
 
 def row(i=90001):
@@ -69,6 +69,13 @@ def test_discovery_both_tracks_all_profiles_and_reference_exclusion():
     assert not w.discover(files,['dual_t4'],stages='other')
     assert all(j['kind']=='sft' for j in w.discover(files,['dual_t4'],selected_k=8))
     assert len(w.discover(files,['dual_t4'],selected_k='all'))==4
+
+
+def test_generation_budget_is_24k_on_tpu_and_16k_on_gpu():
+    assert w.generation_budget('tpu') == 24576
+    assert w.generation_budget('dual_t4') == 16384
+    assert w.generation_budget('rtx4090') == 16384
+    assert w.generation_budget('rtxpro6000_48gb') == 16384
 
 
 def test_hardware_flags_do_not_silently_change_precision():
@@ -208,18 +215,40 @@ def test_notebook_cells_schema_syntax_visible_profiles_and_no_paper_build():
             assert all(kind in source for kind in w.KINDS)
 
 
-def test_command_contracts_are_explicit_16k_and_separate_adapters(tmp_path):
+def test_command_contracts_use_profile_budget_and_separate_adapters(tmp_path):
     h=Hub(tmp_path);session=w.NotebookEvaluations(api=h,download=h.download,model_id='/base')
     session.inputs={'test':dict(data_dir='/input'),'dev':dict(data_dir='/dev')}
     session._adapter=lambda job:'/exact/'+job['condition']
     for job in session.jobs:
         if job['kind']=='speculative':continue
-        identity=dict(split='dev' if job['kind']=='rules_skills' else 'test',size='canonical',checkpoint_kind=job.get('checkpoint_kind',job['kind']),conditions=['baseline','rules_only'])
+        identity=dict(split='dev' if job['kind']=='rules_skills' else 'test',size='canonical',checkpoint_kind=job.get('checkpoint_kind',job['kind']),conditions=['baseline','rules_only'],max_new_tokens=w.generation_budget(job['profile']))
         command,result,adapter=session._command(job,identity,tmp_path)
-        assert '16384' in command and '--reuse-cached' not in command and '--limit' not in command
+        assert str(w.generation_budget(job['profile'])) in command and '--reuse-cached' not in command and '--limit' not in command
         if job['kind']=='zeroshot':assert '--data-dir' in command and '--git-sync-every' in command
         if job['adapter']:assert adapter=='/exact/'+job['condition']
 
+
+
+def test_tpu_commands_and_result_validation_are_24k(tmp_path):
+    h=Hub(tmp_path)
+    session=w.NotebookEvaluations(api=h,download=h.download,model_id='/base',target_profiles='tpu')
+    session.inputs={'test':dict(data_dir='/input'),'dev':dict(data_dir='/dev')}
+    session._adapter=lambda job:'/exact/'+job['condition']
+    for job in session.jobs:
+        split='dev' if job['kind'] in {'rules_skills','speculative'} else 'test'
+        identity=dict(split=split,size='canonical',checkpoint_kind=job.get('checkpoint_kind',job['kind']),
+                      max_new_tokens=24576,conditions=['baseline','rules_only'] if job['kind']=='rules_skills' else list(w.TPU_SPEC_CONDITIONS))
+        command,_,_=session._command(job,identity,tmp_path)
+        assert '24576' in command
+    tpu_identity=ident(profile='tpu')
+    tpu_row=row();tpu_row['eval_settings']['max_new_tokens']=24576
+    out=tmp_path/'tpu.jsonl';out.write_text(json.dumps(tpu_row)+'\n')
+    payload,n,complete=w.validate_document('baseline',out,tpu_identity)
+    assert n==1 and not complete and 'results.jsonl' in payload
+    tpu_row['eval_settings']['max_new_tokens']=16384
+    out.write_text(json.dumps(tpu_row)+'\n')
+    with pytest.raises(ValueError,match='budget'):
+        w.validate_document('baseline',out,tpu_identity)
 
 def test_local_adapter_reuse_requires_exact_hub_contents(tmp_path):
     file=tmp_path/'adapter_config.json';file.write_bytes(b'{}')

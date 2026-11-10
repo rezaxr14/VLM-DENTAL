@@ -31,6 +31,11 @@ KINDS = ('zeroshot', 'baseline', 'sft', 'grpo', 'rules_skills', 'speculative')
 PRIMARY = ('base_no_tools', 'base_with_tools', 'sft_no_tools', 'sft_with_tools', 'grpo_no_tools', 'grpo_with_tools')
 
 
+def generation_budget(profile):
+    """Generation budget is profile-defined: TPU always 24K; every GPU profile remains 16K."""
+    return 24576 if ALIASES.get(profile, profile) == 'tpu' else 16384
+
+
 def fingerprint(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, allow_nan=False, separators=(',', ':')).encode()).hexdigest()
 
@@ -63,7 +68,7 @@ def select_profiles(target, profiles=None):
 
 # TPU static-shape generation (dental_agent/model/tpu_generation.py). Kept in code, not in the profile dict: the notebooks embed
 # their own EVAL_PROFILES copy, and these values define what a TPU result means (they are part of the result identity).
-# Eval generates up to 16384 new tokens, so only cache tiers of at least chunk + 16384 are reachable.
+# TPU eval generates up to 24576 new tokens; the configured tiers (32768, 49152) leave prompt headroom.
 TPU_SPEC_CONDITIONS = ('baseline','mtp_1','mtp_2','mtp_3','ngram_2','ngram_3','ngram_5')    # mtp_*: head rebuilt in tpu_mtp from the base snapshot
 TPU_GENERATION = dict(chunk_tokens=512, cache_tiers=(32768, 49152), vision_slots=(8, 16, 6))
 
@@ -384,11 +389,11 @@ def validate_document(kind, path, identity):
             if kind != 'zeroshot':
                 if row.get('condition') != identity['condition'] or row.get('prompt') != 'unified': raise ValueError('Wrong condition/prompt')
                 settings = row.get('eval_settings') or {}
-                if settings.get('max_new_tokens') != 16384: raise ValueError('Wrong evaluation budget')
+                if settings.get('max_new_tokens') != int(identity['max_new_tokens']): raise ValueError('Wrong evaluation budget')
                 if settings.get('harness',{'mode':'off'}) != identity.get('harness',{'mode':'off'}): raise ValueError('Wrong evaluation harness')
             else:
                 if row.get('provider') not in {'transformers','local_hf'}: raise ValueError('API zero-shot results are not local baselines')
-                if (row.get('evaluation_settings') or {}).get('max_tokens') != 16384: raise ValueError('Zero-shot budget lacks 16K provenance')
+                if (row.get('evaluation_settings') or {}).get('max_tokens') != int(identity['max_new_tokens']): raise ValueError('Zero-shot budget provenance does not match this profile')
             # Adapter path is runtime-specific; identity certifies the exact checkpoint hashes instead.
             if 'eval_settings' in row:
                 row['eval_settings']['adapter_path'] = identity.get('adapter') or ''
@@ -400,7 +405,7 @@ def validate_document(kind, path, identity):
     doc = json.loads(Path(path).read_text())
     if doc.get('split',doc.get('settings',{}).get('split')) != 'dev': raise ValueError('Extensions must remain dev-only')
     if set(map(int,doc.get('image_ids',[]))) != ids: raise ValueError('Extension cohort mismatch')
-    if doc.get('settings',{}).get('max_new_tokens') != 16384: raise ValueError('Extension budget mismatch')
+    if doc.get('settings',{}).get('max_new_tokens') != int(identity['max_new_tokens']): raise ValueError('Extension budget mismatch')
     groups = doc.get('conditions') or {}; progress = 0
     for name,entry in groups.items():
         rows = entry.get('records',entry.get('episodes',[])); seen = [int(r['image_id']) for r in rows]
@@ -560,7 +565,7 @@ class NotebookEvaluations:
         identity = dict(schema=1,profile=job['profile'],runtime=self.profile_configs[job['profile']],kind=job['kind'],condition=job['condition'],
             checkpoint_kind=job.get('checkpoint_kind',job['kind']),track=job.get('track','no_tools'),stage=job['stage'],k=job['k'],adapter=job['adapter'],checkpoint_files=hashes,
             base_model='Qwen/Qwen3.5-9B',software=self.software,split=split,dev_split_sha256=digest(self.dev_split) if split=='dev' else None,source_sha256=self.source,
-            max_new_tokens=16384,max_tool_calls=50,max_turns=None,malformed_retries=0,seed=self.seed,size=job.get('size','canonical'))
+            max_new_tokens=generation_budget(job['profile']),max_tool_calls=50,max_turns=None,malformed_retries=0,seed=self.seed,size=job.get('size','canonical'))
         from dental_agent.harness.configuration import harness_identity
         mode = job.get('harness_mode','off')
         if job.get('checkpoint_kind',job['kind']) == 'grpo' or job['kind'] == 'speculative':
@@ -641,6 +646,7 @@ class NotebookEvaluations:
 
     def _command(self,job,identity,folder):
         kind = job['kind']; cohort = self.inputs[identity['split']]
+        max_new_tokens = str(identity['max_new_tokens'])
         adapter = self._adapter(job) if job['adapter'] else None
         if self.model_id is None:
             from dental_agent.utils.inputs import resolve_qwen_model
@@ -650,7 +656,7 @@ class NotebookEvaluations:
         if kind in {'baseline','sft','grpo'}:
             command = [sys.executable,'-u','scripts/evaluate_models.py','--condition',job['condition'],*common,
                 '--dataset','dentex','--split',identity['split'],'--dev-split',str(self.dev_split),'--output-dir',str(folder),
-                '--existing-results','resume','--max-new-tokens','16384','--max-tool-calls','50','--malformed-retries','0',
+                '--existing-results','resume','--max-new-tokens',max_new_tokens,'--max-tool-calls','50','--malformed-retries','0',
                 *runtime_flags(job['profile'], self.profile_configs), '--canonical-resize' if identity['size']=='canonical' else '--no-canonical-resize',
                 '--canonical-letterbox' if p['letterbox'] else '--no-canonical-letterbox']
             if job.get('harness_mode','off') != 'off': command += ['--harness-mode',job['harness_mode']]
@@ -668,21 +674,21 @@ class NotebookEvaluations:
             flags = runtime_flags(job['profile'], self.profile_configs); flags[0] = '--local-precision'
             command = [sys.executable,'-u','scripts/run_zero_shot.py','--provider','transformers','--model','Qwen/Qwen3.5-9B',
                 '--dataset','dentex','--split','test','--data-dir',cohort['data_dir'],'--output',str(folder/'results.jsonl'),'--output-dir',str(folder),
-                '--max-tokens','16384','--image-max-dim','0','--temperature','0','--pacing-delay','0','--git-sync-every','0','--no-retry-empty',*flags]
+                '--max-tokens',max_new_tokens,'--image-max-dim','0','--temperature','0','--pacing-delay','0','--git-sync-every','0','--no-retry-empty',*flags]
             if job['profile']=='tpu':    # static TPU vision slots: the canonical FULL letterbox view (labelled image_view=canonical in every record)
                 command += ['--canonical-resize','--canonical-letterbox']
             result = folder/'results.jsonl'
         elif kind == 'rules_skills':
             command = [sys.executable,'-u','scripts/harness/run_dev.py',*common,'--adapter-path',adapter,
                 '--checkpoint-kind',identity['checkpoint_kind'],'--dev-split',str(self.dev_split),'--split','dev',
-                '--max-new-tokens','16384','--max-tool-calls','50','--seed',str(self.seed),'--conditions',*identity['conditions'],
+                '--max-new-tokens',max_new_tokens,'--max-tool-calls','50','--seed',str(self.seed),'--conditions',*identity['conditions'],
                 *runtime_flags(job['profile'], self.profile_configs),'--existing-results','resume','--output',str(folder/'results.json'),
                 '--canonical-letterbox' if p['letterbox'] else '--no-canonical-letterbox']
             result = folder/'results.json'
         elif job['profile']=='tpu':
             command = [sys.executable,'-u','scripts/bench/spec_decode_bench_tpu.py',*common,'--adapter-path',adapter,
                 '--checkpoint-kind',identity['checkpoint_kind'],'--dev-split',str(self.dev_split),'--split','dev',
-                '--max-new-tokens','16384','--max-tool-calls','50','--seed',str(self.seed),'--conditions',*identity['conditions'],
+                '--max-new-tokens',max_new_tokens,'--max-tool-calls','50','--seed',str(self.seed),'--conditions',*identity['conditions'],
                 *runtime_flags(job['profile'], self.profile_configs),'--existing-results','resume','--output',str(folder/'results.json'),
                 '--harness-mode',job.get('harness_mode','off'),'--canonical-letterbox']
             result = folder/'results.json'
@@ -690,7 +696,7 @@ class NotebookEvaluations:
             ck = self.spec_checkpoints[job['profile']][job['adapter']]
             indices = self.gpu_indices or '0'
             command = [sys.executable,'-u','scripts/bench/spec_decode_bench.py','--checkpoint',str(ck),'--data-dir',cohort['data_dir'],
-                '--dev-split',str(self.dev_split),'--split','dev','--max-new-tokens','16384','--max-model-len',str(self.serving_context_length),
+                '--dev-split',str(self.dev_split),'--split','dev','--max-new-tokens',max_new_tokens,'--max-model-len',str(self.serving_context_length),
                 '--max-tool-calls','50','--seed',str(self.seed),'--conditions',*identity['conditions'],'--vllm-executable',self.vllm,
                 '--gpu-indices',indices,'--tensor-parallel',str(len(indices.split(','))),'--dtype',identity['serving']['dtype'],
                 '--port',str(self.port),'--existing-results','resume','--output',str(folder/'results.json'),

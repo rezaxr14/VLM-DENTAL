@@ -66,7 +66,7 @@ def test_the_benchmark_parser_accepts_exactly_what_the_coordinator_sends(tmp_pat
     from scripts.bench import spec_decode_bench_tpu as bench
     args = bench.parse_args(command[3:])
     assert args.conditions == ["baseline", "mtp_1", "mtp_2", "mtp_3", "ngram_2", "ngram_3", "ngram_5"] and args.tpu_generation_chunk_tokens == 512
-    assert args.canonical_letterbox is True and args.max_new_tokens == 16384 and args.checkpoint_kind == "grpo"
+    assert args.canonical_letterbox is True and args.max_new_tokens == 24576 and args.checkpoint_kind == "grpo"
 
 
 def test_the_benchmark_refuses_unknown_conditions_and_a_missing_baseline():
