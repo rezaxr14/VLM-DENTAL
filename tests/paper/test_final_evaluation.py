@@ -22,7 +22,7 @@ def config(tmp_path):
 
 
 def test_profiles_and_exact_track_names():
-    for name,tag in [('dual_t4','dual_t4_fp16'),('rtx4090','rtx4090_bf16'),('rtxpro6000_48gb','workstation48_lora_bf16'),('tpu','tpu_bf16')]:
+    for name,tag in [('dual_t4','dual_t4_fp16'),('rtx4090','rtx4090_bf16'),('rtxpro6000_48gb','workstation48_lora_bf16'),('quadro_rtx8000','quadro_rtx8000_fp16'),('tpu','tpu_bf16')]:
         assert w.profile(name)['tag']==tag
         paths=w.names(name,'dentex_alone',4)
         assert all(tag in p for p in paths.values())

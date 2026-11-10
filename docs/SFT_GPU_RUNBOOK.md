@@ -25,11 +25,12 @@ Choose `HARDWARE_PROFILE` in the notebook configuration. There is no GPU-name gu
 | `dual_t4` | NF4 QLoRA, adapters trainable | FP16 | 256 candidate; 128 observed working | SDPA; explicit KV repetition; fused-only guard | staged CPU cast/copy, 1 CPU thread during loading |
 | `rtx4090_qlora` | NF4 QLoRA, adapters trainable | BF16 | 1,024 candidate | auto: importable FA2 preferred; otherwise fused SDPA; native GQA retained | standard |
 | `workstation48_lora` | **unquantized BF16 base + LoRA** | BF16 | 2,048 candidate | auto: FA2 or fused SDPA; native GQA retained | standard |
+| `quadro_rtx8000` | **unquantized FP16 base + LoRA** | FP16 | 2,048 candidate | SDPA; `sdpa_repeat_kv=auto` repeats KV on pre-Ampere; fused-only guard | standard |
 | `tpu` | unquantized BF16 base + LoRA | BF16 | **0: stock loss** | XLA/SDPA path; no CUDA attention guard | standard |
 
 All profiles keep the 16,384-token limit. The current canonical image policy remains unchanged: GPU canonical resize without letterboxing, TPU static slots with the existing letterbox requirements. Token manifests must match their actual geometry and dataset/code fingerprint.
 
-The label "RTX Pro 6000 48 GB" does not uniquely establish architecture. Use the probe's reported GPU name, memory and compute capability. Choose `workstation48_lora` for the requested 48-GB BF16-LoRA budget and verify its actual hardware/software combination. A newer GPU or a successful `import flash_attn` alone does not prove that its installed wheel contains working forward and backward kernels for that SM, head dimension, dtype and dropout.
+The label "RTX Pro 6000 48 GB" does not uniquely establish architecture. Use the probe's reported GPU name, memory and compute capability. Choose `workstation48_lora` only for native-BF16 hardware; the Quadro RTX 8000 is Turing (SM75), has no native BF16, and must use the separate `quadro_rtx8000` FP16-LoRA profile. Its 2,048 loss chunk is a candidate, not a measured VRAM guarantee. This profile uses PyTorch SDPA and leaves KV repetition on `auto` (the existing Transformers repeat-KV branch is selected on pre-Ampere CUDA).
 
 Larger chunks are **unmeasured candidates**. They do not follow merely from a live dashboard reading of 9.2/10.1 GB. Longer traces, more image views, accumulation, loss buffers and optimizer allocation can change the peak. Keep the existing successful 128-chunk T4 run running; evaluate a larger chunk on the next run. See `SFT_CHUNKED_LOSS.md` for the objective and memory math.
 
@@ -61,8 +62,11 @@ python scripts/probe_sft_attention.py --model-id /path/to/Qwen3.5-9B --precision
 # RTX4090 (select flash_attention_2 explicitly to verify that installed wheel)
 python scripts/probe_sft_attention.py --model-id /path/to/Qwen3.5-9B --precision qlora --qlora-compute-dtype bf16 --attn-implementation flash_attention_2 --sdpa-repeat-kv off
 
-# 48-GB workstation, ordinary BF16 LoRA
+# 48-GB RTX Pro workstation, ordinary BF16 LoRA
 python scripts/probe_sft_attention.py --model-id /path/to/Qwen3.5-9B --precision bf16 --attn-implementation auto --sdpa-repeat-kv auto
+
+# Quadro RTX 8000 (Turing SM75), ordinary FP16 LoRA; auto repeat-KV uses the pre-Ampere workaround
+python scripts/probe_sft_attention.py --model-id /path/to/Qwen3.5-9B --precision fp16 --attn-implementation sdpa --sdpa-repeat-kv auto --require-efficient-sdpa
 ```
 
 For FA2 the probe checks the installed package's direct kernel, including backward. Real VLM wrapper/padding integration must still be checked by debug training. For SDPA it checks the actual Transformers SDPA adapter and its KV-repetition branch.

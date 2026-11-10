@@ -8,8 +8,9 @@ spec.loader.exec_module(module)
 PROFILE_TAGS, grpo_name, fetch_sft = module.PROFILE_TAGS, module.grpo_name, module.fetch_sft
 
 def test_distinct_profile_names():
-    names = [grpo_name('with_tools',4,'dentex_alone',p,PROFILE_TAGS[h]) for h,p in [('dual_t4','qlora'),('rtx4090','qlora'),('workstation48_lora','bf16'),('tpu','bf16')]]
-    assert len(set(names)) == 4
+    names = [grpo_name('with_tools',4,'dentex_alone',p,PROFILE_TAGS[h]) for h,p in [('dual_t4','qlora'),('rtx4090','qlora'),('workstation48_lora','bf16'),('quadro_rtx8000','fp16'),('tpu','bf16')]]
+    assert len(set(names)) == 5
+    assert PROFILE_TAGS['quadro_rtx8000'] == 'quadro_rtx8000_fp16'
     assert grpo_name('with_tools',4,'dentex_alone','qlora') == 'qwen3_5_9b_grpo_with_tools_k4_dentex_alone'
 
 def test_exact_sft_no_fallback(tmp_path,monkeypatch):

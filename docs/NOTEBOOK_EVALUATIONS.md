@@ -16,8 +16,10 @@ cells, reward functions, harness defaults and the frozen paper protocol are unch
 - `EVAL_SIZES`: canonical and/or original primary evaluations. These never share a result file.
 
 Canonical names are `dual_t4` (FP16 compute QLoRA), `rtx4090_qlora` (BF16 QLoRA),
-`workstation48_lora` (BF16 unquantized LoRA), `tpu`, and the existing legacy
-`dual_t4_fp16` unquantized FP16 zero-shot profile. `rtx4090` and `rtxpro6000_48gb`
+`workstation48_lora` (BF16 unquantized LoRA), `quadro_rtx8000` (Turing SM75,
+unquantized FP16 LoRA with SDPA and automatic repeat-KV), `tpu`, and the existing
+legacy `dual_t4_fp16` unquantized FP16 zero-shot profile. The GPU notebooks select
+`quadro_rtx8000` by default; TPU notebooks retain automatic TPU selection. `rtx4090` and `rtxpro6000_48gb`
 are aliases. `"all"` selects checkpoint cohorts; it does not change the physical GPU.
 A 48-GB CUDA runtime can attempt multiple numerical profiles; a T4 cannot execute
 native BF16 profiles. No precision is silently substituted. Unsupported jobs are

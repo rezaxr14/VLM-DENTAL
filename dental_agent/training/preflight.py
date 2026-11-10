@@ -597,7 +597,7 @@ def _check_sft_flags(args: Any, rep: _Report) -> None:
         from dental_agent.training.gpu_runtime import resolve_compute_dtype, native_bf16
         effective = resolve_compute_dtype(args.precision, getattr(args, "qlora_compute_dtype", "auto"))
         if effective == torch.bfloat16 and not native_bf16():
-            rep.add(FAIL, "compute dtype", "Native BF16 requested on pre-Ampere CUDA; T4 needs QLoRA compute fp16")
+            rep.add(FAIL, "compute dtype", "Native BF16 requested on pre-Ampere CUDA; use --precision fp16 or QLoRA compute fp16")
             ok = False
         else:
             rep.add(INFO, "compute dtype", str(effective))

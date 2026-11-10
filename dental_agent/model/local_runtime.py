@@ -94,7 +94,7 @@ def resolve_options(options: LocalRuntime | dict | None, *, load_in_4bit: bool =
         raise ValueError('QLoRA requires CUDA, not CPU/TPU')
     dtype = torch.float32 if precision == 'fp32' else resolve_compute_dtype(precision, opts.qlora_compute_dtype)
     if cuda and dtype == torch.bfloat16 and not native_bf16():
-        raise ValueError('Native BF16 unavailable: use --precision qlora --qlora-compute-dtype fp16 on T4')
+        raise ValueError('Native BF16 unavailable on pre-Ampere CUDA: use --precision fp16, or QLoRA with --qlora-compute-dtype fp16')
     pre_ampere = cuda and any(torch.cuda.get_device_capability(i)[0] < 8 for i in range(torch.cuda.device_count()))
     mode = ('staged' if pre_ampere else 'standard') if opts.loader_mode == 'auto' else opts.loader_mode
     threads = (1 if pre_ampere and opts.loader_mode == 'auto' else 0) if opts.load_cpu_threads is None else opts.load_cpu_threads

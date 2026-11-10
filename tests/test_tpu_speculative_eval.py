@@ -20,7 +20,9 @@ def test_tpu_runs_speculative_jobs_and_cuda_gating_is_unchanged():
     assert ne.hardware_reason("tpu", "speculative", TPU_DEVICE) is None
     assert "TPU" in ne.hardware_reason("tpu", "speculative", T4)
     assert "TPU" in ne.hardware_reason("tpu", "speculative", [])
-    assert "Turing" in ne.hardware_reason("dual_t4_fp16", "speculative", T4) or "native" in ne.hardware_reason("dual_t4", "speculative", T4)
+    assert ne.hardware_reason("dual_t4_fp16", "speculative", T4) is None
+    old_gpu = [dict(name="Volta", gib=32.0, capability=(7, 0))]
+    assert "7.5" in ne.hardware_reason("dual_t4_fp16", "speculative", old_gpu)
 
 
 def _session(tmp_path):

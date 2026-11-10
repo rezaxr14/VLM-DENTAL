@@ -72,7 +72,7 @@ class MemoryMonitor:
 
 def parse_args(argv=None):
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--checkpoint',required=True,help='Local merged BF16 model; never an adapter-only folder')
+    p.add_argument('--checkpoint',required=True,help='Local merged FP16/BF16 serving model; never an adapter-only folder')
     p.add_argument('--dev-split',default='data/splits/dentex_dev.json');p.add_argument('--data-dir',default='data')
     p.add_argument('--split',choices=['dev'],default='dev');p.add_argument('--limit',type=int)
     p.add_argument('--conditions',nargs='+',choices=['baseline','mtp_1','mtp_2','mtp_3','ngram_2','ngram_3','ngram_5'],default=['baseline','mtp_1','mtp_2','mtp_3','ngram_2','ngram_3','ngram_5'])

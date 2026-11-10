@@ -116,3 +116,34 @@ def test_all_requested_serving_profiles_and_notebooks():
     command=server_command('vllm','checkpoint','mtp_1',9000,tensor_parallel=2,dtype='float16')
     assert command[command.index('--dtype')+1]=='float16'
     assert command[command.index('--tensor-parallel-size')+1]=='2'
+
+
+def test_merge_adapter_parser_accepts_profile_serving_dtype():
+    import subprocess
+    script = Path(__file__).resolve().parents[1] / 'scripts/bench/merge_adapter.py'
+    done = subprocess.run([sys.executable, str(script), '--help'], capture_output=True, text=True, timeout=30)
+    assert done.returncode == 0, done.stderr
+    assert '--dtype {float16,bfloat16}' in done.stdout
+
+
+def test_serving_cuda_compatibility_distinguishes_cuda13_from_cuda12():
+    import importlib.util
+    path = Path(__file__).resolve().parents[1] / 'scripts/bench/probe_environment.py'
+    spec = importlib.util.spec_from_file_location('probe_environment', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    driver = {'driver_version': '535.230.02', 'driver_cuda_api_max': '12.2'}
+    cuda13 = module.cuda_compatibility_warning('13.0', driver)
+    assert cuda13 and 'below R580' in cuda13
+    cuda129 = module.cuda_compatibility_warning('12.9', driver)
+    assert cuda129 and 'limited feature set' in cuda129
+    assert module.cuda_compatibility_warning('12.2', driver) is None
+
+
+def test_quadro_speculative_notebook_selects_cu129_wheel():
+    root = Path(__file__).resolve().parents[1]
+    notebook = json.loads((root/'notebooks/VLM_Dental_Colab_Speculative_Decoding.ipynb').read_text())
+    source = '\n'.join(''.join(cell.get('source', [])) for cell in notebook['cells'])
+    assert '"vllm_cuda_variant": "cu129"' in source
+    assert 'vllm-{VLLM_VERSION}+cu129-cp38-abi3-manylinux_2_28_{arch}.whl' in source
+    assert '--torch-backend' in source and 'cu129' in source

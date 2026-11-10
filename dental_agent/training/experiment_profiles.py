@@ -7,6 +7,7 @@ PROFILE_TAGS = {
     "rtx4090": "rtx4090_bf16",
     "rtx4090_qlora": "rtx4090_bf16",
     "workstation48_lora": "workstation48_lora_bf16",
+    "quadro_rtx8000": "quadro_rtx8000_fp16",
     "tpu": "tpu_bf16",
     "dual_t4_fp16": "dual_t4_unquantized_fp16",
 }

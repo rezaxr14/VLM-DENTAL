@@ -81,9 +81,9 @@ path; leave modern CUDA on `auto` and TPU on `off`. This is a CUDA kernel
 compatibility policy, not an architecture change to apply everywhere.
 
 The GRPO notebook exposes `HARDWARE_PROFILE`; both single and sweep launchers,
-and the evaluation matrix, receive the selected controls. The zero-shot
+and the evaluation matrix, receive the selected controls. The Quadro RTX 8000 profile uses unquantized FP16 LoRA, SDPA, automatic pre-Ampere KV repetition, and the `quadro_rtx8000_fp16` checkpoint tag. FP16 is passed explicitly; the CLI does not infer it from the GPU name. The zero-shot
 notebook exposes `LOCAL_HARDWARE_PROFILE` in Option 5. It defaults to
-`dual_t4_fp16` to preserve the original unquantized FP16 benchmark. Select
+`quadro_rtx8000` (FP16, unquantized) for the current server. Other profiles remain selectable. Select
 `dual_t4` or `rtx4090` explicitly to use 4-bit weights, or
 `workstation48_lora` for unquantized BF16 inference. Quantization and dtype can
 change predictions: use a separate `--output` file when comparing them; do not

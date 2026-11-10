@@ -99,7 +99,7 @@ def parse_args():
     )
     parser.add_argument("--temperature", type=float, default=0.7,
                         help="Sampling temperature of the GRPO rollouts (default 0.7; must be > 0).")
-    parser.add_argument("--precision", type=str, default="bf16", choices=["bf16", "qlora"],
+    parser.add_argument("--precision", type=str, default="bf16", choices=["bf16", "fp16", "qlora"],
                         help="bf16 = LoRA on bf16 weights; qlora = LoRA on 4-bit weights (CUDA only). Never chosen for you.")
     parser.add_argument("--model-id", type=str, default=None,
                         help="Base model path/repo (same as run_grpo.py; the notebook passes it in sweep mode).")

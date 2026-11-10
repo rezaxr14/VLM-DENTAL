@@ -22,6 +22,7 @@ PROFILES = {
     'dual_t4': dict(tag='dual_t4_fp16', precision='qlora', compute='fp16', attention='sdpa', kv='on', loader='staged', threads=1, letterbox=False),
     'rtx4090_qlora': dict(tag='rtx4090_bf16', precision='qlora', compute='bf16', attention='auto', kv='auto', loader='standard', threads=0, letterbox=False),
     'workstation48_lora': dict(tag='workstation48_lora_bf16', precision='bf16', compute='auto', attention='auto', kv='auto', loader='standard', threads=0, letterbox=False),
+    'quadro_rtx8000': dict(tag='quadro_rtx8000_fp16', precision='fp16', compute='auto', attention='sdpa', kv='auto', loader='standard', threads=0, letterbox=False, serving_dtype='float16'),
     'tpu': dict(tag='tpu_bf16', precision='bf16', compute='auto', attention='sdpa', kv='off', loader='standard', threads=0, letterbox=True),
     'dual_t4_fp16': dict(tag='dual_t4_unquantized_fp16', precision='fp16', compute='auto', attention='sdpa', kv='on', loader='staged', threads=1, letterbox=False),
 }
@@ -101,8 +102,8 @@ def hardware_reason(profile, kind, devices, profiles=None):
         return 'pending: this cohort requires native BF16 (Ampere or newer)'
     if p['precision'] != 'qlora' and sum(d['gib'] for d in devices) < 18:
         return 'pending: device memory is below the 16-bit 9B weight footprint, before activations'
-    if kind == 'speculative' and any(d['capability'][0] < 8 for d in devices):
-        return 'pending: no verified Turing backend for this configured Qwen3.5/MTP vLLM path; native FP16 evaluation remains available'
+    if kind == 'speculative' and any(tuple(d['capability']) < (7, 5) for d in devices):
+        return 'pending: the configured NVIDIA vLLM serving path requires compute capability 7.5 or newer'
     return None
 
 
@@ -586,7 +587,8 @@ class NotebookEvaluations:
             checkpoint = configured.get(key) if isinstance(configured,dict) else None
             # A merged target must be explicitly associated with its exact source adapter.
             identity['merged_files'] = self._merged_identity(checkpoint) if checkpoint else None
-            identity['serving'] = dict(dtype='float16' if job['profile'].startswith('dual_t4') else 'bfloat16',max_model_len=self.serving_context_length,
+            serving_dtype = self.profile_configs[job['profile']].get('serving_dtype', 'float16' if job['profile'].startswith('dual_t4') else 'bfloat16')
+            identity['serving'] = dict(dtype=serving_dtype,max_model_len=self.serving_context_length,
                 gpu_indices=self.gpu_indices,port=self.port,vllm_executable=self.vllm)
         # Reuse a fully identified prior cohort before downloading any images or model weights.
         saved = self._saved_identity(identity)
@@ -854,7 +856,9 @@ def prepare_serving_targets(session, output_root='data/models/speculative', merg
             if session.model_id is None: session.model_id,_ = resolve_qwen_model()
             adapter = session._adapter(job)
             if not target.exists():
-                subprocess.run([sys.executable,'scripts/bench/merge_adapter.py','--base',str(session.model_id),'--adapter',adapter,'--output',str(target)],cwd=ROOT,check=True)
+                serving_dtype = session.profile_configs[profile].get('serving_dtype', 'float16' if profile.startswith('dual_t4') else 'bfloat16')
+                subprocess.run([sys.executable,'scripts/bench/merge_adapter.py','--base',str(session.model_id),'--adapter',adapter,
+                    '--output',str(target),'--dtype',serving_dtype],cwd=ROOT,check=True)
             subprocess.run([sys.executable,'scripts/bench/check_mtp.py','--base',str(session.model_id),'--checkpoint',str(target),
                 '--output',str(target.parent/(key+'_mtp_audit.json'))],cwd=ROOT,check=True)
         if target.is_dir():

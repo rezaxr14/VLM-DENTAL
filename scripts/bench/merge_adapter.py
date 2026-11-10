@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Explicit CPU/BF16 merge into a NEW directory, preserving original MTP bytes."""
+"""Explicit CPU 16-bit merge into a NEW directory, preserving original MTP bytes."""
 import argparse,json,sys
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[2]))
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     for flag in ['base','adapter','output']:p.add_argument('--'+flag,required=True)
+    p.add_argument('--dtype',choices=['float16','bfloat16'],default='bfloat16',help='Merged model dtype for the selected serving profile')
     a=p.parse_args();base=Path(a.base).resolve();out=Path(a.output).resolve()
     if out.exists():raise FileExistsError('Output must be a new directory')
     if not base.is_dir() or not Path(a.adapter).is_dir():raise ValueError('Use local base and adapter paths')
@@ -14,7 +15,8 @@ def main():
     import torch
     from transformers import Qwen3_5ForConditionalGeneration,AutoProcessor
     from peft import PeftModel
-    model=Qwen3_5ForConditionalGeneration.from_pretrained(str(base),torch_dtype=torch.bfloat16,device_map='cpu',local_files_only=True)
+    dtype={'float16':torch.float16,'bfloat16':torch.bfloat16}[a.dtype]
+    model=Qwen3_5ForConditionalGeneration.from_pretrained(str(base),torch_dtype=dtype,device_map='cpu',local_files_only=True)
     model=PeftModel.from_pretrained(model,a.adapter,is_trainable=False).merge_and_unload(safe_merge=True)
     out.mkdir(parents=True)
     model.save_pretrained(out,safe_serialization=True)

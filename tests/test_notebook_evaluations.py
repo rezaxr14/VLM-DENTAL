@@ -62,7 +62,7 @@ def test_discovery_both_tracks_all_profiles_and_reference_exclusion():
     files=trained_files()
     files.update(metadata(['grpo/ignored/grpo_reference/adapter_config.json']))
     jobs=w.discover(files,list(w.PROFILES))
-    assert len(jobs)==16
+    assert len(jobs)==20
     assert len(w.discover(files,['dual_t4']))==4
     assert {j['condition'] for j in jobs}==set(w.PRIMARY[2:])
     assert all('grpo_reference' not in j['adapter'] for j in jobs)
@@ -78,6 +78,10 @@ def test_hardware_flags_do_not_silently_change_precision():
     assert 'TPU' in w.hardware_reason('tpu','sft',[])
     assert '--qlora-compute-dtype' in w.runtime_flags('dual_t4')
     assert w.runtime_flags('workstation48_lora')[1]=='bf16'
+    assert w.runtime_flags('quadro_rtx8000')[1]=='fp16'
+    rtx8000=[dict(capability=(7,5),gib=48,name='Quadro RTX 8000')]
+    assert w.hardware_reason('quadro_rtx8000','sft',rtx8000) is None
+    assert w.hardware_reason('quadro_rtx8000','speculative',rtx8000) is None
 
 
 def test_store_resume_longer_progress_and_atomic_identity_guards(tmp_path):
@@ -296,6 +300,24 @@ def test_cell_profile_edits_drive_discovery_identity_and_runtime(tmp_path, monke
         assert command[command.index(flag)+1] == value
     assert '--canonical-letterbox' in command
     assert w.PROFILES['dual_t4']['tag'] == 'dual_t4_fp16'
+
+
+def test_quadro_speculative_identity_uses_fp16_serving_dtype(tmp_path, monkeypatch):
+    monkeypatch.setattr(w.NotebookEvaluations, '_source_identity', lambda self: 'offline-source')
+    hub = Hub(tmp_path)
+    session = w.NotebookEvaluations(
+        profiles=copy.deepcopy(w.PROFILES), target_profiles='quadro_rtx8000',
+        track='with_tools', kinds=['sft'], api=hub, download=hub.download,
+        model_id='/base')
+    assert len(session.jobs) == 1
+    session._saved_identity = lambda identity: None
+    session._input = lambda split: dict(ids=list(range(50)), fingerprint='cohort')
+    session.dev_split = tmp_path/'dentex_dev.json'
+    session.dev_split.write_text('[]')
+    job = dict(session.jobs[0], kind='speculative', checkpoint_kind='sft', size='canonical')
+    identity = session._identity(job)
+    assert identity['runtime']['precision'] == 'fp16'
+    assert identity['serving']['dtype'] == 'float16'
 
 
 def test_result_path_has_readable_profile_stage_condition_split_size_and_k():

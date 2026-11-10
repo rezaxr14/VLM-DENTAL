@@ -679,9 +679,11 @@ def collect_report(repo: Path, venv: Path, wheelhouse: Path, min_free_gb: float 
     lines.append(f"Still needed: about {verdict.need_repo_gb + verdict.need_home_gb:.0f} GB (model 19 GB is from the repo docs; the other "
                  "figures are allowances, not measurements; --min-free-gb overrides)")
     vram_left = g0.vram_gib - 18.0
+    precision_note = (" native BF16 is unavailable on this pre-Ampere GPU; select explicit FP16 LoRA (or QLoRA with FP16 compute)."
+                      if g0.cc[0] < 8 else " native BF16 is available.")
     hint = (f"hint only, nothing is changed (PRECISION is set in the notebook): the 9B weights in 16-bit are about 18 GB, which leaves "
-            f"about {max(vram_left, 0):.0f} GiB of this {g0.vram_gib:.0f} GiB card for activations and optimizer state; "
-            "no memory peak has been measured by this script")
+            f"about {max(vram_left, 0):.0f} GiB of this {g0.vram_gib:.0f} GiB card for activations and optimizer state;"
+            f"{precision_note} no memory peak has been measured by this script")
     lines.append("Precision " + hint + ".")
     lines.append("If space is tight on ext4 the reserved-blocks share (default 5%) can be lowered by the machine's owner with "
                  "`sudo tune2fs -m 1 <device>`; this script never runs it.")
@@ -714,6 +716,13 @@ def env_tags() -> EnvTags:
                    str(torch._C._GLIBCXX_USE_CXX11_ABI).upper())
 
 
+def _verification_dtype(torch):
+    """Use BF16 only when every visible CUDA device has native Ampere-or-newer support."""
+    count = torch.cuda.device_count()
+    native = count > 0 and all(torch.cuda.get_device_capability(i)[0] >= 8 for i in range(count))
+    return torch.bfloat16 if native else torch.float16
+
+
 def verify_torch() -> dict[str, Any]:
     import torch
     out: dict[str, Any] = {"torch": torch.__version__, "cuda_build": torch.version.cuda}
@@ -725,8 +734,10 @@ def verify_torch() -> dict[str, Any]:
     arch = torch.cuda.get_arch_list()
     out.update(device=torch.cuda.get_device_name(0), cc=f"{cc[0]}.{cc[1]}", arch_list=arch, arch_ok=arch_supported(arch, cc),
                bf16=bool(torch.cuda.is_bf16_supported()))
+    dtype = _verification_dtype(torch)
+    out["test_dtype"] = str(dtype).removeprefix("torch.")
     try:
-        a = torch.randn(512, 512, device="cuda", dtype=torch.bfloat16)
+        a = torch.randn(512, 512, device="cuda", dtype=dtype)
         torch.cuda.synchronize()
         out["matmul"] = bool(torch.isfinite(a @ a).all().item())
     except Exception as e:  # noqa: BLE001
@@ -741,12 +752,14 @@ def verify_attention() -> dict[str, Any]:
     import torch
     from torch.nn.attention import SDPBackend, sdpa_kernel
     res: dict[str, Any] = {}
+    dtype = _verification_dtype(torch)
+    res["test_dtype"] = str(dtype).removeprefix("torch.")
     for name in ("FLASH_ATTENTION", "EFFICIENT_ATTENTION", "CUDNN_ATTENTION", "MATH"):
         be = getattr(SDPBackend, name, None)
         if be is None:
             continue
         try:
-            q, k, v = (torch.randn(1, 8, 1024, 128, device="cuda", dtype=torch.bfloat16, requires_grad=True) for _ in range(3))
+            q, k, v = (torch.randn(1, 8, 1024, 128, device="cuda", dtype=dtype, requires_grad=True) for _ in range(3))
             with sdpa_kernel(be):
                 o = torch.nn.functional.scaled_dot_product_attention(q, k, v, is_causal=True)
             o.float().sum().backward()
@@ -762,7 +775,7 @@ def verify_attention() -> dict[str, Any]:
         res["flash_attn"] = f"import failed: {type(e).__name__}: {_first_line(e)}"
     else:
         try:
-            q, k, v = (torch.randn(1, 1024, 8, 128, device="cuda", dtype=torch.bfloat16, requires_grad=True) for _ in range(3))
+            q, k, v = (torch.randn(1, 1024, 8, 128, device="cuda", dtype=dtype, requires_grad=True) for _ in range(3))
             o = flash_attn_func(q, k, v, causal=True)
             o.float().sum().backward()
             torch.cuda.synchronize()
@@ -786,7 +799,7 @@ def verify_fla() -> dict[str, Any]:
     try:
         import torch.nn.functional as F
         B, T, H, HV, K = 1, 512, 2, 4, 128
-        dev, dt = "cuda", torch.bfloat16
+        dev, dt = "cuda", _verification_dtype(torch)
         q = torch.randn(B, T, H, K, device=dev, dtype=dt, requires_grad=True)
         k = torch.randn(B, T, H, K, device=dev, dtype=dt, requires_grad=True)
         v = torch.randn(B, T, HV, K, device=dev, dtype=dt, requires_grad=True)
@@ -811,8 +824,9 @@ def verify_causal_conv1d() -> dict[str, Any]:
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "installed": not isinstance(e, ModuleNotFoundError), "detail": f"import failed: {type(e).__name__}: {_first_line(e)}"}
     try:
-        x = torch.randn(1, 64, 256, device="cuda", dtype=torch.bfloat16)
-        w = torch.randn(64, 4, device="cuda", dtype=torch.bfloat16)
+        dtype = _verification_dtype(torch)
+        x = torch.randn(1, 64, 256, device="cuda", dtype=dtype)
+        w = torch.randn(64, 4, device="cuda", dtype=dtype)
         got = causal_conv1d_fn(x, w, None, activation="silu")
         ref = F.silu(F.conv1d(x, w.unsqueeze(1), padding=3, groups=64)[:, :, :256])
         err = float((got.float() - ref.float()).abs().max())
@@ -825,8 +839,9 @@ def verify_bnb() -> dict[str, Any]:
     import torch
     try:
         import bitsandbytes as bnb
-        layer = bnb.nn.Linear4bit(128, 128, quant_type="nf4", compute_dtype=torch.bfloat16).cuda()
-        y = layer(torch.randn(2, 128, device="cuda", dtype=torch.bfloat16))
+        dtype = _verification_dtype(torch)
+        layer = bnb.nn.Linear4bit(128, 128, quant_type="nf4", compute_dtype=dtype).cuda()
+        y = layer(torch.randn(2, 128, device="cuda", dtype=dtype))
         torch.cuda.synchronize()
         return {"ok": bool(torch.isfinite(y).all()), "detail": f"bitsandbytes {bnb.__version__}: 4-bit NF4 layer ran a forward pass"}
     except Exception as e:  # noqa: BLE001
@@ -1098,10 +1113,10 @@ def _dispatch(a: argparse.Namespace) -> int:  # a flat command table
         _emit(res)
         if a.what == "torch":
             record(a.state, "torch_check", f"{res.get('torch')} (CUDA {res.get('cuda_build')}) on {res.get('device', 'no GPU')}: "
-                   + ("ok, built for this GPU, bf16 matmul ran" if res.get("ok") else f"FAILED {res.get('detail', 'no kernel image for this GPU')}"))
+                   + (f"ok, built for this GPU, {res.get('test_dtype', '16-bit')} matmul ran" if res.get("ok") else f"FAILED {res.get('detail', 'no kernel image for this GPU')}"))
             return 0 if res.get("ok") else 1
         if a.what == "attention":
-            record(a.state, "sdpa", ", ".join(f"{k}={v.split(':')[0]}" for k, v in res.items() if k != "flash_attn"))
+            record(a.state, "sdpa", ", ".join(f"{k}={v.split(':')[0]}" for k, v in res.items() if k not in {"flash_attn", "test_dtype"}))
             record(a.state, "flash_attn_check", res.get("flash_attn", ""))
             return 0
         key = {"fla": "fla", "causal-conv1d": "causal_conv1d", "bnb": "bitsandbytes"}[a.what]

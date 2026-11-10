@@ -47,6 +47,19 @@ def test_the_48gb_card_is_told_apart_by_capability_not_by_name():
     assert gs.attention_plan((12, 0)).try_flash_attn2 is False
 
 
+def test_verification_dtype_uses_fp16_on_turing_and_bf16_on_ampere():
+    class Cuda:
+        def __init__(self, caps): self.caps = caps
+        def device_count(self): return len(self.caps)
+        def get_device_capability(self, i): return self.caps[i]
+    class FakeTorch:
+        bfloat16, float16 = 'bf16', 'fp16'
+        def __init__(self, caps): self.cuda = Cuda(caps)
+    assert gs._verification_dtype(FakeTorch([(7, 5)])) == 'fp16'
+    assert gs._verification_dtype(FakeTorch([(8, 0)])) == 'bf16'
+    assert gs._verification_dtype(FakeTorch([(8, 0), (7, 5)])) == 'fp16'
+
+
 # ---- torch wheel index -------------------------------------------------------------------------------------------------------
 def test_4090_with_driver_570_gets_cu126_because_cu130_needs_580():
     plan = gs.select_torch_index("570.172.08", ADA, "2.13.0")

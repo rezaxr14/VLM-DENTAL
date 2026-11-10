@@ -219,7 +219,7 @@ run "$VENV_PY" "$HELPER" ensure-env --repo "$REPO" --state "$STATE"
 run "$VENV_PY" "$HELPER" check-hf --repo "$REPO" --state "$STATE"
 
 # --------------------------------------------------------------------------------------------------------------------
-step 8 "Install the project and check torch / bitsandbytes"
+step 8 "Install the project and verify the architecture-native 16-bit Torch path / bitsandbytes"
 run "$VENV_PY" -m pip install -e "$REPO" --no-deps
 if ((DRY)); then
   say "  (dry-run) pip check; python -m bitsandbytes; verify torch; verify bnb"

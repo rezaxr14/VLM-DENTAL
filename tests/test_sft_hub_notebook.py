@@ -23,7 +23,7 @@ def text(cell):return ''.join(cell['source'])
 
 @pytest.mark.parametrize('profile,precision,compute,chunk',[
     ('dual_t4','qlora','fp16',256),('rtx4090_qlora','qlora','bf16',1024),
-    ('workstation48_lora','bf16','auto',2048),('tpu','bf16','auto',0),
+    ('workstation48_lora','bf16','auto',2048),('quadro_rtx8000','fp16','auto',2048),('tpu','bf16','auto',0),
 ])
 def test_full_configuration_and_training_command_match_actual_parser(tmp_path,monkeypatch,profile,precision,compute,chunk):
     monkeypatch.chdir(ROOT)
@@ -31,10 +31,13 @@ def test_full_configuration_and_training_command_match_actual_parser(tmp_path,mo
     from dental_agent.utils.inputs import LOCAL_BASE_MODEL_ENV
     monkeypatch.setenv(LOCAL_BASE_MODEL_ENV,'test-before')
     ns={'IS_TPU':profile=='tpu','torch':torch,'os':os,'sys':sys,'Path':Path}
-    config=next(text(c) for c in cells() if 'HARDWARE_PROFILE = "dual_t4"' in text(c))
-    config=config.replace('HARDWARE_PROFILE = "dual_t4"',f'HARDWARE_PROFILE = {profile!r}',1)
+    config=next(text(c) for c in cells() if 'HARDWARE_PROFILE = "quadro_rtx8000"' in text(c))
+    config=config.replace('HARDWARE_PROFILE = "quadro_rtx8000"',f'HARDWARE_PROFILE = {profile!r}',1)
     exec(compile(config,str(NOTEBOOK),'exec'),ns)
     assert ns['PRECISION']==precision and ns['QLORA_COMPUTE_DTYPE']==compute and ns['LOSS_CHUNK_TOKENS']==chunk
+    if profile == 'quadro_rtx8000':
+        assert ns['SDPA_REPEAT_KV'] == 'auto' and ns['ATTN_IMPLEMENTATION'] == 'sdpa'
+        assert ns['HF_RUN_TAG'] == 'quadro_rtx8000_fp16'
     # The tpu profile pads every sample to a static length that includes 7,488 vision-slot tokens; GPU profiles keep 16384.
     assert ns['TARGET_SEQ_LEN']==(32768 if profile=='tpu' else 16384) and ns['SAVE_STRATEGY']=='both' and ns['PUSH_EVERY_STEPS']==5
     assert ns['HF_BASE_MODEL_ID']=='Qwen/Qwen3.5-9B'

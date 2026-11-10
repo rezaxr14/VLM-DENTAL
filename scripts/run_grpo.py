@@ -206,10 +206,9 @@ def main() -> None:
         "--precision",
         type=str,
         default="bf16",
-        choices=["bf16", "qlora"],
-        help="bf16 = LoRA on bf16 weights (A100-class GPUs). qlora = LoRA on 4-bit NF4 weights (24 GB GPUs such as "
-             "RTX 4090). CUDA only; nothing selects it for you. (Previously 4-bit came implicitly from "
-             "configs/default.yaml model.load_in_4bit.)",
+        choices=["bf16", "fp16", "qlora"],
+        help="bf16/fp16 = unquantized LoRA in the selected 16-bit dtype; qlora = LoRA on 4-bit NF4 weights (CUDA only). "
+             "Choose FP16 explicitly on pre-Ampere GPUs such as Turing; nothing switches precision automatically.",
     )
     parser.add_argument(
         "--spmd",

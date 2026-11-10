@@ -23,6 +23,7 @@ CONDITIONS = ('base_no_tools','base_with_tools','sft_no_tools','sft_with_tools',
 RUNTIMES = {'dual_t4':('qlora','fp16','sdpa','on','staged',1),
             'rtx4090':('qlora','bf16','auto','auto','standard',0),
             'workstation48_lora':('bf16','auto','auto','auto','standard',0),
+            'quadro_rtx8000':('fp16','auto','sdpa','auto','standard',0),
             'tpu':('bf16','auto','sdpa','off','standard',0)}
 ALIASES = {'rtxpro6000_48gb':'workstation48_lora','rtx4090_qlora':'rtx4090'}
 
