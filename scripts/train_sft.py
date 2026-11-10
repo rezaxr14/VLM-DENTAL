@@ -75,6 +75,8 @@ from dental_agent.training.sft import (
     unwrap_peft_model,
     freeze_and_guard_vision_tower,
     restore_sft_checkpoint,
+    ResumableShuffleSampler,
+    SFT_SHUFFLE_SEED,
 )
 from dental_agent.model.backbone import (
     get_model_classes, lora_coverage, lora_target_modules, prepare_qlora_model, projector_module_names, qlora_bnb_config,
@@ -1044,13 +1046,15 @@ def _run_training(index: int, args: argparse.Namespace):
             print("[COLLATOR] Dynamic sequence padding enabled (GPU eager mode: batch-adaptive length, zero static bucket overhead).")
 
     train_sampler = None
+    resumable_sampler = None   # seeded per-epoch order: lets a mid-epoch checkpoint continue at the next unseen batch
     ws = get_xla_world_size(is_tpu)
     if use_spmd:
         global_batch_size = args.batch_size * args.num_cores
         # drop_last: a batch whose size is not a multiple of the mesh is replicated instead of sharded (apply_spmd_input_sharding)
         # and compiles a second graph at the full static length, with every core holding the whole batch (HBM out of memory at
         # the end of the first epoch / the first evaluation). Which samples are dropped changes every epoch (shuffle).
-        train_dataloader = DataLoader(train_dataset, batch_size=global_batch_size, shuffle=True, collate_fn=collator, drop_last=True)
+        resumable_sampler = ResumableShuffleSampler(len(train_dataset), SFT_SHUFFLE_SEED)
+        train_dataloader = DataLoader(train_dataset, batch_size=global_batch_size, sampler=resumable_sampler, collate_fn=collator, drop_last=True)
         if len(train_dataloader) == 0:
             raise SystemExit(f"[SPMD] {len(train_dataset)} training samples are fewer than one global batch of {global_batch_size} "
                              f"(--batch-size {args.batch_size} x --num-cores {args.num_cores}).")
@@ -1075,7 +1079,8 @@ def _run_training(index: int, args: argparse.Namespace):
         train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, sampler=train_sampler, collate_fn=collator)
         val_dataloader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, collate_fn=collator) if (val_dataset and is_master) else None
     else:
-        train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collator)
+        resumable_sampler = ResumableShuffleSampler(len(train_dataset), SFT_SHUFFLE_SEED)
+        train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, sampler=resumable_sampler, collate_fn=collator)
         val_dataloader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, collate_fn=collator) if (val_dataset and is_master) else None
 
     optimizer = torch.optim.AdamW(
@@ -1105,6 +1110,11 @@ def _run_training(index: int, args: argparse.Namespace):
     total_steps = 0
     start_epoch = 1
     best_val_loss = float("inf")
+    loader_batch_size = train_dataloader.batch_size
+    order_identity = ({"sampler_seed": SFT_SHUFFLE_SEED, "loader_batch_size": int(loader_batch_size),
+                       "grad_accum_steps": int(args.gradient_accumulation_steps), "train_samples": len(train_dataset)}
+                      if resumable_sampler is not None else None)
+    resume_batches_done, resume_epoch_start_step = 0, None   # set by an exact mid-epoch resume
 
     # Resume capability from HF Hub or local checkpoint
     state_file = out_path / "training_state.json"
@@ -1140,7 +1150,7 @@ def _run_training(index: int, args: argparse.Namespace):
                 # Weights, optimizer moments and the schedule position come back together (restore_sft_checkpoint). A failure here is
                 # fatal: continuing would train a fresh LoRA under a resumed schedule and lose the progress without saying so.
                 try:
-                    restored = restore_sft_checkpoint(out_path, model, optimizer, scheduler)
+                    restored = restore_sft_checkpoint(out_path, model, optimizer, scheduler, resumable_order=order_identity)
                 except Exception as e:
                     raise SystemExit(f"[RESUME FAILED] {out_path} holds a checkpoint that cannot be restored: {e}") from e
                 if scaler.is_enabled() and (out_path / "scaler.pt").exists():
@@ -1149,9 +1159,12 @@ def _run_training(index: int, args: argparse.Namespace):
                 start_epoch = restored["epoch"]
                 best_val_loss = restored["best_val_loss"]
                 checkpoint_epoch = start_epoch if restored["mid_epoch"] else start_epoch - 1
+                if "epoch_batches_done" in restored:
+                    resume_batches_done, resume_epoch_start_step = restored["epoch_batches_done"], restored["epoch_start_step"]
                 print(f"[RESUME] Restored HF checkpoint from Epoch {checkpoint_epoch}, Step {total_steps} (best_val_loss={best_val_loss:.4f}); "
                       f"{restored['tensors']} adapter tensors restored"
-                      + ("; the checkpoint was written mid-epoch, so this epoch restarts from its first batch." if restored["mid_epoch"] else "."))
+                      + (f"; exact mid-epoch resume: skipping the {resume_batches_done} batches of epoch {start_epoch} already trained on." if resume_batches_done
+                         else ("; the checkpoint was written mid-epoch by an older run (no stored batch position), so this epoch restarts from its first batch." if restored["mid_epoch"] else ".")))
             else:
                 print(f"[RESUME] {args.resume_hf} holds no checkpoint for {path_in_repo}: starting at step 1.")
         except SystemExit:
@@ -1162,7 +1175,9 @@ def _run_training(index: int, args: argparse.Namespace):
     # ``epoch`` is the resume cursor; ``checkpoint_epoch`` names the epoch that produced the saved weights.
     # A checkpoint written inside an epoch
     # (step push, SIGTERM) also records the step the epoch began at, so resume can restart that epoch consistently.
-    progress = {"epoch": start_epoch, "epoch_start_step": total_steps}
+    progress = {"epoch": start_epoch,
+                "epoch_start_step": total_steps if resume_epoch_start_step is None else resume_epoch_start_step,
+                "batches_done": resume_batches_done}   # loader batches of this epoch consumed up to the last optimizer step
 
     def save_sft_checkpoint(epoch_num: int, is_preemption: bool = False, mid_epoch: bool = False):
         if args.debug_steps:
@@ -1179,6 +1194,9 @@ def _run_training(index: int, args: argparse.Namespace):
             "mid_epoch": mid_epoch,
             "epoch_start_step": progress["epoch_start_step"] if mid_epoch else total_steps,
         }
+        if mid_epoch and order_identity is not None:
+            state_data.update(order_identity)
+            state_data["epoch_batches_done"] = progress["batches_done"]
         if is_tpu:
             import torch_xla.core.xla_model as xm
             if xm.is_master_ordinal():
@@ -1223,16 +1241,22 @@ def _run_training(index: int, args: argparse.Namespace):
     _diag.begin("training_loop", train_samples=len(train_dataset))
     for epoch in range(start_epoch, args.epochs + 1):
         progress["epoch"] = epoch
-        progress["epoch_start_step"] = total_steps
+        skip_batches = resume_batches_done if (epoch == start_epoch and resume_batches_done) else 0
+        progress["epoch_start_step"] = resume_epoch_start_step if skip_batches else total_steps
+        progress["batches_done"] = skip_batches
         if train_sampler is not None:
             train_sampler.set_epoch(epoch)
+        if resumable_sampler is not None:
+            resumable_sampler.set_epoch(epoch)
+            resumable_sampler.skip_next(skip_batches * loader_batch_size)
 
-        pbar = tqdm(train_dataloader, desc=f"SFT Epoch {epoch}/{args.epochs}") if is_master else train_dataloader
+        pbar = (tqdm(train_dataloader, desc=f"SFT Epoch {epoch}/{args.epochs}", initial=skip_batches, total=len(train_dataloader))
+                if is_master else train_dataloader)
         optimizer.zero_grad()
         accum_loss_sum = 0.0
         accum_valid_tokens = 0
 
-        for step, batch in enumerate(pbar):
+        for step, batch in enumerate(pbar, start=skip_batches):   # absolute batch index within the epoch
             # Count valid tokens directly on CPU tensor before moving to device.
             # This completely eliminates premature TPU-CPU synchronization barriers
             # before backward, keeping lazy tensor graph execution clean.
@@ -1325,6 +1349,7 @@ def _run_training(index: int, args: argparse.Namespace):
                 scheduler.step()
                 optimizer.zero_grad()
                 total_steps += 1
+                progress["batches_done"] = step + 1
 
                 step_loss = accum_loss_sum / max(accum_valid_tokens, 1)
                 accum_loss_sum = 0.0

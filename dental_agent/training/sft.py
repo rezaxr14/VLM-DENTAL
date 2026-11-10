@@ -1071,36 +1071,87 @@ def fast_forward_scheduler(scheduler: Any, steps: int) -> None:
             scheduler.step()
 
 
-def restore_sft_checkpoint(folder: str | Path, model: Any, optimizer: Any, scheduler: Any) -> dict[str, Any] | None:
+SFT_SHUFFLE_SEED = 42
+
+
+class ResumableShuffleSampler(torch.utils.data.Sampler):
+    """Shuffle whose order is a pure function of ``(seed, epoch)``, so a run can be resumed in the middle of an epoch.
+
+    ``len()`` is always the full epoch (the LR schedule length does not change); ``skip_next(n)`` drops the first ``n`` samples of the
+    NEXT iteration only (the batches a resumed epoch has already trained on) and is cleared once used.
+    """
+
+    def __init__(self, n_samples: int, seed: int = SFT_SHUFFLE_SEED) -> None:
+        self.n_samples, self.seed, self.epoch, self._skip = int(n_samples), int(seed), 1, 0
+
+    def set_epoch(self, epoch: int) -> None:
+        self.epoch = int(epoch)
+
+    def skip_next(self, n_samples: int) -> None:
+        if not 0 <= int(n_samples) <= self.n_samples:
+            raise ValueError(f"cannot skip {n_samples} of {self.n_samples} samples")
+        self._skip = int(n_samples)
+
+    def __len__(self) -> int:
+        return self.n_samples
+
+    def __iter__(self):
+        generator = torch.Generator()
+        generator.manual_seed(self.seed + self.epoch)
+        order = torch.randperm(self.n_samples, generator=generator).tolist()
+        skip, self._skip = self._skip, 0
+        return iter(order[skip:])
+
+
+def restore_sft_checkpoint(folder: str | Path, model: Any, optimizer: Any, scheduler: Any,
+                           resumable_order: dict[str, int] | None = None) -> dict[str, Any] | None:
     """Continue an SFT run from the checkpoint files in ``folder``; ``None`` when it holds no ``training_state.json``.
 
     Restores (1) the LoRA weights, (2) the optimizer moments, (3) the LR schedule position, and returns
-    ``{"step", "epoch", "best_val_loss", "mid_epoch", "tensors"}``. A checkpoint written in the middle of an epoch (step push or
-    SIGTERM) restarts that epoch from its first batch, so the step counter and the schedule go back to where the epoch began
-    (``epoch_start_step``); otherwise the repeated batches would push the schedule past its end. Checkpoints written before
-    patch 0035 have no ``epoch_start_step``; they keep the saved step (the old behaviour).
+    ``{"step", "epoch", "best_val_loss", "mid_epoch", "tensors"}``.
+
+    Exact mid-epoch resume: a checkpoint written in the middle of an epoch by a run that used ``ResumableShuffleSampler`` stores
+    ``epoch_batches_done`` (loader batches consumed up to the last optimizer step) plus the ``sampler_seed``, loader batch size,
+    gradient accumulation and training-set size that define the order. When the caller passes the same four values as
+    ``resumable_order``, the step and the schedule stay where they were and the result also carries ``epoch_batches_done`` and
+    ``epoch_start_step``, so the epoch continues at the next unseen batch. A mismatch raises (a different order cannot be skipped into).
+    Without ``resumable_order``, or for checkpoints that lack ``epoch_batches_done`` (written before patch 0067, unseeded shuffle),
+    a mid-epoch checkpoint restarts that epoch from its first batch: the step counter and schedule go back to where the epoch began
+    (``epoch_start_step``), otherwise the repeated batches would push the schedule past its end. Checkpoints written before
+    patch 0035 have no ``epoch_start_step``; they keep the saved step.
     """
     folder = Path(folder)
     state_file = folder / "training_state.json"
     if not state_file.is_file():
         return None
     saved = json.loads(state_file.read_text(encoding="utf-8"))
+    exact = bool(resumable_order is not None and saved.get("mid_epoch", False) and "epoch_batches_done" in saved)
+    if exact:
+        wrong = {k: (saved.get(k), v) for k, v in resumable_order.items() if saved.get(k) != v}
+        if wrong:
+            raise ValueError("the checkpoint's data order cannot be reproduced (saved vs current): "
+                             + ", ".join(f"{k} {a} vs {b}" for k, (a, b) in wrong.items())
+                             + ". Resume with the same traces, batch size, accumulation and seed, or start a new run.")
     tensors = load_sft_adapter_state(model, folder)  # raises: never continue with a fresh LoRA under a resumed schedule
     step = int(saved.get("step", 0))
     mid_epoch = bool(saved.get("mid_epoch", False))
-    if mid_epoch and "epoch_start_step" in saved:
+    if mid_epoch and "epoch_start_step" in saved and not exact:
         step = int(saved["epoch_start_step"])
     opt_path = folder / "optimizer.pt"
     if opt_path.is_file():
         optimizer.load_state_dict(torch.load(opt_path, map_location="cpu"))
     fast_forward_scheduler(scheduler, step)
-    return {
+    result = {
         "step": step,
         "epoch": int(saved.get("epoch", 1)),
         "best_val_loss": float(saved.get("best_val_loss", float("inf"))),
         "mid_epoch": mid_epoch,
         "tensors": tensors,
     }
+    if exact:
+        result["epoch_batches_done"] = int(saved["epoch_batches_done"])
+        result["epoch_start_step"] = int(saved.get("epoch_start_step", 0))
+    return result
 
 
 def wrap_distributed_model(

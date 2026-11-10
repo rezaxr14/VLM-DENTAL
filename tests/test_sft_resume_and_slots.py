@@ -113,6 +113,52 @@ def test_resume_legacy_checkpoint_without_epoch_start_step_keeps_saved_step(tiny
     assert got["step"] == 3
 
 
+ORDER = {"sampler_seed": 42, "loader_batch_size": 1, "grad_accum_steps": 8, "train_samples": 1497}
+
+
+def test_resumable_sampler_order_is_a_pure_function_of_seed_and_epoch_and_skip_is_one_shot():
+    """Worked example: 10 samples, epoch 2. The same (seed, epoch) always gives the same order; skipping the first 4 yields exactly
+    the remaining 6 of that order for ONE pass, and the next pass is the full epoch again."""
+    a, b = sft.ResumableShuffleSampler(10, 42), sft.ResumableShuffleSampler(10, 42)
+    a.set_epoch(2); b.set_epoch(2)
+    full = list(a)
+    assert full == list(b) and sorted(full) == list(range(10))
+    a.set_epoch(3)
+    assert list(a) != full                                   # reshuffled every epoch
+    b.skip_next(4)
+    assert list(b) == full[4:] and len(b) == 10
+    assert list(b) == full                                   # skip applied once
+    with pytest.raises(ValueError):
+        b.skip_next(11)
+
+
+def test_resume_mid_epoch_exact_keeps_step_and_returns_the_batch_position(tiny_dir, tmp_path):
+    """Epoch 2 began at step 1; the checkpoint at step 3 recorded 16 batches done (= 2 windows of 8). Exact resume keeps step 3 (not 1)
+    and hands back 16 so the loader skips them."""
+    make_trained_checkpoint(tiny_dir, tmp_path, mid_epoch=True, epoch_start_step=1, epoch_batches_done=16, **ORDER)
+    b = peft_model(tiny_dir)
+    opt_b, sch_b = fresh_training_objects(b)
+    got = sft.restore_sft_checkpoint(tmp_path, b, opt_b, sch_b, resumable_order=ORDER)
+    assert got["step"] == 3 and got["epoch"] == 2 and got["epoch_batches_done"] == 16 and got["epoch_start_step"] == 1
+    _, ref = fresh_training_objects(b)
+    sft.fast_forward_scheduler(ref, 3)
+    assert sch_b.get_last_lr() == pytest.approx(ref.get_last_lr())
+
+
+def test_resume_mid_epoch_exact_refuses_a_different_data_order(tiny_dir, tmp_path):
+    make_trained_checkpoint(tiny_dir, tmp_path, mid_epoch=True, epoch_start_step=1, epoch_batches_done=16, **ORDER)
+    b = peft_model(tiny_dir)
+    with pytest.raises(ValueError, match="grad_accum_steps 8 vs 4"):
+        sft.restore_sft_checkpoint(tmp_path, b, *fresh_training_objects(b), resumable_order={**ORDER, "grad_accum_steps": 4})
+
+
+def test_resume_old_mid_epoch_checkpoint_still_restarts_the_epoch_when_a_resumable_order_is_requested(tiny_dir, tmp_path):
+    make_trained_checkpoint(tiny_dir, tmp_path, mid_epoch=True, epoch_start_step=1)        # no epoch_batches_done: unseeded order
+    b = peft_model(tiny_dir)
+    got = sft.restore_sft_checkpoint(tmp_path, b, *fresh_training_objects(b), resumable_order=ORDER)
+    assert got["step"] == 1 and "epoch_batches_done" not in got
+
+
 def test_resume_without_a_checkpoint_returns_none(tiny_dir, tmp_path):
     b = peft_model(tiny_dir)
     assert sft.restore_sft_checkpoint(tmp_path, b, *fresh_training_objects(b)) is None
