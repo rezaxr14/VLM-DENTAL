@@ -198,7 +198,7 @@ else
   attempt=1
   # PIP_CONFIG_FILE=/dev/null: the venv's pip.conf (written below) pins the torch that is installed NOW, which must not block a change.
   until run env PIP_CONFIG_FILE=/dev/null "$VENV_PY" -m pip download "torch==${TORCH_VER}+${IDX}" "torchvision==${TV_VER}+${IDX}" \
-        --index-url "https://download.pytorch.org/whl/${IDX}" --extra-index-url https://pypi.org/simple -d "$WHEELHOUSE"; do
+        --index-url "https://download.pytorch.org/whl/${IDX}" --extra-index-url "${PIP_INDEX_URL:-https://pypi.org/simple}" -d "$WHEELHOUSE"; do
     ((attempt < 5)) || die "the torch download failed 5 times. Finished wheels stay in $WHEELHOUSE; run the script again to continue."
     attempt=$((attempt + 1)); say "download interrupted; retry $attempt of 5 in 10 s"; sleep 10
   done
