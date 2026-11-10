@@ -44,6 +44,8 @@ data/sample_images/
 data/tool_verification/
 data/qwen3_5_tokenizer/
 data/evaluations_flat*/
+# External benchmark downloads and decoded images (third-party data, about 400 MB; recreated by scripts/run_external_benchmark.py prepare)
+data/benchmarks/
 data/*.parquet
 data/*.zip
 *.zip
