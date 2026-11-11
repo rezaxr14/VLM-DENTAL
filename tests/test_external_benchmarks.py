@@ -347,8 +347,10 @@ def test_script_parser_requires_explicit_budget_and_names(monkeypatch):
     p = script.build_parser()
     with pytest.raises(SystemExit):
         p.parse_args(["answer", "--system-name", "s"])                          # --max-new-tokens is mandatory
-    a = p.parse_args(["answer", "--system-name", "s", "--max-new-tokens", "16384", "--findings-from", "pol"])
-    assert a.findings_from == "pol" and a.kinds == ["closed", "open"] and a.existing_results == "error"
+    with pytest.raises(SystemExit):
+        p.parse_args(["answer", "--system-name", "s", "--max-new-tokens", "16384"])                 # --image-view is mandatory too
+    a = p.parse_args(["answer", "--system-name", "s", "--max-new-tokens", "16384", "--image-view", "canonical", "--findings-from", "pol"])
+    assert a.findings_from == "pol" and a.kinds == ["closed", "open"] and a.existing_results == "error" and a.image_view == "canonical"
     with pytest.raises(SystemExit):
         p.parse_args(["policy", "--policy-name", "p", "--adapter-path", "x", "--max-new-tokens", "16384"])      # harness mode is mandatory
     assert p.parse_args(["judge", "--system-name", "s", "--judge-model", "m"]).judge_send_temperature is True

@@ -44,7 +44,10 @@ def resume_records(path: Path, existing: str, settings: dict[str, Any], key: str
         raise SystemExit(f"{path} already has {len(rows)} records. Resume it (existing='resume') or overwrite it.")
     done = {}
     for rec in rows:
-        diff = {k: (rec.get("settings", {}).get(k), v) for k, v in settings.items() if rec.get("settings", {}).get(k) != v}
+        old_settings = rec.get("settings", {})
+        # Symmetric: a key present on only one side counts as a difference (a TPU file has a 'tpu_generation' block a GPU run lacks, and the
+        # other way round), so cohorts of different hardware settings are never mixed.
+        diff = {k: (old_settings.get(k), settings.get(k)) for k in set(settings) | set(old_settings) if old_settings.get(k) != settings.get(k)}
         if diff:
             raise SystemExit(f"{path} was produced with different settings {diff}; resuming would mix them. Use overwrite.")
         done[rec[key]] = rec
@@ -132,11 +135,18 @@ def run_answer_phase(questions: list[dict[str, Any]], out_dir: str | Path, answe
             rec = dict(index=q["index"], image_id=q["image_id"], kind=kind, category=q["category"], answer=q["answer"], question=q["question"],
                        **({f"option{i+1}": o for i, o in enumerate(q["options"])} if kind == "closed" else {}),
                        prediction=prediction, raw=out["raw"], new_tokens=out.get("new_tokens"), hit_token_cap=bool(out.get("hit_token_cap")),
-                       **flags, **(ctx or {}), seconds=time.time() - t0, settings=kind_settings, timestamp=time.time())
+                       generation_refused=out.get("generation_refused"), **flags, **(ctx or {}), seconds=time.time() - t0, settings=kind_settings, timestamp=time.time())
             with open(path, "a", encoding="utf-8") as f_:
                 f_.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
             recs.append(rec)
             if n % 25 == 0 or n == len(chosen):
-                print(f"[ANSWER {kind} {n}/{len(chosen)}]", flush=True)
+                # Running diagnostics, so a problem (thinking past the budget, unreadable answers, refusals) shows in the first minutes
+                # of the full run and no separate trial run is needed.
+                done_recs = recs
+                toks = [r["new_tokens"] or 0 for r in done_recs]
+                print(f"[ANSWER {kind} {n}/{len(chosen)}] mean new tokens {sum(toks) / max(1, len(toks)):.0f} | "
+                      f"hit token cap {sum(r['hit_token_cap'] for r in done_recs)} | unclosed think {sum(r['unclosed_thinking'] for r in done_recs)} | "
+                      f"empty {sum(1 for r in done_recs if not r['prediction'].strip() and not r.get('generation_refused'))} | "
+                      f"refused {sum(1 for r in done_recs if r.get('generation_refused'))}", flush=True)
         result[kind] = recs
     return result

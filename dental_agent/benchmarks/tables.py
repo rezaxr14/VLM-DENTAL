@@ -20,6 +20,9 @@ def closed_vectors(rows: Sequence[dict[str, Any]], seed: int = 0, mode: str = "o
     """{question index: (image_id, correct 0/1, category)} under the official (random fallback) or strict extraction."""
     out = {}
     for r in rows:
+        if r.get("generation_refused"):                      # no answer was produced (TPU static generation): wrong, never a random option
+            out[int(r["index"])] = (int(r["image_id"]), 0.0, str(r["category"]))
+            continue
         idx2 = {L: r[f"option{i}"] for L, i in zip(mm.LETTERS, (1, 2, 3, 4))}
         ch = mm.extract_choice(r["prediction"], mm.LETTERS, idx2, random.Random(f"{seed}:{r['index']}"), strict=mode == "strict")
         out[int(r["index"])] = (int(r["image_id"]), float(ch == str(r["answer"])), str(r["category"]))

@@ -95,6 +95,9 @@ def judge_answers(answers: list[dict[str, Any]], out_path: str | Path, client: J
     print(f"[JUDGE] {len(done)} already judged, {len(todo)} to judge with {identity['judge_model']}.", flush=True)
 
     def one(a):
+        if a.get("refused"):                 # the generator produced no answer (TPU static generation): 0.0, no API call, flagged in the log
+            res = dict(score=0.0, log="generation refused: no answer, scored 0.0 without calling the judge", tries=0)
+            return dict(index=a["index"], category=a["category"], **res, **identity)
         res = mm.judge_one(client.complete, a["question"], a["ground_truth"], a["prediction"])
         return dict(index=a["index"], category=a["category"], **res, **identity)
 

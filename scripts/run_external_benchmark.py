@@ -5,6 +5,7 @@
     leakage   screen the benchmark images against every DENTEX image        (no GPU)
     policy    the trained agent runs once per image (frozen protocol), findings cached
     answer    one model answers every question with the official prompt; --findings-from adds the cached findings (Option A)
+              (policy and answer run on a GPU or on a TPU with the static generator; external OralGPT models: CUDA only)
     judge     LLM judge for the open-ended answers (needs the judge key)    (no GPU)
     score     tables with image-cluster bootstrap intervals                 (no GPU)
     compare   paired difference of two systems                              (no GPU)
@@ -116,6 +117,48 @@ def cmd_leakage(args):
         raise SystemExit("Benchmark images overlap with DENTEX. Do not report the affected images as held-out; see the file above.")
 
 
+# ------------------------------------------------------------------------------------------------------------------- hardware / model
+def need_explicit_letterbox(args):
+    if not any(a in args._argv for a in ("--canonical-letterbox", "--no-canonical-letterbox")):
+        raise SystemExit("State the canonical view explicitly: --canonical-letterbox or --no-canonical-letterbox (it must match SFT, GRPO "
+                         "and the DENTEX evaluation of this hardware profile; a TPU needs --canonical-letterbox).")
+
+
+def tpu_generation_on(args) -> bool:
+    return bool(getattr(args, "tpu_generation_chunk_tokens", 0))
+
+
+def load_repo_model(args, adapter, condition, *, canonical_resize: bool, what: str):
+    """Qwen3.5 through the repository's own evaluator functions, in the evaluator's order (docs/TPU_EVALUATION.md):
+
+    TPU (``--tpu-generation-chunk-tokens`` > 0): static canonical letterbox views are required BEFORE any weight is read, SPMD is enabled
+    before the XLA device exists, and ``max_new_tokens`` is passed so the cache tiers can be checked and warmed. GPU/CPU: unchanged
+    calls. Returns (model, processor, is_tpu, tpu_gen)."""
+    from scripts import evaluate_models as ev
+    from dental_agent.model.local_runtime import runtime_from_args
+    tpu_gen = tpu_generation_on(args)
+    if tpu_gen:
+        from dental_agent.model.tpu_inference import require_static_views
+        require_static_views(canonical_resize=canonical_resize, letterbox=bool(args.canonical_letterbox), what=what)
+    device, dtype, is_tpu = ev.setup_eval_hardware(args.precision, getattr(args, "qlora_compute_dtype", "auto"), **({"spmd": True} if tpu_gen else {}))
+    if canonical_resize:
+        import torch
+        from dental_agent.utils.canonical import check_gpu_image_policy
+        check_gpu_image_policy(True, bool(args.canonical_letterbox), cuda=torch.cuda.is_available(), tpu=is_tpu, what=what)
+    model, processor = ev.load_eval_model(args.model_id, adapter, device, dtype, condition, quantize_4bit=args.precision == "qlora",
+                                          runtime_options=runtime_from_args(args), **({"max_new_tokens": int(args.max_new_tokens)} if tpu_gen else {}))
+    return model, processor, is_tpu, tpu_gen
+
+
+def refusal_tools(tpu_gen: bool):
+    """(exception types, note_refusal, refused_trajectory, write_report) of the static TPU generator; empty on GPU/CPU, where
+    ``except ()`` catches nothing and every exception still crashes the run."""
+    if not tpu_gen:
+        return (), None, None, None
+    from dental_agent.model.tpu_inference import GENERATION_REFUSED, note_refusal, refused_trajectory, write_generation_report
+    return GENERATION_REFUSED, note_refusal, refused_trajectory, write_generation_report
+
+
 # -------------------------------------------------------------------------------------------------------------------------- policy
 def _namespace_for_agent(args, harness_mode):
     ns = argparse.Namespace(**vars(args))
@@ -125,9 +168,7 @@ def _namespace_for_agent(args, harness_mode):
 
 
 def cmd_policy(args):
-    if not any(a in args._argv for a in ("--canonical-letterbox", "--no-canonical-letterbox")):
-        raise SystemExit("State the canonical view explicitly: --canonical-letterbox or --no-canonical-letterbox (it must match SFT, GRPO "
-                         "and the DENTEX evaluation of this hardware profile).")
+    need_explicit_letterbox(args)
     from scripts import evaluate_models as ev
     from dental_agent.utils.canonical import set_letterbox
     ev.load_env()
@@ -145,30 +186,39 @@ def cmd_policy(args):
     if out.is_file() and existing != "overwrite":
         rn.resume_records(out, existing, settings, "image_id")      # settings are verified before the 9B model is loaded
     from dental_agent.evaluation.tool_ablation import AblationSpec, ToolProbe
-    from dental_agent.model.local_runtime import runtime_from_args
     from dental_agent.tools.registry import ToolRegistry
-    device, dtype, _ = ev.setup_eval_hardware(args.precision, getattr(args, "qlora_compute_dtype", "auto"))
-    model, processor = ev.load_eval_model(args.model_id, adapter, device, dtype, "grpo_with_tools", quantize_4bit=args.precision == "qlora",
-                                          runtime_options=runtime_from_args(args))
+    model, processor, _is_tpu, tpu_gen = load_repo_model(args, adapter, "grpo_with_tools", canonical_resize=True, what="external benchmark (policy)")
+    refused_types, note_refusal, refused_trajectory, write_report = refusal_tools(tpu_gen)
     registry = ToolRegistry.create_default()
     spec = AblationSpec()
 
     def run_one(image_id, _path):
         probe = ToolProbe(registry, spec, image_id)
-        traj = ev.run_condition_trajectory(model, processor, images, image_id, probe.registry, ns)
+        refused = None
+        try:
+            traj = ev.run_condition_trajectory(model, processor, images, image_id, probe.registry, ns)
+        except refused_types as exc:
+            # The static TPU generator refused a prompt that does not fit its cache tiers / vision slots. Never truncated: the episode
+            # is recorded as one with no answer, flagged and counted, exactly as the evaluator does.
+            refused = note_refusal(model, image_id, exc)
+            traj = refused_trajectory(image_id, refused)
         answered = isinstance(traj.final_answer, (list, dict))
         return dict(findings=ev.findings_from_trajectory(traj), answered=answered, format_ok=bool(traj.format_ok), turns=len(traj.turns),
                     tool_calls=int(traj.tool_calls), raw_output="\n---\n".join(str(t.get("raw_output", "")) for t in traj.turns),
-                    trajectory=ev.transcript_for_record(traj))
+                    trajectory=ev.transcript_for_record(traj), generation_refused=refused)
 
     recs = rn.run_policy_phase(images.to_dict("records"), out, run_one, settings, existing, args.limit)
+    if tpu_gen:
+        write_report(model, out.with_name("tpu_generation_report.json"))
+        print(f"[TPU EVAL] policy: {sum(1 for r in recs if r.get('generation_refused'))}/{len(recs)} episode(s) refused by static generation "
+              "(recorded as no-answer episodes).", flush=True)
     n_ans = sum(bool(r.get("answered")) for r in recs)
     print(f"[POLICY] {len(recs)} images; {n_ans} with a valid final answer; {sum(bool(r['findings']) for r in recs)} with findings. -> {out}")
 
 
 # -------------------------------------------------------------------------------------------------------------------------- answer
 def load_external_vlm(model_id: str, revision: str, dtype, device):
-    """A public non-repo VLM (e.g. an OralGPT release) with its own processor. No remote code is executed."""
+    """A public non-repo VLM (e.g. an OralGPT release) with its own processor. No remote code is executed. CUDA/CPU only."""
     from transformers import AutoModelForImageTextToText, AutoProcessor
     kw = {"revision": revision} if revision else {}
     processor = AutoProcessor.from_pretrained(model_id, **kw)
@@ -181,6 +231,16 @@ def cmd_answer(args):
     closed, opened, images, manifest = load_all(args)
     results = Path(args.results_dir)
     kinds = tuple(args.kinds)
+    canonical = args.image_view == "canonical"
+    if args.loader == "external":
+        if args.image_view != "native":
+            raise SystemExit("--loader external uses the model's own preprocessing: pass --image-view native.")
+        if tpu_generation_on(args):
+            raise SystemExit("External (non-Qwen3.5) models cannot run on the TPU: the static-shape generator exists for the hybrid Qwen3.5 stack "
+                             "only (dental_agent/model/tpu_generation.py). Run this system on a CUDA machine and copy answers/<system>/ and "
+                             "judge/<system>__*.jsonl into this results folder (see docs/EXTERNAL_BENCHMARKS.md).")
+    elif canonical:
+        need_explicit_letterbox(args)
     questions = rn.build_questions(closed, opened, kinds)
     path_of = {int(r["id"]): r["local_path"] for r in images.to_dict("records")}
     findings, findings_meta = None, None
@@ -190,10 +250,12 @@ def cmd_answer(args):
         pol = rn.read_jsonl(src)
         findings_meta = dict(findings_policy=args.findings_from, findings_file_sha256=sha256_of(src), findings_ctx_version=mm.FINDINGS_CONTEXT_VERSION,
                              policy_settings=pol[0]["settings"] if pol else None)
+    from scripts import evaluate_models as ev
     settings = dict(system=args.system_name, benchmark=mm.DATASET_REPO, benchmark_md5=manifest["md5"], prompt_version=mm.PROMPT_VERSION,
                     loader=args.loader, model_id=args.model_id, model_revision=args.model_revision, adapter_path=args.adapter_path or "",
-                    precision=args.precision, max_new_tokens=int(args.max_new_tokens), temperature=0.0, image_view="native",
-                    thinking="closed <think> blocks removed before scoring", **(findings_meta or {"findings_policy": None}))
+                    precision=args.precision, max_new_tokens=int(args.max_new_tokens), temperature=0.0, image_view=args.image_view,
+                    canonical_letterbox=bool(args.canonical_letterbox) if canonical else None,
+                    thinking="closed <think> blocks removed before scoring", **ev.tpu_generation_settings(args), **(findings_meta or {"findings_policy": None}))
     out_dir = results / "answers" / rn.safe_name(args.system_name, "system name")
     # Verify resume settings before any model is loaded.
     for kind in kinds:
@@ -201,34 +263,47 @@ def cmd_answer(args):
         if existing_file.is_file() and args.existing_results != "overwrite":
             rn.resume_records(existing_file, args.existing_results, {**settings, "kind": kind}, "index")
     from PIL import Image
-    from scripts import evaluate_models as ev
     from dental_agent.model.inference import generate_agent_reply
     ev.load_env()
-    device, dtype, _ = ev.setup_eval_hardware(args.precision, getattr(args, "qlora_compute_dtype", "auto"))
+    if canonical:
+        from dental_agent.utils.canonical import set_letterbox, to_canonical
+        set_letterbox(args.canonical_letterbox)
     if args.loader == "repo":
-        from dental_agent.model.local_runtime import runtime_from_args
-        model, processor = ev.load_eval_model(args.model_id, args.adapter_path, device, dtype, "base_no_tools" if not args.adapter_path else "grpo_with_tools",
-                                              quantize_4bit=args.precision == "qlora", runtime_options=runtime_from_args(args))
+        model, processor, _is_tpu, tpu_gen = load_repo_model(args, args.adapter_path, "base_no_tools" if not args.adapter_path else "grpo_with_tools",
+                                                             canonical_resize=canonical, what="external benchmark (answer)")
     else:
         if args.adapter_path:
             raise SystemExit("--adapter-path is for the repo loader only.")
+        device, dtype, is_tpu = ev.setup_eval_hardware(args.precision, getattr(args, "qlora_compute_dtype", "auto"))
+        if is_tpu:
+            raise SystemExit("A TPU was detected: external (non-Qwen3.5) models cannot use its static-shape generator. Run this system on a CUDA machine.")
         model, processor = load_external_vlm(args.model_id, args.model_revision, dtype, device)
+        tpu_gen = False
+    refused_types, note_refusal, _refused_trajectory, write_report = refusal_tools(tpu_gen)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "model_info.json").write_text(json.dumps(dict(
         model_id=args.model_id, revision_requested=args.model_revision or None,
-        commit_hash=getattr(getattr(model, "config", None), "_commit_hash", None), loader=args.loader), indent=2), encoding="utf-8")
+        commit_hash=getattr(getattr(model, "config", None), "_commit_hash", None), loader=args.loader,
+        hardware="tpu" if tpu_gen else "cuda/cpu"), indent=2), encoding="utf-8")
 
     def answer_one(q, prompt):
         image = Image.open(path_of[q["image_id"]]).convert("RGB")
+        if canonical:
+            image = to_canonical(image, "FULL")                     # the same call run_agent / run_agent_no_tools make for the first view
         messages = [{"role": "user", "content": [{"type": "image", "image": image}, {"type": "text", "text": prompt}]}]
-        reply, _plen, ids = generate_agent_reply(model, processor, messages, max_new_tokens=int(args.max_new_tokens), temperature=0.0, return_ids=True)
+        try:
+            reply, _plen, ids = generate_agent_reply(model, processor, messages, max_new_tokens=int(args.max_new_tokens), temperature=0.0, return_ids=True)
+        except refused_types as exc:
+            return dict(raw="", new_tokens=0, hit_token_cap=False, generation_refused=note_refusal(model, q["image_id"], exc))
         return dict(raw=reply, new_tokens=len(ids), hit_token_cap=len(ids) >= int(args.max_new_tokens))
 
     res = rn.run_answer_phase(questions, out_dir, answer_one, settings, findings, args.existing_results, args.limit)
+    if tpu_gen:
+        write_report(model, out_dir / "tpu_generation_report.json")
     for kind, recs in res.items():
         capped = sum(r["hit_token_cap"] for r in recs)
         print(f"[ANSWER] {args.system_name} {kind}: {len(recs)} answers; {capped} hit the {args.max_new_tokens}-token cap; "
-              f"{sum(r['unclosed_thinking'] for r in recs)} with unclosed thinking.")
+              f"{sum(r['unclosed_thinking'] for r in recs)} with unclosed thinking; {sum(1 for r in recs if r.get('generation_refused'))} refused by static generation.")
 
 
 # --------------------------------------------------------------------------------------------------------------------------- judge
@@ -239,8 +314,8 @@ def cmd_judge(args):
         raise SystemExit(f"No open-ended answers for {args.system_name}; run the answer step first.")
     client = jg.JudgeClient(args.judge_model, base_url=args.judge_base_url or None, api_key_env=args.judge_key_env,
                             max_completion_tokens=args.judge_max_tokens, send_temperature=args.judge_send_temperature)
-    items = [dict(index=a["index"], question=a["question"], ground_truth=a["answer"], prediction=a["prediction"], category=a["category"])
-             for a in (answers[:args.limit] if args.limit else answers)]
+    items = [dict(index=a["index"], question=a["question"], ground_truth=a["answer"], prediction=a["prediction"], category=a["category"],
+                  refused=bool(a.get("generation_refused"))) for a in (answers[:args.limit] if args.limit else answers)]
     jg.judge_answers(items, judge_file(results, args.system_name, args.judge_model), client, workers=args.workers, existing=args.existing_results)
 
 
@@ -360,6 +435,9 @@ def build_parser():
 
     s = sub.add_parser("answer"); add_common(s); add_model_args(s)
     s.add_argument("--system-name", required=True); s.add_argument("--loader", choices=["repo", "external"], default="repo")
+    s.add_argument("--image-view", choices=["canonical", "native"], required=True,
+                   help="canonical = to_canonical(image, 'FULL') exactly as the agent sees it (required on a TPU, which also needs --canonical-letterbox); "
+                        "native = the image as stored (external models, which use their own preprocessing).")
     s.add_argument("--adapter-path", default=None); s.add_argument("--findings-from", default=None, help="policy name whose cached findings are added (Option A)")
     s.add_argument("--kinds", nargs="+", choices=["closed", "open"], default=["closed", "open"]); s.set_defaults(fn=cmd_answer)
 

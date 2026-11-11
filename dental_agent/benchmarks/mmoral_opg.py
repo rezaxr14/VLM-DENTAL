@@ -321,6 +321,7 @@ class _Tally:
 def score_closed(rows: Iterable[dict[str, Any]], seed: int = 0) -> dict[str, Any]:
     """rows: dicts with ``index``, ``category``, ``answer`` (a letter), ``prediction`` (text) and ``option1..option4``.
 
+    A row with ``generation_refused`` (TPU static generation produced no answer) is wrong in both modes and is counted in ``refused``.
     Returns, for the official extraction (random fallback, seeded per question) and the strict one (unreadable = wrong): the main-category
     table counted once per question (``main``), the same table with the official scripts' key weighting (``main_official_weighting``) and
     the exact-category table (``detailed``); plus the number of unreadable answers.
@@ -328,9 +329,13 @@ def score_closed(rows: Iterable[dict[str, Any]], seed: int = 0) -> dict[str, Any
     rows = list(rows)
     out: dict[str, Any] = {}
     unreadable = 0
+    refused = sum(1 for r in rows if r.get("generation_refused"))
     for mode in ("official", "strict"):
         tally = _Tally(CLOSED_CATEGORIES, lambda cat: (cat, cat.replace(",", "_")))
         for r in rows:
+            if r.get("generation_refused"):                      # the static TPU generator produced no answer: wrong, never a random option
+                tally.add(str(r["category"]), 0.0)
+                continue
             index2ans = {L: r[f"option{i}"] for L, i in zip(LETTERS, (1, 2, 3, 4))}
             choice = extract_choice(r["prediction"], LETTERS, index2ans, random.Random(f"{seed}:{r['index']}"), strict=mode == "strict")
             if mode == "strict" and choice is None:
@@ -338,6 +343,7 @@ def score_closed(rows: Iterable[dict[str, Any]], seed: int = 0) -> dict[str, Any
             tally.add(str(r["category"]), float(choice == str(r["answer"])))
         out[mode] = tally.tables()
     out["n"] = len(rows)
+    out["refused"] = refused
     out["unreadable"] = unreadable
     out["unreadable_fraction"] = unreadable / len(rows) if rows else 0.0
     return out
