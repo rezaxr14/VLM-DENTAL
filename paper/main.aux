@@ -2,6 +2,7 @@
 \providecommand\hyper@newdestlabel[2]{}
 \providecommand\HyField@AuxAddToFields[1]{}
 \providecommand\HyField@AuxAddToCoFields[2]{}
+\citation{hamamci2024dentex}
 \citation{wu2026vtool,li2024mmedagent,zhang2025octotools,oralgptplus2026,oralagent2026}
 \@writefile{toc}{\contentsline {section}{\numberline {1}Introduction}{1}{section.1}\protected@file@percent }
 \newlabel{sec:intro}{{1}{1}{Introduction}{section.1}{}}
@@ -39,53 +40,52 @@
 \citation{agentskills2026}
 \citation{leviathan2023fast,chen2023accelerating}
 \citation{kwon2023efficient}
-\citation{chen2024huatuo,openmedreason2026}
 \@writefile{toc}{\contentsline {paragraph}{Agentic tool use in VLMs.}{4}{section*.4}\protected@file@percent }
 \@writefile{toc}{\contentsline {paragraph}{Procedural context and speculative serving.}{4}{section*.5}\protected@file@percent }
 \@writefile{toc}{\contentsline {paragraph}{Label-anchored synthetic reasoning traces.}{4}{section*.6}\protected@file@percent }
 \@writefile{toc}{\contentsline {section}{\numberline {3}VLM-DENTAL{}: System and Method}{4}{section.3}\protected@file@percent }
 \newlabel{sec:method}{{3}{4}{\sys {}: System and Method}{section.3}{}}
 \newlabel{sec:method@cref}{{[section][3][]3}{[1][4][]4}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}Problem setup and agent loop}{4}{subsection.3.1}\protected@file@percent }
-\newlabel{sec:setup}{{3.1}{4}{Problem setup and agent loop}{subsection.3.1}{}}
-\newlabel{sec:setup@cref}{{[subsection][1][3]3.1}{[1][4][]4}}
 \citation{hu2022lora}
-\citation{jocher2023yolov8}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}Problem setup and agent loop}{5}{subsection.3.1}\protected@file@percent }
+\newlabel{sec:setup}{{3.1}{5}{Problem setup and agent loop}{subsection.3.1}{}}
+\newlabel{sec:setup@cref}{{[subsection][1][3]3.1}{[1][4][]5}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {3.2}System architecture}{5}{subsection.3.2}\protected@file@percent }
 \newlabel{sec:architecture}{{3.2}{5}{System architecture}{subsection.3.2}{}}
 \newlabel{sec:architecture@cref}{{[subsection][2][3]3.2}{[1][5][]5}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {3.3}A tool suite with continuous parameters}{5}{subsection.3.3}\protected@file@percent }
 \newlabel{sec:tools}{{3.3}{5}{A tool suite with continuous parameters}{subsection.3.3}{}}
 \newlabel{sec:tools@cref}{{[subsection][3][3]3.3}{[1][5][]5}}
+\citation{jocher2023yolov8}
 \@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces System overview: offline data and training (left), the agent loop with its eight tools (centre), and two optional extensions, a rules-and-skills harness and speculative decoding. Tools always run on the native image.}}{6}{figure.caption.7}\protected@file@percent }
 \newlabel{fig:overview}{{2}{6}{System overview: offline data and training (left), the agent loop with its eight tools (centre), and two optional extensions, a rules-and-skills harness and speculative decoding. Tools always run on the native image}{figure.caption.7}{}}
 \newlabel{fig:overview@cref}{{[figure][2][]2}{[1][5][]6}}
-\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces The VLM-DENTAL{} tool suite. Continuous or overridable parameters are shown in \emph  {italics}; data-only tools return coordinates rather than images.}}{6}{table.caption.10}\protected@file@percent }
-\newlabel{tab:tools}{{1}{6}{The \sys {} tool suite. Continuous or overridable parameters are shown in \emph {italics}; data-only tools return coordinates rather than images}{table.caption.10}{}}
-\newlabel{tab:tools@cref}{{[table][1][]1}{[1][5][]6}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.4}Self-correcting grounding: \texttt  {nudge\_crop}}{6}{subsection.3.4}\protected@file@percent }
+\newlabel{sec:nudge}{{3.4}{6}{Self-correcting grounding: \texttt {nudge\_crop}}{subsection.3.4}{}}
+\newlabel{sec:nudge@cref}{{[subsection][4][3]3.4}{[1][6][]6}}
 \@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces The model, Qwen3.5-9B, opened. Frozen parts are pale with a snowflake; trained parts are blue with a flame: LoRA on the attention, DeltaNet and MLP projections, the two merger layers, and the MTP block.}}{7}{figure.caption.8}\protected@file@percent }
 \newlabel{fig:internals}{{3}{7}{The model, Qwen3.5-9B, opened. Frozen parts are pale with a snowflake; trained parts are blue with a flame: LoRA on the attention, DeltaNet and MLP projections, the two merger layers, and the MTP block}{figure.caption.8}{}}
 \newlabel{fig:internals@cref}{{[figure][3][]3}{[1][5][]7}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.4}Self-correcting grounding: \texttt  {nudge\_crop}}{7}{subsection.3.4}\protected@file@percent }
-\newlabel{sec:nudge}{{3.4}{7}{Self-correcting grounding: \texttt {nudge\_crop}}{subsection.3.4}{}}
-\newlabel{sec:nudge@cref}{{[subsection][4][3]3.4}{[1][5][]7}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.5}Tiered perturbation: making self-correction learnable}{7}{subsection.3.5}\protected@file@percent }
+\newlabel{sec:perturbation}{{3.5}{7}{Tiered perturbation: making self-correction learnable}{subsection.3.5}{}}
+\newlabel{sec:perturbation@cref}{{[subsection][5][3]3.5}{[1][7][]7}}
 \@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces Data and the grounding detector: two real sources feed one grounding pool and the YOLOv8m detector behind \texttt  {locate\_tooth} (five-fold cross-validation); eight candidate datasets are not used; the corpus cohorts are shown as a donut.}}{8}{figure.caption.9}\protected@file@percent }
 \newlabel{fig:data}{{4}{8}{Data and the grounding detector: two real sources feed one grounding pool and the YOLOv8m detector behind \texttt {locate\_tooth} (five-fold cross-validation); eight candidate datasets are not used; the corpus cohorts are shown as a donut}{figure.caption.9}{}}
 \newlabel{fig:data@cref}{{[figure][4][]4}{[1][5][]8}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.5}Tiered perturbation: making self-correction learnable}{8}{subsection.3.5}\protected@file@percent }
-\newlabel{sec:perturbation}{{3.5}{8}{Tiered perturbation: making self-correction learnable}{subsection.3.5}{}}
-\newlabel{sec:perturbation@cref}{{[subsection][5][3]3.5}{[1][8][]8}}
-\@writefile{lof}{\contentsline {figure}{\numberline {5}{\ignorespaces What the tools return, on one DENTEX region (image 334) and one Tufts region (image 573). Each sweep runs a tool across its full parameter range; pins mark the values the agent chose. Crops are native-resolution views with 30\% padding.}}{9}{figure.caption.11}\protected@file@percent }
-\newlabel{fig:tools}{{5}{9}{What the tools return, on one DENTEX region (image 334) and one Tufts region (image 573). Each sweep runs a tool across its full parameter range; pins mark the values the agent chose. Crops are native-resolution views with 30\% padding}{figure.caption.11}{}}
-\newlabel{fig:tools@cref}{{[figure][5][]5}{[1][5][]9}}
-\@writefile{toc}{\contentsline {paragraph}{Fixed rates, decoupled from detector accuracy.}{9}{section*.12}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{No verbal cue; magnitude carries the signal.}{10}{section*.13}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.6}Trace generation, verification, and decontamination}{10}{subsection.3.6}\protected@file@percent }
-\newlabel{sec:traces}{{3.6}{10}{Trace generation, verification, and decontamination}{subsection.3.6}{}}
-\newlabel{sec:traces@cref}{{[subsection][6][3]3.6}{[1][10][]10}}
+\@writefile{toc}{\contentsline {paragraph}{Fixed rates, decoupled from detector accuracy.}{8}{section*.12}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces The VLM-DENTAL{} tool suite. Continuous or overridable parameters are shown in \emph  {italics}; data-only tools return coordinates rather than images.}}{9}{table.caption.10}\protected@file@percent }
+\newlabel{tab:tools}{{1}{9}{The \sys {} tool suite. Continuous or overridable parameters are shown in \emph {italics}; data-only tools return coordinates rather than images}{table.caption.10}{}}
+\newlabel{tab:tools@cref}{{[table][1][]1}{[1][6][]9}}
+\@writefile{toc}{\contentsline {paragraph}{No verbal cue; magnitude carries the signal.}{9}{section*.13}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.6}Trace generation, verification, and decontamination}{9}{subsection.3.6}\protected@file@percent }
+\newlabel{sec:traces}{{3.6}{9}{Trace generation, verification, and decontamination}{subsection.3.6}{}}
+\newlabel{sec:traces@cref}{{[subsection][6][3]3.6}{[1][9][]9}}
+\@writefile{lof}{\contentsline {figure}{\numberline {5}{\ignorespaces What the tools return, on one DENTEX region (image 334) and one Tufts region (image 573). Each sweep runs a tool across its full parameter range; pins mark the values the agent chose. Crops are native-resolution views with 30\% padding.}}{10}{figure.caption.11}\protected@file@percent }
+\newlabel{fig:tools}{{5}{10}{What the tools return, on one DENTEX region (image 334) and one Tufts region (image 573). Each sweep runs a tool across its full parameter range; pins mark the values the agent chose. Crops are native-resolution views with 30\% padding}{figure.caption.11}{}}
+\newlabel{fig:tools@cref}{{[figure][5][]5}{[1][6][]10}}
 \@writefile{lof}{\contentsline {figure}{\numberline {6}{\ignorespaces Trace synthesis, illustrated on one real trace (DENTEX image 624). (1)~A label-directed teacher operates the real tools while the shown box is perturbed. (2)~A cross-family verifier checks every trace; failures are repaired and re-verified. (3)~A leak sweep excises and regenerates contaminated traces before release.}}{11}{figure.caption.14}\protected@file@percent }
 \newlabel{fig:tracepipeline}{{6}{11}{Trace synthesis, illustrated on one real trace (DENTEX image 624). (1)~A label-directed teacher operates the real tools while the shown box is perturbed. (2)~A cross-family verifier checks every trace; failures are repaired and re-verified. (3)~A leak sweep excises and regenerates contaminated traces before release}{figure.caption.14}{}}
-\newlabel{fig:tracepipeline@cref}{{[figure][6][]6}{[1][10][]11}}
+\newlabel{fig:tracepipeline@cref}{{[figure][6][]6}{[1][9][]11}}
 \@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces The verified corpus. With-tools and no-tools cohorts are in exact 1:1 parity (checkmarks). Turns and tool calls are for the with-tools side; findings are counted per cohort (the Tufts overlap cohort is a subset of the Tufts all-diseases cohort, so its findings are counted in both).}}{11}{table.caption.15}\protected@file@percent }
 \newlabel{tab:corpus}{{2}{11}{The verified corpus. With-tools and no-tools cohorts are in exact 1:1 parity (checkmarks). Turns and tool calls are for the with-tools side; findings are counted per cohort (the Tufts overlap cohort is a subset of the Tufts all-diseases cohort, so its findings are counted in both)}{table.caption.15}{}}
 \newlabel{tab:corpus@cref}{{[table][2][]2}{[1][10][]11}}
@@ -94,70 +94,71 @@
 \newlabel{sec:traceanatomy@cref}{{[subsection][7][3]3.7}{[1][10][]11}}
 \citation{qwen2026qwen35}
 \citation{dettmers2023qlora}
-\@writefile{lof}{\contentsline {figure}{\numberline {7}{\ignorespaces One DENTEX image (624, FDI 34) in both arms. Top: the real box walk. Middle: the no-tools trace (one turn) and the with-tools trace (23 turns, 22 tool calls). Bottom: tool calls in the verified with-tools corpus (44{,}350 attempts, including 48 invalid ones) and the exact 1:1 pairing of the two arms.}}{12}{figure.caption.16}\protected@file@percent }
-\newlabel{fig:evidence}{{7}{12}{One DENTEX image (624, FDI 34) in both arms. Top: the real box walk. Middle: the no-tools trace (one turn) and the with-tools trace (23 turns, 22 tool calls). Bottom: tool calls in the verified with-tools corpus (44{,}350 attempts, including 48 invalid ones) and the exact 1:1 pairing of the two arms}{figure.caption.16}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {7}{\ignorespaces One DENTEX image (624, FDI 34) in both arms: the box walk, the two traces, the tool-call distribution of the corpus, and the 1:1 pairing.}}{12}{figure.caption.16}\protected@file@percent }
+\newlabel{fig:evidence}{{7}{12}{One DENTEX image (624, FDI 34) in both arms: the box walk, the two traces, the tool-call distribution of the corpus, and the 1:1 pairing}{figure.caption.16}{}}
 \newlabel{fig:evidence@cref}{{[figure][7][]7}{[1][12][]12}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.8}Training: SFT then GRPO with a correction-friendly reward}{12}{subsection.3.8}\protected@file@percent }
+\newlabel{sec:reward}{{3.8}{12}{Training: SFT then GRPO with a correction-friendly reward}{subsection.3.8}{}}
+\newlabel{sec:reward@cref}{{[subsection][8][3]3.8}{[1][12][]12}}
 \citation{deepseek2025r1}
 \citation{oralgptplus2026}
 \@writefile{lof}{\contentsline {figure}{\numberline {8}{\ignorespaces Training. (1)~SFT on loss-masked verified traces. (2)~GRPO with live tool rollouts, a group of $K$ rollouts per image ($K \in \{1,2,4,8,16\}$), and the frozen SFT adapter as KL reference. (3)~The ground-truth-anchored reward $R$.}}{13}{figure.caption.17}\protected@file@percent }
 \newlabel{fig:training}{{8}{13}{Training. (1)~SFT on loss-masked verified traces. (2)~GRPO with live tool rollouts, a group of $K$ rollouts per image ($K \in \{1,2,4,8,16\}$), and the frozen SFT adapter as KL reference. (3)~The ground-truth-anchored reward $R$}{figure.caption.17}{}}
-\newlabel{fig:training@cref}{{[figure][8][]8}{[1][13][]13}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.8}Training: SFT then GRPO with a correction-friendly reward}{13}{subsection.3.8}\protected@file@percent }
-\newlabel{sec:reward}{{3.8}{13}{Training: SFT then GRPO with a correction-friendly reward}{subsection.3.8}{}}
-\newlabel{sec:reward@cref}{{[subsection][8][3]3.8}{[1][12][]13}}
+\newlabel{fig:training@cref}{{[figure][8][]8}{[1][12][]13}}
 \@writefile{toc}{\contentsline {paragraph}{Ground-truth-anchored, multi-finding accuracy.}{13}{section*.18}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Complexity-scaled efficiency that does not fight correction.}{13}{section*.19}\protected@file@percent }
 \citation{schulman2025kl}
 \citation{panetta2022tufts}
 \citation{kuhn1955hungarian}
 \citation{guo2017calibration}
-\citation{moonshotkimi}
-\citation{meta2024llama32}
-\@writefile{toc}{\contentsline {paragraph}{Complexity-scaled efficiency that does not fight correction.}{14}{section*.19}\protected@file@percent }
 \@writefile{toc}{\contentsline {paragraph}{Dual-adapter RL.}{14}{section*.20}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Memory: chunked output-head loss.}{14}{section*.21}\protected@file@percent }
 \@writefile{toc}{\contentsline {section}{\numberline {4}Experiments}{14}{section.4}\protected@file@percent }
 \newlabel{sec:experiments}{{4}{14}{Experiments}{section.4}{}}
 \newlabel{sec:experiments@cref}{{[section][4][]4}{[1][14][]14}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {4.1}Evaluation protocol}{14}{subsection.4.1}\protected@file@percent }
 \newlabel{sec:eval}{{4.1}{14}{Evaluation protocol}{subsection.4.1}{}}
 \newlabel{sec:eval@cref}{{[subsection][1][4]4.1}{[1][14][]14}}
-\@writefile{toc}{\contentsline {paragraph}{Data and splits.}{14}{section*.21}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Metrics.}{14}{section*.22}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Conditions.}{14}{section*.23}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Data and splits.}{14}{section*.22}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Metrics.}{14}{section*.23}\protected@file@percent }
+\citation{moonshotkimi}
+\citation{meta2024llama32}
 \citation{hamamci2024dentex}
-\@writefile{lof}{\contentsline {figure}{\numberline {9}{\ignorespaces Experimental design: SFT or SFT+GRPO, with or without tools. H1 compares rows, H2 columns, and H3 the full system with a supervised specialist, next to the zero-shot references of \cref  {tab:zeroshot}. Result cells are pending the first hardware run, as in \cref  {tab:main}; the protocol is frozen (\cref  {sec:eval}).}}{15}{figure.caption.24}\protected@file@percent }
-\newlabel{fig:design}{{9}{15}{Experimental design: SFT or SFT+GRPO, with or without tools. H1 compares rows, H2 columns, and H3 the full system with a supervised specialist, next to the zero-shot references of \cref {tab:zeroshot}. Result cells are pending the first hardware run, as in \cref {tab:main}; the protocol is frozen (\cref {sec:eval})}{figure.caption.24}{}}
-\newlabel{fig:design@cref}{{[figure][9][]9}{[1][14][]15}}
-\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces Zero-shot frontier VLMs on the DENTEX validation set ($N=50$ panoramic radiographs; set-level matching over annotated findings). Exact hit is the percentage of evaluated images with at least one correct tooth--diagnosis pair, not complete-case accuracy. FDI hit similarly requires at least one matched tooth. The reported confidence interval refers to exact hit; F1 pools finding counts. $N$ is the available evaluated count per model, which differs across rows; these are not identical paired cohorts. ECE = expected calibration error.}}{15}{table.caption.25}\protected@file@percent }
-\newlabel{tab:zeroshot}{{3}{15}{Zero-shot frontier VLMs on the DENTEX validation set ($N=50$ panoramic radiographs; set-level matching over annotated findings). Exact hit is the percentage of evaluated images with at least one correct tooth--diagnosis pair, not complete-case accuracy. FDI hit similarly requires at least one matched tooth. The reported confidence interval refers to exact hit; F1 pools finding counts. $N$ is the available evaluated count per model, which differs across rows; these are not identical paired cohorts. ECE = expected calibration error}{table.caption.25}{}}
-\newlabel{tab:zeroshot@cref}{{[table][3][]3}{[1][14][]15}}
+\@writefile{lof}{\contentsline {figure}{\numberline {9}{\ignorespaces Experimental design: SFT or SFT+GRPO, with or without tools. H1 compares rows, H2 columns, and H3 the full system with a supervised specialist, next to the zero-shot references of \cref  {tab:zeroshot}.}}{15}{figure.caption.25}\protected@file@percent }
+\newlabel{fig:design}{{9}{15}{Experimental design: SFT or SFT+GRPO, with or without tools. H1 compares rows, H2 columns, and H3 the full system with a supervised specialist, next to the zero-shot references of \cref {tab:zeroshot}}{figure.caption.25}{}}
+\newlabel{fig:design@cref}{{[figure][9][]9}{[1][15][]15}}
+\@writefile{toc}{\contentsline {paragraph}{Conditions.}{15}{section*.24}\protected@file@percent }
 \@writefile{toc}{\contentsline {subsection}{\numberline {4.2}Zero-shot baselines: the case for looking again}{15}{subsection.4.2}\protected@file@percent }
 \newlabel{sec:baselines}{{4.2}{15}{Zero-shot baselines: the case for looking again}{subsection.4.2}{}}
-\newlabel{sec:baselines@cref}{{[subsection][2][4]4.2}{[1][14][]15}}
-\@writefile{lot}{\contentsline {table}{\numberline {4}{\ignorespaces Main results on the DENTEX validation set (pooled finding-level, set-matched); ``Best zero-shot frontier'' is the best row of \cref  {tab:zeroshot}. Cells marked \textcolor {red}{\textbf  {[]}} are pending the first hardware training run; the experimental design and metric definitions are final and frozen (\cref  {sec:eval}).}}{16}{table.caption.26}\protected@file@percent }
-\newlabel{tab:main}{{4}{16}{Main results on the DENTEX validation set (pooled finding-level, set-matched); ``Best zero-shot frontier'' is the best row of \cref {tab:zeroshot}. Cells marked \todo {} are pending the first hardware training run; the experimental design and metric definitions are final and frozen (\cref {sec:eval})}{table.caption.26}{}}
+\newlabel{sec:baselines@cref}{{[subsection][2][4]4.2}{[1][15][]15}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.3}Main results}{15}{subsection.4.3}\protected@file@percent }
+\newlabel{sec:mainresults}{{4.3}{15}{Main results}{subsection.4.3}{}}
+\newlabel{sec:mainresults@cref}{{[subsection][3][4]4.3}{[1][15][]15}}
+\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces Zero-shot frontier VLMs on the DENTEX validation set ($N=50$ radiographs; set-level matching). Exact hit is the percentage of images with at least one correct tooth--diagnosis pair, and the interval refers to it; F1 pools finding counts. $N$ differs across rows, so the cohorts are not identical. ECE = expected calibration error.}}{16}{table.caption.26}\protected@file@percent }
+\newlabel{tab:zeroshot}{{3}{16}{Zero-shot frontier VLMs on the DENTEX validation set ($N=50$ radiographs; set-level matching). Exact hit is the percentage of images with at least one correct tooth--diagnosis pair, and the interval refers to it; F1 pools finding counts. $N$ differs across rows, so the cohorts are not identical. ECE = expected calibration error}{table.caption.26}{}}
+\newlabel{tab:zeroshot@cref}{{[table][3][]3}{[1][15][]16}}
+\@writefile{lot}{\contentsline {table}{\numberline {4}{\ignorespaces Main results on the DENTEX validation set (pooled, set-matched). ``Best zero-shot frontier'' is the best row of \cref  {tab:zeroshot}; cells marked \textcolor {red}{\textbf  {[]}} are filled from the frozen protocol (\cref  {sec:eval}).}}{16}{table.caption.27}\protected@file@percent }
+\newlabel{tab:main}{{4}{16}{Main results on the DENTEX validation set (pooled, set-matched). ``Best zero-shot frontier'' is the best row of \cref {tab:zeroshot}; cells marked \todo {} are filled from the frozen protocol (\cref {sec:eval})}{table.caption.27}{}}
 \newlabel{tab:main@cref}{{[table][4][]4}{[1][15][]16}}
-\@writefile{lot}{\contentsline {table}{\numberline {5}{\ignorespaces Correction behavior by perturbation tier, over the ground-truth-anchored subset of locate returns (reference box $=$ expert box; pathology cohorts). P(nudge) counts any attributed \texttt  {nudge\_crop}; P(corrective) counts locates with at least one corrective-direction nudge; IoU before and after are paired, both over the corrected locates (the same episodes before and after their nudges). The clean tier is a control: with a correct box, corrective nudges are rare.}}{16}{table.caption.27}\protected@file@percent }
-\newlabel{tab:nudgetier}{{5}{16}{Correction behavior by perturbation tier, over the ground-truth-anchored subset of locate returns (reference box $=$ expert box; pathology cohorts). P(nudge) counts any attributed \texttt {nudge\_crop}; P(corrective) counts locates with at least one corrective-direction nudge; IoU before and after are paired, both over the corrected locates (the same episodes before and after their nudges). The clean tier is a control: with a correct box, corrective nudges are rare}{table.caption.27}{}}
-\newlabel{tab:nudgetier@cref}{{[table][5][]5}{[1][16][]16}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.3}Main results}{16}{subsection.4.3}\protected@file@percent }
-\newlabel{sec:mainresults}{{4.3}{16}{Main results}{subsection.4.3}{}}
-\newlabel{sec:mainresults@cref}{{[subsection][3][4]4.3}{[1][15][]16}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {4.4}Mechanism analysis: does tiered perturbation elicit self-correction?}{16}{subsection.4.4}\protected@file@percent }
 \newlabel{sec:mechanism}{{4.4}{16}{Mechanism analysis: does tiered perturbation elicit self-correction?}{subsection.4.4}{}}
 \newlabel{sec:mechanism@cref}{{[subsection][4][4]4.4}{[1][16][]16}}
-\@writefile{lof}{\contentsline {figure}{\numberline {10}{\ignorespaces Correction behaviour by perturbation tier (rates in \cref  {tab:nudgetier}). (a)~Corrective \texttt  {nudge\_crop} rate on the ground-truth-anchored subset (Wilson 95\% intervals); diamonds: all locate returns. (b)~IoU with the expert box before and after correction, same episodes (95\% intervals of the mean). The few nudges on clean boxes are mostly reframing rescales.}}{17}{figure.caption.28}\protected@file@percent }
-\newlabel{fig:nudgetier}{{10}{17}{Correction behaviour by perturbation tier (rates in \cref {tab:nudgetier}). (a)~Corrective \texttt {nudge\_crop} rate on the ground-truth-anchored subset (Wilson 95\% intervals); diamonds: all locate returns. (b)~IoU with the expert box before and after correction, same episodes (95\% intervals of the mean). The few nudges on clean boxes are mostly reframing rescales}{figure.caption.28}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {5}{\ignorespaces Correction behavior by perturbation tier over ground-truth-anchored locates (reference box $=$ expert box). P(corrective) is the share of locates with at least one nudge toward the reference; IoU is paired over the corrected locates. The clean tier is a control.}}{17}{table.caption.28}\protected@file@percent }
+\newlabel{tab:nudgetier}{{5}{17}{Correction behavior by perturbation tier over ground-truth-anchored locates (reference box $=$ expert box). P(corrective) is the share of locates with at least one nudge toward the reference; IoU is paired over the corrected locates. The clean tier is a control}{table.caption.28}{}}
+\newlabel{tab:nudgetier@cref}{{[table][5][]5}{[1][16][]17}}
+\@writefile{lof}{\contentsline {figure}{\numberline {10}{\ignorespaces Correction behaviour by perturbation tier (rates in \cref  {tab:nudgetier}). (a)~Corrective \texttt  {nudge\_crop} rate on the ground-truth-anchored subset (Wilson 95\% intervals); diamonds: all locate returns. (b)~IoU with the expert box before and after correction, same episodes (95\% intervals of the mean). The few nudges on clean boxes are mostly reframing rescales.}}{17}{figure.caption.29}\protected@file@percent }
+\newlabel{fig:nudgetier}{{10}{17}{Correction behaviour by perturbation tier (rates in \cref {tab:nudgetier}). (a)~Corrective \texttt {nudge\_crop} rate on the ground-truth-anchored subset (Wilson 95\% intervals); diamonds: all locate returns. (b)~IoU with the expert box before and after correction, same episodes (95\% intervals of the mean). The few nudges on clean boxes are mostly reframing rescales}{figure.caption.29}{}}
 \newlabel{fig:nudgetier@cref}{{[figure][10][]10}{[1][16][]17}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {4.5}Ablations and robustness checks}{17}{subsection.4.5}\protected@file@percent }
 \newlabel{sec:ablations}{{4.5}{17}{Ablations and robustness checks}{subsection.4.5}{}}
 \newlabel{sec:ablations@cref}{{[subsection][5][4]4.5}{[1][17][]17}}
-\@writefile{toc}{\contentsline {paragraph}{Tool-removal probe.}{17}{section*.30}\protected@file@percent }
-\@writefile{lof}{\contentsline {figure}{\numberline {11}{\ignorespaces Six verified episodes (five pathology, one healthy control) from two institutions: expert box green, box returned by \texttt  {locate\_tooth} blue, box after the \texttt  {nudge\_crop} chain orange, with the crops the agent inspected before and after. (a)~Three nudges; (b)~one nudge among 15 findings; (c)~deep caries; (d)~Tufts periapical lesion; (e)~small offset; (f)~healthy scan cleared without a hallucinated finding. Tiers are the logged perturbation tiers.}}{18}{figure.caption.29}\protected@file@percent }
-\newlabel{fig:gallery}{{11}{18}{Six verified episodes (five pathology, one healthy control) from two institutions: expert box green, box returned by \texttt {locate\_tooth} blue, box after the \texttt {nudge\_crop} chain orange, with the crops the agent inspected before and after. (a)~Three nudges; (b)~one nudge among 15 findings; (c)~deep caries; (d)~Tufts periapical lesion; (e)~small offset; (f)~healthy scan cleared without a hallucinated finding. Tiers are the logged perturbation tiers}{figure.caption.29}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {11}{\ignorespaces Six verified episodes (five pathology, one healthy control): expert box green, \texttt  {locate\_tooth} box blue, box after the \texttt  {nudge\_crop} chain orange, with the crops before and after.}}{18}{figure.caption.30}\protected@file@percent }
+\newlabel{fig:gallery}{{11}{18}{Six verified episodes (five pathology, one healthy control): expert box green, \texttt {locate\_tooth} box blue, box after the \texttt {nudge\_crop} chain orange, with the crops before and after}{figure.caption.30}{}}
 \newlabel{fig:gallery@cref}{{[figure][11][]11}{[1][17][]18}}
-\@writefile{toc}{\contentsline {paragraph}{Grounding-perturbation probe.}{18}{section*.31}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Tool-removal probe.}{18}{section*.31}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Grounding-perturbation probe.}{18}{section*.32}\protected@file@percent }
 \citation{leviathan2023fast,chen2023accelerating}
-\@writefile{toc}{\contentsline {paragraph}{Group-size sweep.}{19}{section*.32}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Group-size sweep.}{19}{section*.33}\protected@file@percent }
 \@writefile{toc}{\contentsline {section}{\numberline {5}Inference harness and serving: a separate dev-only extension}{19}{section.5}\protected@file@percent }
 \newlabel{sec:harness-serving}{{5}{19}{Inference harness and serving: a separate dev-only extension}{section.5}{}}
 \newlabel{sec:harness-serving@cref}{{[section][5][]5}{[1][19][]19}}
@@ -165,38 +166,55 @@
 \newlabel{sec:rules-skills}{{5.1}{19}{Versioned rules and progressive procedural context}{subsection.5.1}{}}
 \newlabel{sec:rules-skills@cref}{{[subsection][1][5]5.1}{[1][19][]19}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {5.2}Paired evaluation without reopening the primary protocol}{19}{subsection.5.2}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {6}{\ignorespaces Exploratory, paired dev-only harness comparison on one frozen checkpoint. Finding invention is $FP/(TP+FP)$, distinct from the primary healthy-image metric. Pending cells are not measurements.}}{20}{table.caption.33}\protected@file@percent }
-\newlabel{tab:harness-dev}{{6}{20}{Exploratory, paired dev-only harness comparison on one frozen checkpoint. Finding invention is $FP/(TP+FP)$, distinct from the primary healthy-image metric. Pending cells are not measurements}{table.caption.33}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {6}{\ignorespaces Exploratory, paired dev-only harness comparison on one frozen checkpoint. Finding invention is $FP/(TP+FP)$, distinct from the primary healthy-image metric. Pending cells are not measurements.}}{20}{table.caption.34}\protected@file@percent }
+\newlabel{tab:harness-dev}{{6}{20}{Exploratory, paired dev-only harness comparison on one frozen checkpoint. Finding invention is $FP/(TP+FP)$, distinct from the primary healthy-image metric. Pending cells are not measurements}{table.caption.34}{}}
 \newlabel{tab:harness-dev@cref}{{[table][6][]6}{[1][19][]20}}
 \@writefile{toc}{\contentsline {subsection}{\numberline {5.3}Speculative decoding: accuracy and end-to-end efficiency}{20}{subsection.5.3}\protected@file@percent }
 \newlabel{sec:specdecode}{{5.3}{20}{Speculative decoding: accuracy and end-to-end efficiency}{subsection.5.3}{}}
 \newlabel{sec:specdecode@cref}{{[subsection][3][5]5.3}{[1][19][]20}}
-\citation{nistelrooij2024combining}
 \citation{hao2025mmoral}
-\citation{oralgptplus2026}
 \citation{hao2025oralgptomni}
 \citation{yu2026opgagent}
-\@writefile{lot}{\contentsline {table}{\numberline {7}{\ignorespaces Accuracy and efficiency of speculative decoding on paired dev episodes. Diagnostic accuracy is pooled exact F1. Speedup is baseline total episode wall time divided by speculative total wall time. Proposal hit rate is accepted proposed tokens divided by all proposed tokens, not diagnostic accuracy. The baseline has no proposals. Failed decoded-output or F1 agreement withholds speedup; missing measurements remain pending.}}{21}{table.caption.34}\protected@file@percent }
-\newlabel{tab:serving-efficiency}{{7}{21}{Accuracy and efficiency of speculative decoding on paired dev episodes. Diagnostic accuracy is pooled exact F1. Speedup is baseline total episode wall time divided by speculative total wall time. Proposal hit rate is accepted proposed tokens divided by all proposed tokens, not diagnostic accuracy. The baseline has no proposals. Failed decoded-output or F1 agreement withholds speedup; missing measurements remain pending}{table.caption.34}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {7}{\ignorespaces Accuracy and efficiency of speculative decoding on paired dev episodes. Diagnostic accuracy is pooled exact F1. Speedup is baseline total episode wall time divided by speculative total wall time. Proposal hit rate is accepted proposed tokens divided by all proposed tokens, not diagnostic accuracy. The baseline has no proposals. Failed decoded-output or F1 agreement withholds speedup; missing measurements remain pending.}}{21}{table.caption.35}\protected@file@percent }
+\newlabel{tab:serving-efficiency}{{7}{21}{Accuracy and efficiency of speculative decoding on paired dev episodes. Diagnostic accuracy is pooled exact F1. Speedup is baseline total episode wall time divided by speculative total wall time. Proposal hit rate is accepted proposed tokens divided by all proposed tokens, not diagnostic accuracy. The baseline has no proposals. Failed decoded-output or F1 agreement withholds speedup; missing measurements remain pending}{table.caption.35}{}}
 \newlabel{tab:serving-efficiency@cref}{{[table][7][]7}{[1][20][]21}}
-\@writefile{toc}{\contentsline {section}{\numberline {6}Limitations}{21}{section.6}\protected@file@percent }
-\newlabel{sec:limitations}{{6}{21}{Limitations}{section.6}{}}
-\newlabel{sec:limitations@cref}{{[section][6][]6}{[1][21][]21}}
-\@writefile{toc}{\contentsline {paragraph}{No prospective clinician study.}{21}{section*.35}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Single-dataset evaluation and benchmarks to add.}{21}{section*.36}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Pending trained-agent results.}{21}{section*.37}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Synthetic perturbations are not real detector errors.}{21}{section*.38}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Demonstrated vs.\ learned correction.}{21}{section*.39}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {6}External evaluation (planned)}{21}{section.6}\protected@file@percent }
+\newlabel{sec:external}{{6}{21}{External evaluation (planned)}{section.6}{}}
+\newlabel{sec:external@cref}{{[section][6][]6}{[1][21][]21}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.1}The official DENTEX test set}{21}{subsection.6.1}\protected@file@percent }
+\newlabel{sec:official-test}{{6.1}{21}{The official DENTEX test set}{subsection.6.1}{}}
+\newlabel{sec:official-test@cref}{{[subsection][1][6]6.1}{[1][21][]21}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.2}Benchmarks used by competing systems}{21}{subsection.6.2}\protected@file@percent }
+\newlabel{sec:external-benchmarks}{{6.2}{21}{Benchmarks used by competing systems}{subsection.6.2}{}}
+\newlabel{sec:external-benchmarks@cref}{{[subsection][2][6]6.2}{[1][21][]21}}
+\citation{nistelrooij2024combining}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.3}The harness as a benchmark on Kaggle}{22}{subsection.6.3}\protected@file@percent }
+\newlabel{sec:kaggle}{{6.3}{22}{The harness as a benchmark on Kaggle}{subsection.6.3}{}}
+\newlabel{sec:kaggle@cref}{{[subsection][3][6]6.3}{[1][22][]22}}
+\@writefile{lot}{\contentsline {table}{\numberline {8}{\ignorespaces Planned Kaggle comparison; every cell is filled from the benchmark run.}}{22}{table.caption.36}\protected@file@percent }
+\newlabel{tab:kaggle}{{8}{22}{Planned Kaggle comparison; every cell is filled from the benchmark run}{table.caption.36}{}}
+\newlabel{tab:kaggle@cref}{{[table][8][]8}{[1][22][]22}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.4}A smaller sibling with data parallelism}{22}{subsection.6.4}\protected@file@percent }
+\newlabel{sec:sibling}{{6.4}{22}{A smaller sibling with data parallelism}{subsection.6.4}{}}
+\newlabel{sec:sibling@cref}{{[subsection][4][6]6.4}{[1][22][]22}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.5}A Cloud TPU path}{22}{subsection.6.5}\protected@file@percent }
+\newlabel{sec:tpu}{{6.5}{22}{A Cloud TPU path}{subsection.6.5}{}}
+\newlabel{sec:tpu@cref}{{[subsection][5][6]6.5}{[1][22][]22}}
+\@writefile{toc}{\contentsline {section}{\numberline {7}Limitations}{22}{section.7}\protected@file@percent }
+\newlabel{sec:limitations}{{7}{22}{Limitations}{section.7}{}}
+\newlabel{sec:limitations@cref}{{[section][7][]7}{[1][22][]22}}
+\@writefile{toc}{\contentsline {paragraph}{No prospective clinician study.}{22}{section*.37}\protected@file@percent }
 \citation{pan2025medvlmr1}
+\@writefile{toc}{\contentsline {paragraph}{Single-dataset evaluation.}{23}{section*.38}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Pending trained-agent results.}{23}{section*.39}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Synthetic perturbations are not real detector errors.}{23}{section*.40}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Demonstrated vs.\ learned correction.}{23}{section*.41}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Scale and scope.}{23}{section*.42}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Automated verification is not expert review.}{23}{section*.43}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Harness and serving evidence.}{23}{section*.44}\protected@file@percent }
 \bibstyle{plainnat}
 \bibdata{refs}
 \bibcite{agentskills2026}{{1}{2026}{{Agent Skills contributors}}{{}}}
-\@writefile{toc}{\contentsline {paragraph}{Scale and scope.}{22}{section*.40}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Automated verification is not expert review.}{22}{section*.41}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Harness and serving evidence.}{22}{section*.42}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {7}Conclusion}{22}{section.7}\protected@file@percent }
-\newlabel{sec:conclusion}{{7}{22}{Conclusion}{section.7}{}}
-\newlabel{sec:conclusion@cref}{{[section][7][]7}{[1][22][]22}}
 \bibcite{arik2017cephalometry}{{2}{2017}{{Ar{\i }k et~al.}}{{Ar{\i }k, Ibragimov, and Xing}}}
 \bibcite{openmedreason2026}{{3}{2026}{{Baghbanzadeh et~al.}}{{Baghbanzadeh, Sarkar, Colacci, Badawi, Fallahpour, Afkanpour, Sigal, Etemad, and Dolatabadi}}}
 \bibcite{chen2023accelerating}{{4}{2023}{{Chen et~al.}}{{Chen, Borgeaud, Irving, Lespiau, Sifre, and Jumper}}}
@@ -204,6 +222,9 @@
 \bibcite{deepseek2025r1}{{6}{2025}{{DeepSeek-AI}}{{}}}
 \bibcite{dettmers2023qlora}{{7}{2023}{{Dettmers et~al.}}{{Dettmers, Pagnoni, Holtzman, and Zettlemoyer}}}
 \bibcite{oralgptplus2026}{{8}{2026}{{Fan et~al.}}{{Fan, Hao, Chen, Bao, Shao, Liang, Hung, and Tang}}}
+\@writefile{toc}{\contentsline {section}{\numberline {8}Conclusion}{24}{section.8}\protected@file@percent }
+\newlabel{sec:conclusion}{{8}{24}{Conclusion}{section.8}{}}
+\newlabel{sec:conclusion@cref}{{[section][8][]8}{[1][24][]24}}
 \bibcite{guo2017calibration}{{9}{2017}{{Guo et~al.}}{{Guo, Pleiss, Sun, and Weinberger}}}
 \bibcite{hamamci2024dentex}{{10}{2023}{{Hamamci et~al.}}{{Hamamci, Er, Simsar, Yuksel, Gultekin, Ozdemir, Yang, Li, Pati, Stadlinger, et~al.}}}
 \bibcite{hao2025mmoral}{{11}{2025{a}}{{Hao et~al.}}{{Hao, Fan, Sun, Guo, Lin, Yang, Ai, Wong, Tang, and Hung}}}
@@ -232,34 +253,34 @@
 \bibcite{nistelrooij2024combining}{{34}{2024}{{van Nistelrooij et~al.}}{{van Nistelrooij, El~Ghoul, Xi, Saha, Kempers, Cenci, Loomans, Fl{\"u}gge, van Ginneken, and Vinayahalingam}}}
 \bibcite{wu2026vtool}{{35}{2026}{{Wu et~al.}}{{Wu, Yang, Jiang, Li, Yan, Yu, Zhang, Zhai, and Nahrstedt}}}
 \bibcite{yu2026opgagent}{{36}{2026}{{Yu et~al.}}{{Yu, Yang, Babicka, Hu, Hao, Huang, Huang, Jin, Wu, and Ge}}}
-\@writefile{toc}{\contentsline {section}{\numberline {A}Perturbation configuration}{25}{appendix.A}\protected@file@percent }
-\newlabel{app:perturbation}{{A}{25}{Perturbation configuration}{appendix.A}{}}
-\newlabel{app:perturbation@cref}{{[appendix][1][2147483647]A}{[1][25][]25}}
-\@writefile{lot}{\contentsline {table}{\numberline {8}{\ignorespaces Exact tiered-perturbation configuration used for trace generation. Offsets are drawn uniformly per axis with a random sign and applied with \texttt  {nudge\_crop}'s own shift-and-clamp math, so every shown box is one the correction tool could produce or fix. The unperturbed box is logged for auditing and never shown to the model.}}{26}{table.caption.45}\protected@file@percent }
-\newlabel{tab:perturbconfig}{{8}{26}{Exact tiered-perturbation configuration used for trace generation. Offsets are drawn uniformly per axis with a random sign and applied with \texttt {nudge\_crop}'s own shift-and-clamp math, so every shown box is one the correction tool could produce or fix. The unperturbed box is logged for auditing and never shown to the model}{table.caption.45}{}}
-\newlabel{tab:perturbconfig@cref}{{[table][8][2147483647]8}{[1][25][]26}}
-\@writefile{toc}{\contentsline {section}{\numberline {B}Mechanism analysis: full split by reference type}{26}{appendix.B}\protected@file@percent }
-\newlabel{app:mechanism}{{B}{26}{Mechanism analysis: full split by reference type}{appendix.B}{}}
-\newlabel{app:mechanism@cref}{{[appendix][2][2147483647]B}{[1][26][]26}}
-\@writefile{lot}{\contentsline {table}{\numberline {9}{\ignorespaces Corrective-nudge behavior split by reference type. \emph  {GT-anchored}: the locate call was ground-truth-grounded (annotated tooth; pathology cohorts) and the reference box is the expert box. \emph  {Detector-anchored}: exploratory calls (dominated by healthy-scan full-arch surveys), where the reference is the detector's own box. During rapid surveys the teacher corrects far less often per box, a difference in behavior that pooled rates would hide. IoU before is the mean over all locates with a recovered shown box; IoU after is the mean over the corrected locates only. \cref  {tab:nudgetier} pairs both over the corrected locates, so its before values differ.}}{26}{table.caption.46}\protected@file@percent }
-\newlabel{tab:mechanismsplit}{{9}{26}{Corrective-nudge behavior split by reference type. \emph {GT-anchored}: the locate call was ground-truth-grounded (annotated tooth; pathology cohorts) and the reference box is the expert box. \emph {Detector-anchored}: exploratory calls (dominated by healthy-scan full-arch surveys), where the reference is the detector's own box. During rapid surveys the teacher corrects far less often per box, a difference in behavior that pooled rates would hide. IoU before is the mean over all locates with a recovered shown box; IoU after is the mean over the corrected locates only. \cref {tab:nudgetier} pairs both over the corrected locates, so its before values differ}{table.caption.46}{}}
-\newlabel{tab:mechanismsplit@cref}{{[table][9][2147483647]9}{[1][26][]26}}
-\@writefile{toc}{\contentsline {section}{\numberline {C}Grounding tool validation}{26}{appendix.C}\protected@file@percent }
-\newlabel{app:grounding}{{C}{26}{Grounding tool validation}{appendix.C}{}}
-\newlabel{app:grounding@cref}{{[appendix][3][2147483647]C}{[1][26][]26}}
-\@writefile{lot}{\contentsline {table}{\numberline {10}{\ignorespaces YOLOv8m grounding tool (32 FDI classes), 5-fold cross-validation on all DENTEX images (DENTEX-only) and on the combined DENTEX+Tufts pool (2{,}339 images, 46{,}808 boxes): target mAP50 per fold. ``Target mAP50'' restricts evaluation to detections on annotated target teeth.}}{26}{table.caption.47}\protected@file@percent }
-\newlabel{tab:grounding}{{10}{26}{YOLOv8m grounding tool (32 FDI classes), 5-fold cross-validation on all DENTEX images (DENTEX-only) and on the combined DENTEX+Tufts pool (2{,}339 images, 46{,}808 boxes): target mAP50 per fold. ``Target mAP50'' restricts evaluation to detections on annotated target teeth}{table.caption.47}{}}
-\newlabel{tab:grounding@cref}{{[table][10][2147483647]10}{[1][26][]26}}
-\@writefile{toc}{\contentsline {section}{\numberline {D}Verifier rejection taxonomy}{27}{appendix.D}\protected@file@percent }
-\newlabel{app:verifier}{{D}{27}{Verifier rejection taxonomy}{appendix.D}{}}
-\newlabel{app:verifier@cref}{{[appendix][4][2147483647]D}{[1][27][]27}}
-\@writefile{toc}{\contentsline {section}{\numberline {E}Model access}{27}{appendix.E}\protected@file@percent }
-\newlabel{app:access}{{E}{27}{Model access}{appendix.E}{}}
-\newlabel{app:access@cref}{{[appendix][5][2147483647]E}{[1][27][]27}}
-\@writefile{lot}{\contentsline {table}{\numberline {11}{\ignorespaces Hosted models: role and access route.}}{27}{table.caption.48}\protected@file@percent }
-\newlabel{tab:access}{{11}{27}{Hosted models: role and access route}{table.caption.48}{}}
-\newlabel{tab:access@cref}{{[table][11][2147483647]11}{[1][27][]27}}
-\@writefile{toc}{\contentsline {section}{\numberline {F}Reproducibility}{27}{appendix.F}\protected@file@percent }
-\newlabel{app:repro}{{F}{27}{Reproducibility}{appendix.F}{}}
-\newlabel{app:repro@cref}{{[appendix][6][2147483647]F}{[1][27][]27}}
-\gdef \@abspage@last{28}
+\@writefile{toc}{\contentsline {section}{\numberline {A}Perturbation configuration}{27}{appendix.A}\protected@file@percent }
+\newlabel{app:perturbation}{{A}{27}{Perturbation configuration}{appendix.A}{}}
+\newlabel{app:perturbation@cref}{{[appendix][1][2147483647]A}{[1][27][]27}}
+\@writefile{lot}{\contentsline {table}{\numberline {9}{\ignorespaces Exact tiered-perturbation configuration used for trace generation. Offsets are drawn uniformly per axis with a random sign and applied with \texttt  {nudge\_crop}'s own shift-and-clamp math, so every shown box is one the correction tool could produce or fix. The unperturbed box is logged for auditing and never shown to the model.}}{27}{table.caption.47}\protected@file@percent }
+\newlabel{tab:perturbconfig}{{9}{27}{Exact tiered-perturbation configuration used for trace generation. Offsets are drawn uniformly per axis with a random sign and applied with \texttt {nudge\_crop}'s own shift-and-clamp math, so every shown box is one the correction tool could produce or fix. The unperturbed box is logged for auditing and never shown to the model}{table.caption.47}{}}
+\newlabel{tab:perturbconfig@cref}{{[table][9][2147483647]9}{[1][27][]27}}
+\@writefile{toc}{\contentsline {section}{\numberline {B}Mechanism analysis: full split by reference type}{27}{appendix.B}\protected@file@percent }
+\newlabel{app:mechanism}{{B}{27}{Mechanism analysis: full split by reference type}{appendix.B}{}}
+\newlabel{app:mechanism@cref}{{[appendix][2][2147483647]B}{[1][27][]27}}
+\@writefile{lot}{\contentsline {table}{\numberline {10}{\ignorespaces Corrective-nudge behavior split by reference type. \emph  {GT-anchored}: the locate call was ground-truth-grounded (annotated tooth; pathology cohorts) and the reference box is the expert box. \emph  {Detector-anchored}: exploratory calls (dominated by healthy-scan full-arch surveys), where the reference is the detector's own box. During rapid surveys the teacher corrects far less often per box, a difference in behavior that pooled rates would hide. IoU before is the mean over all locates with a recovered shown box; IoU after is the mean over the corrected locates only. \cref  {tab:nudgetier} pairs both over the corrected locates, so its before values differ.}}{28}{table.caption.48}\protected@file@percent }
+\newlabel{tab:mechanismsplit}{{10}{28}{Corrective-nudge behavior split by reference type. \emph {GT-anchored}: the locate call was ground-truth-grounded (annotated tooth; pathology cohorts) and the reference box is the expert box. \emph {Detector-anchored}: exploratory calls (dominated by healthy-scan full-arch surveys), where the reference is the detector's own box. During rapid surveys the teacher corrects far less often per box, a difference in behavior that pooled rates would hide. IoU before is the mean over all locates with a recovered shown box; IoU after is the mean over the corrected locates only. \cref {tab:nudgetier} pairs both over the corrected locates, so its before values differ}{table.caption.48}{}}
+\newlabel{tab:mechanismsplit@cref}{{[table][10][2147483647]10}{[1][27][]28}}
+\@writefile{toc}{\contentsline {section}{\numberline {C}Grounding tool validation}{28}{appendix.C}\protected@file@percent }
+\newlabel{app:grounding}{{C}{28}{Grounding tool validation}{appendix.C}{}}
+\newlabel{app:grounding@cref}{{[appendix][3][2147483647]C}{[1][28][]28}}
+\@writefile{lot}{\contentsline {table}{\numberline {11}{\ignorespaces YOLOv8m grounding tool (32 FDI classes), 5-fold cross-validation on all DENTEX images (DENTEX-only) and on the combined DENTEX+Tufts pool (2{,}339 images, 46{,}808 boxes): target mAP50 per fold. ``Target mAP50'' restricts evaluation to detections on annotated target teeth.}}{28}{table.caption.49}\protected@file@percent }
+\newlabel{tab:grounding}{{11}{28}{YOLOv8m grounding tool (32 FDI classes), 5-fold cross-validation on all DENTEX images (DENTEX-only) and on the combined DENTEX+Tufts pool (2{,}339 images, 46{,}808 boxes): target mAP50 per fold. ``Target mAP50'' restricts evaluation to detections on annotated target teeth}{table.caption.49}{}}
+\newlabel{tab:grounding@cref}{{[table][11][2147483647]11}{[1][28][]28}}
+\@writefile{toc}{\contentsline {section}{\numberline {D}Verifier rejection taxonomy}{28}{appendix.D}\protected@file@percent }
+\newlabel{app:verifier}{{D}{28}{Verifier rejection taxonomy}{appendix.D}{}}
+\newlabel{app:verifier@cref}{{[appendix][4][2147483647]D}{[1][28][]28}}
+\@writefile{toc}{\contentsline {section}{\numberline {E}Model access}{29}{appendix.E}\protected@file@percent }
+\newlabel{app:access}{{E}{29}{Model access}{appendix.E}{}}
+\newlabel{app:access@cref}{{[appendix][5][2147483647]E}{[1][29][]29}}
+\@writefile{lot}{\contentsline {table}{\numberline {12}{\ignorespaces Hosted models: role and access route.}}{29}{table.caption.50}\protected@file@percent }
+\newlabel{tab:access}{{12}{29}{Hosted models: role and access route}{table.caption.50}{}}
+\newlabel{tab:access@cref}{{[table][12][2147483647]12}{[1][29][]29}}
+\@writefile{toc}{\contentsline {section}{\numberline {F}Reproducibility}{29}{appendix.F}\protected@file@percent }
+\newlabel{app:repro}{{F}{29}{Reproducibility}{appendix.F}{}}
+\newlabel{app:repro@cref}{{[appendix][6][2147483647]F}{[1][29][]29}}
+\gdef \@abspage@last{29}

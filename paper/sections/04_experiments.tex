@@ -2,6 +2,12 @@
 \section{Experiments}
 \label{sec:experiments}
 
+The experiments ask three questions. Do general-purpose VLMs already solve the task (\cref{sec:baselines})? Does the
+agentic recipe improve on the same backbone without tools, and how does it compare with a supervised specialist
+(\cref{sec:mainresults})? And does the demonstration mechanism behave as designed (\cref{sec:mechanism})? Probes to run on
+the trained checkpoint follow in \cref{sec:ablations}. \cref{sec:eval} first defines the data splits, metrics, and
+conditions shared by all of them. The cells for the trained conditions are pending; every other number is final.
+
 \subsection{Evaluation protocol}
 \label{sec:eval}
 
@@ -28,15 +34,15 @@ ending without a parseable answer, and expected calibration error (ECE) \citep{g
 between stated confidence and correctness.
 
 \paragraph{Conditions.}
-Every condition is a checkpoint (base, SFT, GRPO) with or without tool access, evaluated on the original images;
-tools always operate on the native image. The no-tools arms use the \emph{same} SFT and GRPO recipe on the
+Every condition is a checkpoint (base, SFT, GRPO) with or without tool access, evaluated under the same image
+geometry; tools always operate on the native image. The no-tools arms use the \emph{same} SFT and GRPO recipe on the
 1{,}847 single-turn traces, so tool contribution is not confounded with training recipe. Every stage can be rerun from the repository notebooks (\cref{app:repro}). \cref{fig:design} summarizes the
 design.
 
 \begin{figure}[tbp]
   \centering
   \includegraphics[width=\linewidth]{fig_design_2x2}
-  \caption{Experimental design: SFT or SFT+GRPO, with or without tools. H1 compares rows, H2 columns, and H3 the full system with a supervised specialist, next to the zero-shot references of \cref{tab:zeroshot}. Result cells are pending the first hardware run, as in \cref{tab:main}; the protocol is frozen (\cref{sec:eval}).}
+  \caption{Experimental design: SFT or SFT+GRPO, with or without tools. H1 compares rows, H2 columns, and H3 the full system with a supervised specialist, next to the zero-shot references of \cref{tab:zeroshot}.}
   \label{fig:design}
 \end{figure}
 
@@ -46,12 +52,9 @@ design.
 \begin{table}[tbp]
   \centering
   \small
-  \caption{Zero-shot frontier VLMs on the DENTEX validation set ($N=50$ panoramic radiographs;
-  set-level matching over annotated findings). Exact hit is the percentage of evaluated images
-  with at least one correct tooth--diagnosis pair, not complete-case accuracy. FDI hit similarly
-  requires at least one matched tooth. The reported confidence interval refers to exact hit;
-  F1 pools finding counts. $N$ is the available evaluated count per model, which differs across
-  rows; these are not identical paired cohorts. ECE = expected calibration error.}
+  \caption{Zero-shot frontier VLMs on the DENTEX validation set ($N=50$ radiographs; set-level matching).
+  Exact hit is the percentage of images with at least one correct tooth--diagnosis pair, and the interval refers to
+  it; F1 pools finding counts. $N$ differs across rows, so the cohorts are not identical. ECE = expected calibration error.}
   \label{tab:zeroshot}
   \begin{tabular}{lrrrrrr}
     \toprule
@@ -80,10 +83,8 @@ benefits require the controlled trained-agent comparisons, not extrapolation fro
 \begin{table}[tbp]
   \centering
   \small
-  \caption{Main results on the DENTEX validation set (pooled finding-level, set-matched);
-  ``Best zero-shot frontier'' is the best row of \cref{tab:zeroshot}. Cells marked
-  \todo{} are pending the first hardware training run; the experimental design and
-  metric definitions are final and frozen (\cref{sec:eval}).}
+  \caption{Main results on the DENTEX validation set (pooled, set-matched). ``Best zero-shot frontier'' is the best
+  row of \cref{tab:zeroshot}; cells marked \todo{} are filled from the frozen protocol (\cref{sec:eval}).}
   \label{tab:main}
   \footnotesize
   \setlength{\tabcolsep}{4pt}
@@ -108,8 +109,6 @@ benefits require the controlled trained-agent comparisons, not extrapolation fro
 \cref{tab:main} is the paper's primary claim table: does the agentic recipe beat zero-shot
 inference and the same backbone without tools (H1: tools help; H2: RL helps), and where does it
 stand against a supervised specialist (H3, framed as a fair test rather than a guaranteed win).
-Cells for the trained conditions are pending and will be filled from the frozen evaluation
-protocol above.
 
 \subsection{Mechanism analysis: does tiered perturbation elicit self-correction?}
 \label{sec:mechanism}
@@ -130,12 +129,9 @@ reference center (cosine $>0.3$), \emph{away} if against it, \emph{rescaling} ot
 \begin{table}[tbp]
   \centering
   \small
-  \caption{Correction behavior by perturbation tier, over the ground-truth-anchored subset of
-  locate returns (reference box $=$ expert box; pathology cohorts). P(nudge) counts any
-  attributed \texttt{nudge\_crop}; P(corrective) counts locates with at least one
-  corrective-direction nudge; IoU before and after are paired, both over the corrected locates (the
-  same episodes before and after their nudges). The clean tier is a control:
-  with a correct box, corrective nudges are rare.}
+  \caption{Correction behavior by perturbation tier over ground-truth-anchored locates (reference box $=$ expert box).
+  P(corrective) is the share of locates with at least one nudge toward the reference; IoU is paired over the corrected
+  locates. The clean tier is a control.}
   \label{tab:nudgetier}
   \input{generated/table_nudge_tier}
 \end{table}
@@ -156,9 +152,7 @@ the zoom margin often absorbing a small offset (the paired mean IoU of those epi
 0.45 $\to$ 0.45). On corrected large offsets, mean IoU against the expert box improves from
 0.088 to 0.243 on the same 573 episodes --- partial on average, because a
 single nudge rarely lands perfectly --- with individual recoveries as large as IoU 0.066
-$\to$ 0.938 on a DENTEX training image (\cref{fig:mechanism}; further episodes in \cref{fig:gallery}). The remaining gap is visible in
-the audit: uncorrected spatial drifts are what the verifier's third rejection category (11
-traces) caught and repaired during corpus construction.
+$\to$ 0.938 on a DENTEX training image (\cref{fig:mechanism}; further episodes in \cref{fig:gallery}).
 
 Two further observations qualify these results. First, the split by reference type (full split in
 \cref{app:mechanism}): on
@@ -173,14 +167,15 @@ tighten-after-shift, which resembles zooming into a suspected lesion after cente
 \begin{figure}[!tb]
   \centering
   \includegraphics[width=\linewidth]{fig_gallery_episodes}
-  \caption{Six verified episodes (five pathology, one healthy control) from two institutions: expert box green, box returned by \texttt{locate\_tooth} blue, box after the \texttt{nudge\_crop} chain orange, with the crops the agent inspected before and after. (a)~Three nudges; (b)~one nudge among 15 findings; (c)~deep caries; (d)~Tufts periapical lesion; (e)~small offset; (f)~healthy scan cleared without a hallucinated finding. Tiers are the logged perturbation tiers.}
+  \caption{Six verified episodes (five pathology, one healthy control): expert box green, \texttt{locate\_tooth}
+  box blue, box after the \texttt{nudge\_crop} chain orange, with the crops before and after.}
   \label{fig:gallery}
 \end{figure}
 
 \subsection{Ablations and robustness checks}
 \label{sec:ablations}
 
-The following probes run on a trained checkpoint without retraining; their results are pending.
+The following probes run on a trained checkpoint without retraining.
 
 \paragraph{Tool-removal probe.}
 A tool is removed from the registry (absent from the prompt's tool list; calls to it return the

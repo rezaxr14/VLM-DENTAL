@@ -1,0 +1,88 @@
+% ---------------------------------------------------------------------------
+% Planned additions. They are placed last so that they can be promoted into the main evaluation once the results exist.
+\section{External evaluation (planned)}
+\label{sec:external}
+
+\todo{planned; not final}
+The evaluation in \cref{sec:experiments} uses DENTEX only. This section describes additions that are planned
+but not yet final: the official DENTEX test set, benchmarks on which competing dental systems report results, the
+harness as a benchmark in its own right, a smaller sibling of the backbone trained with data parallelism, and a Cloud TPU
+path. None of them changes the frozen protocol of \cref{sec:eval} or any number reported above.
+
+\subsection{The official DENTEX test set}
+\label{sec:official-test}
+
+DENTEX also publishes an official test set of 250 images. We plan to report the final conditions of \cref{tab:main} on it,
+once, in addition to the 50-image set used so far. That set is DENTEX's official \emph{validation} split, not its test
+split, so choices made on it, such as selecting the grounding detector's weights, do not leak into the final test
+numbers. The 250 test images are not used for training, development, or selection.
+
+\subsection{Benchmarks used by competing systems}
+\label{sec:external-benchmarks}
+
+The closest dental systems report results on benchmarks that we did not build (\cref{sec:related}), so the most direct
+comparison is to run the same benchmark. MMOral-OPG-Bench \citep{hao2025mmoral} is public. It contains 100 panoramic
+radiographs with 491 closed-ended and 578 open-ended questions in categories such as teeth, pathology, and jaw, and it is
+used by OralGPT-Plus, OralAgent, and OPGAgent. We plan to score three kinds of system with one LLM judge, using the
+benchmark authors' prompts and scoring rules unchanged:
+\begin{itemize}[leftmargin=*,itemsep=1pt,topsep=2pt]
+  \item the raw Qwen3.5-9B backbone;
+  \item the agent-assisted system: the trained agent first reads each radiograph and produces its findings (it never sees
+  the question), and the findings are added as context for the same base model, which then answers the benchmark's
+  official prompt. The paired difference to the raw backbone isolates what the agent adds, with model, prompt, and judge
+  held fixed;
+  \item the public OralGPT-Omni-7B and OralGPT-OPG-7B models, which were trained on benchmark-style data, whereas
+  the agent-assisted system was not.
+\end{itemize}
+Scores that other papers report for the same model depend on the judge: OralGPT-Omni is reported at 45.31 in its own
+paper \citep{hao2025oralgptomni} and at 59.06 in the table of OPGAgent \citep{yu2026opgagent}. We therefore re-score every
+system ourselves and show published numbers only as separate rows with their source and judge. Every mean carries a
+95\% interval from resampling radiographs, because the questions of one image are correlated, and a leakage screen checks
+the benchmark images against the DENTEX training and validation images. Because the agent reports only the four
+DENTEX diagnosis classes, we expect any gain to concentrate in the teeth and pathology categories rather than in
+questions about past treatment, the jaw, or recommendations; this is a hypothesis, not a result. The other benchmarks are
+out of reach for now: MMOral-Uni is gated and contains no panoramic images, and MMOral-X and OPG-Bench had no public
+release when we checked, so we would ask the authors for access.
+
+\subsection{The harness as a benchmark on Kaggle}
+\label{sec:kaggle}
+
+Tools, rules, and skills form a self-contained, versioned interface (\cref{sec:harness-serving}), so the harness can serve
+as a benchmark itself: a set of difficult dental OPG tasks together with the tool registry, the rules, and the skills.
+We plan to score our agent on these tasks and to compare it with the strongest frontier models available through the
+Kaggle API, each run with and without the harness. Two quantities matter: where our agent stands among the frontier
+models, and the uplift the harness gives each model in carrying out the tasks (\cref{tab:kaggle}).
+
+\begin{table}[htbp]
+  \centering
+  \small
+  \caption{Planned Kaggle comparison; every cell is filled from the benchmark run.}
+  \label{tab:kaggle}
+  \begin{tabular}{lccc}
+    \toprule
+    Model & Without harness & With harness & Uplift \\
+    \midrule
+    Our agent (Qwen3.5-9B, trained) & \todo{} & \todo{} & \todo{} \\
+    Frontier model 1 \todo{name} & \todo{} & \todo{} & \todo{} \\
+    Frontier model 2 \todo{name} & \todo{} & \todo{} & \todo{} \\
+    Frontier model 3 \todo{name} & \todo{} & \todo{} & \todo{} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{A smaller sibling with data parallelism}
+\label{sec:sibling}
+
+SFT and GRPO are the slow stages of the pipeline. The 4B variant of Qwen3.5 is small enough to be replicated on every
+device, so training can use plain data parallelism instead of sharding one large model, which speeds up both stages. We
+may move the main experiments to this size. If we do, the 9B and 4B models become an older, bigger sibling and a younger,
+smaller one: the same recipe, data, and evaluation at two sizes, so that their paired comparison shows how much the
+agentic recipe depends on model size.
+
+\subsection{A Cloud TPU path}
+\label{sec:tpu}
+
+The same pipeline can also run on Cloud TPU. There the model sees the aspect-preserving views letterboxed onto fixed
+canvases with a static number of vision slots, which avoids recompilation, whereas on GPU the views add no padding.
+The hardware profile is stored with every result, and results from different profiles are never mixed. This path is not
+yet part of the reported experiments.

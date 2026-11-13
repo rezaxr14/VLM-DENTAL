@@ -122,8 +122,8 @@ audit + verifier re-approval); the canonical corpus contains zero directive leak
 \label{app:access}
 
 \cref{tab:access} lists how each hosted model was reached: Gemini models through Google, GLM and MiniMax models through
-OpenRouter, and all other hosted models through NVIDIA. Locally run models (the Qwen3.5-9B backbone and the
-YOLOv8m grounding tool) are described in \cref{app:repro}.
+OpenRouter, and all other hosted models through NVIDIA. Locally run models (the Qwen3.5-9B backbone and the YOLOv8m
+grounding tool) are described in \cref{app:repro}.
 
 \begin{table}[htbp]
   \centering
@@ -134,12 +134,12 @@ YOLOv8m grounding tool) are described in \cref{app:repro}.
     \toprule
     Model & Role & Access \\
     \midrule
-    Gemini 3.5 Flash Lite & teacher; zero-shot baseline & Google \\
+    Gemini 3.5 Flash Lite & teacher; verifier; zero-shot baseline & Google \\
     MiniMax M3 & teacher; zero-shot baseline & OpenRouter \\
+    GLM 5.3 Flash & verifier & OpenRouter \\
     Moonshot Kimi-k3 & zero-shot baseline & NVIDIA \\
     Gemini 3.5 Flash & zero-shot baseline & Google \\
     Meta Llama 3.2 90B and 11B & zero-shot baselines & NVIDIA \\
-    Cross-family verifier & trace verification & \todo{verifier model} \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -147,9 +147,10 @@ YOLOv8m grounding tool) are described in \cref{app:repro}.
 \section{Reproducibility}
 \label{app:repro}
 
-Every stage of the pipeline has a notebook in the repository that reruns it end to end on a single GPU:
-zero-shot baselines, trace generation, the YOLOv8m grounding tool, SFT, GRPO, final evaluation, the
-rules-and-skills harness, and speculative decoding. The base configuration targets a 16\,GB GPU (4-bit QLoRA on
-Qwen3.5-9B); a 24\,GB RTX~4090 override raises the GRPO group size and the detector batch size. The group-size
-ablation reruns GRPO with $K \in \{1, 2, 4, 8, 16\}$ rollouts per image (\cref{sec:ablations}). Tables and figure
-data in this paper are regenerated from the released corpus by the scripts under \texttt{scripts/paper}.
+Every stage of the pipeline has a notebook in the repository that reruns it end to end: zero-shot baselines, trace
+generation, the YOLOv8m grounding tool, SFT, GRPO, final evaluation, external benchmarks, the rules-and-skills harness, and
+speculative decoding. The base
+configuration targets a 16\,GB GPU (4-bit QLoRA on Qwen3.5-9B), and per-hardware profiles raise the GRPO group size and
+the detector batch size on larger cards. The group-size ablation reruns GRPO with $K \in \{1, 2, 4, 8, 16\}$ rollouts per
+image (\cref{sec:ablations}). Tables and figure data in this paper are regenerated from the released corpus by the
+scripts under \texttt{scripts/paper}.

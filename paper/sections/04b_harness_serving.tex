@@ -72,8 +72,7 @@ The planned draft-training stage uses with-tools training contexts and continuat
 by the trained target. The target remains frozen while draft parameters learn to predict its
 continuations. Dev and test images do not enter this stage. The resulting draft supplies proposals
 in \cref{fig:overview}; the target continues to verify them. Acceptance and
-end-to-end efficiency require measurements after training; no completed draft-training result
-is claimed here.
+end-to-end efficiency require measurements after training.
 
 \Cref{tab:serving-efficiency} reports diagnostic accuracy as pooled exact F1, end-to-end
 speedup as the baseline's total episode wall time divided by the speculative condition's total
@@ -89,7 +88,6 @@ speedup; an aggregate score match alone is insufficient. This finite dev compari
 establish token-ID equivalence or equivalence under stochastic sampling. The manuscript table
 contains only the explicitly selected speculative configuration, recorded with its provenance,
 and the paired baseline; it does not select the fastest setting from the evaluation results.
-All unmeasured entries remain pending.
 
 \input{generated/table_serving_efficiency}
 \input{generated/harness_serving_plot}

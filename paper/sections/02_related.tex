@@ -2,6 +2,11 @@
 \section{Related Work}
 \label{sec:related}
 
+Our work touches four bodies of literature: supervised models for dental radiographs, reinforcement learning for
+reasoning in medical vision-language models, tool-using agents in general and in dentistry, and reasoning traces
+generated and verified by frontier models. We summarize each and say where we differ; the closest systems are the
+concurrent dental agents discussed under agentic tool use.
+
 \paragraph{Supervised dental AI.}
 Dental radiograph analysis has been dominated by narrow, single-task supervised models: CNN
 cephalometric landmark detectors \citep{arik2017cephalometry}, U-Net-style segmentation
@@ -57,10 +62,8 @@ measurements and test output equivalence on the actual multimodal episodes inste
 it from the algorithm.
 
 \paragraph{Label-anchored synthetic reasoning traces.}
-Frontier LLMs can generate and verify reasoning traces of sufficient quality for downstream
-fine-tuning \citep{chen2024huatuo,openmedreason2026}, replacing prospective expert annotation
-with expert-\emph{verified benchmark labels} plus cross-model automated checks. We extend this
-pattern to \emph{multi-turn tool-use} traces: the demonstrator operates a real tool suite under
+Trace generation of this kind replaces prospective expert annotation with expert-\emph{verified benchmark
+labels} plus cross-model automated checks. We extend the pattern to \emph{multi-turn tool-use} traces: the demonstrator operates a real tool suite under
 real tool feedback, including deliberately imperfect tool output (\cref{sec:perturbation}), and
 an independent cross-family verifier audits every trace against expert labels before it enters
 the training set.

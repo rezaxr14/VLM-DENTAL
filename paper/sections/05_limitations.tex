@@ -2,6 +2,9 @@
 \section{Limitations}
 \label{sec:limitations}
 
+The limitations below fall into three groups: how the results are validated, how the training signal is built, and
+what the two extensions do not establish.
+
 \paragraph{No prospective clinician study.}
 Our validity anchor is DENTEX's dentist-verified ground truth (each image was annotated by a
 final-year dental student and verified by an expert dentist with over 15 years of experience),
@@ -9,23 +12,19 @@ together with automated checks of reasoning grounding by a cross-family LLM judg
 validates against expert labels, not against a prospective, blinded review by practicing
 clinicians on new cases. A reader study is the natural next step.
 
-\paragraph{Single-dataset evaluation and benchmarks to add.}
-All completed and planned evaluation uses the 50-image DENTEX validation set, so the paper has no external
-validation, and DENTEX itself contains missing and incorrect diagnosis labels \citep{nistelrooij2024combining}.
-The systems closest to ours report results on other panoramic benchmarks, and the trained agent can be run on the same
-ones: MMOral-OPG \citep{hao2025mmoral}, an open-ended panoramic VQA benchmark (teeth, pathology, jaw, summary,
-report) used by OralGPT-Plus, OralAgent, and OPGAgent; MMOral-X \citep{oralgptplus2026}, 300 open-ended questions with
-686 region annotations in three difficulty levels; MMOral-Uni \citep{hao2025oralgptomni}, used by OralAgent; and
-OPG-Bench \citep{yu2026opgagent}, a structured-report protocol that audits hallucinations. Their scores come from
-LLM-judge or report-based protocols, so the agent's structured findings would need a matching output adapter and the
-same judge model before numbers are comparable.
+\paragraph{Single-dataset evaluation.}
+All evaluation in \cref{sec:experiments} uses DENTEX, so the paper has no external validation yet, and DENTEX itself
+contains missing and incorrect diagnosis labels \citep{nistelrooij2024combining}. \cref{sec:external} plans an official
+test set and external benchmarks. Of the benchmarks used by the closest systems, MMOral-OPG-Bench is public; MMOral-Uni
+is gated and contains no panoramic images; MMOral-X and OPG-Bench had no public release when we checked. Their scores
+come from LLM-judge protocols, so numbers are comparable only when the same judge scores every system.
 
 \paragraph{Pending trained-agent results.}
 The training-side evaluations (SFT, GRPO, and ablations on the trained agent) are designed,
 frozen, and implemented, but the runs are not complete. Those cells are marked as pending
 instead of extrapolated. The completed evidence (zero-shot baselines, grounding-tool
 validation, and the corpus-level mechanism analysis) stands independently, but end-to-end
-claims cannot be made until the runs are complete.
+claims wait for those runs.
 
 \paragraph{Synthetic perturbations are not real detector errors.}
 The tiered perturbation draws offsets from fixed configured ranges, not from the grounding
