@@ -318,6 +318,12 @@ def _run_zero_shot_for_target(
     print(f"Loading {dataset_name.upper()} dataset (split='{split_name}')...")
     if dataset_name == "tufts":
         imgs_df, annots_df, cats_df = load_tufts_dataset(data_dir=cfg.data_dir)
+    elif split_name == "official_test250":
+        # The 250-image cohort (docs/OFFICIAL_TEST250.md): the cohort folder the notebook writes (--data-dir); sets args.test250_settings.
+        from dental_agent.data.official_test250 import load_cohort_split
+        if not getattr(args, "data_dir", None):
+            raise SystemExit("--split official_test250 needs --data-dir <cohort folder>")
+        imgs_df, annots_df, cats_df = load_cohort_split(args)
     else:
         imgs_df, annots_df, cats_df = load_dentex_dataset(
             data_dir=getattr(args, "data_dir", None) or cfg.data_dir, split_name=split_name
@@ -326,6 +332,10 @@ def _run_zero_shot_for_target(
     # Evaluate across ALL images in the split cohort (e.g. all 50 images in validation split:
     # 46 pathological images with 182 targets + 4 clinically normal images with 0 targets).
     eligible_imgs = imgs_df.copy()
+    zero_shot_prompt = ZERO_SHOT_PROMPT
+    if split_name == "official_test250":              # the cohort prompt names the cohort's classes; every other split keeps ZERO_SHOT_PROMPT
+        from dental_agent.data.official_test250 import zero_shot_prompt as _cohort_zero_shot_prompt
+        zero_shot_prompt = _cohort_zero_shot_prompt()
 
     # 2. Horizontal Slicing
     if args.total_slices > 1:
@@ -511,7 +521,7 @@ def _run_zero_shot_for_target(
                 provider=provider,
                 model=model,
                 system_prompt="You are an expert dental radiologist analyzing panoramic dental radiographs. Provide concise reasoning and always complete your response with the final JSON object.",
-                user_content=ZERO_SHOT_PROMPT,
+                user_content=zero_shot_prompt,
                 image=image,
                 temperature=args.temperature,
                 max_tokens=tokens_to_use,
@@ -535,7 +545,12 @@ def _run_zero_shot_for_target(
             # Parse and match predictions against ALL ground truth findings
             parsed_raw = parse_zero_shot_response(raw_reply)
             pred_findings = extract_predicted_findings(parsed_raw)
-            match_res = match_multi_findings(gt_findings, pred_findings)
+            extra_scoring = {}
+            scored_findings = pred_findings
+            if getattr(args, "test250_settings", None):
+                from dental_agent.evaluation.test250_scoring import score_cohort
+                scored_findings, extra_scoring = score_cohort(gt_findings, pred_findings)
+            match_res = match_multi_findings(gt_findings, scored_findings)
 
             # Check format adherence
             format_ok = bool(parsed_raw is not None and (len(pred_findings) > 0 or isinstance(parsed_raw, (dict, list))))
@@ -616,6 +631,8 @@ def _run_zero_shot_for_target(
                 "finish_reason": finish_reason,
                 "confidence": confidence,
                 "timestamp": time.time(),
+                **extra_scoring,
+                **({"official_test250": args.test250_settings} if getattr(args, "test250_settings", None) else {}),
             })
 
             if provider in {'transformers','local_hf'}:
@@ -766,7 +783,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", "-c", default=None, help="Path to config YAML")
     parser.add_argument("--dataset", default="dentex", help="Dataset name ('dentex' or 'tufts')")
     parser.add_argument("--data-dir", default=None, help="Explicit local input root; omitted preserves project configuration")
-    parser.add_argument("--split", default="test", help="Dataset split ('test', 'validation', 'train')")
+    parser.add_argument("--split", default="test", help="Dataset split ('test', 'validation', 'train', 'official_test250')")
     parser.add_argument("--provider", default=None, help="Provider ('gemini', 'nvidia_nim', 'groq', 'openrouter', 'transformers', 'local', 'openai', 'anthropic')")
     parser.add_argument("--model", default=None, help="Model name / checkpoint identifier or comma-separated list")
     parser.add_argument("--suite", choices=["option7", "benchmark", "all"], default=None, help="Run pre-configured multi-model benchmark suite (7 NVIDIA NIM + 3 OpenRouter models)")

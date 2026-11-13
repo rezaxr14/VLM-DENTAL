@@ -398,15 +398,19 @@ def run_condition_trajectory(
         return run_agent(
             image_id=image_id, images_df=images_df, model=model, processor=processor, registry=registry,
             max_tool_calls=args.max_tool_calls, verbose=False, canonical_resize=args.canonical_resize,
-            temperature=0.0, dataset=args.dataset, max_new_tokens=args.max_new_tokens,
+            temperature=0.0, dataset=getattr(args, "prompt_dataset", None) or args.dataset, max_new_tokens=args.max_new_tokens,
             max_turns=args.max_turns, malformed_retries=args.malformed_retries,
             harness=harness_options(getattr(args,"harness_mode","off")),
         )
     if getattr(args,"harness_mode","off") != "off":
         raise ValueError("Rules/skills require the with_tools evaluation track")
+    cohort_prompt = None
+    if getattr(args, "test250_settings", None):       # 250-image cohort: the no-tools prompt names the cohort's classes too
+        from dental_agent.data.official_test250 import no_tools_prompt
+        cohort_prompt = no_tools_prompt()
     return run_agent_no_tools(
         image_id=image_id, images_df=images_df, model=model, processor=processor, verbose=False,
-        canonical_resize=args.canonical_resize, temperature=0.0, max_new_tokens=args.max_new_tokens,
+        canonical_resize=args.canonical_resize, temperature=0.0, max_new_tokens=args.max_new_tokens, system_prompt=cohort_prompt,
     )
 
 
@@ -601,6 +605,10 @@ def load_eval_split(args: argparse.Namespace):
             raise SystemExit(f"Dev split lists {len(keys)} images but only {len(imgs_df)} are in the DENTEX train data.")
         annots_df = annots_df[annots_df["image_id"].isin(set(imgs_df["id"]))]
         return imgs_df, annots_df, cats_df
+    if split == "official_test250":
+        # The 250-image test cohort (versioned COCO + label mapping); sets args.prompt_dataset (the prompt only; result paths keep args.dataset) and args.test250_settings.
+        from dental_agent.data.official_test250 import load_cohort_split
+        return load_cohort_split(args)
     return load_dentex_dataset(data_dir=args.data_dir, split_name=args.split)
 
 
@@ -630,6 +638,7 @@ def eval_settings(args: argparse.Namespace, condition: str, adapter_path: str | 
         "temperature": 0.0,
         "prompt": "unified",
         **tpu_generation_settings(args),
+        **({"official_test250": args.test250_settings} if getattr(args, "test250_settings", None) else {}),
     }
 
 
@@ -795,12 +804,20 @@ def evaluate_condition(
         raw_output = "\n---\n".join(str(t.get("raw_output", "")) for t in traj.turns)
         format_ok, turns, tools_used = bool(traj.format_ok), len(traj.turns), int(traj.tool_calls)
 
+        # 250-image cohort only: class names the shared normaliser leaves as free text (Root Canal, Curettage, Extraction, Fracture) are put
+        # into their canonical form (dental_agent/evaluation/test250_scoring.py); the standard metrics below then run unchanged.
+        extra_scoring = {}
+        scored_findings = pred_findings
+        if getattr(args, "test250_settings", None):
+            from dental_agent.evaluation.test250_scoring import score_cohort
+            scored_findings, extra_scoring = score_cohort(gt_findings, pred_findings)
+
         # Multi-finding set-level matching (Rule 13)
-        match_res = match_multi_findings(gt_findings, pred_findings)
+        match_res = match_multi_findings(gt_findings, scored_findings)
 
         # Clinical correctness indicators
         if len(gt_findings) == 0:
-            is_correct_normal = bool(len(pred_findings) == 0 and format_ok)
+            is_correct_normal = bool(len(scored_findings) == 0 and format_ok)
             fdi_ok = is_correct_normal
             exact_match = is_correct_normal
             all_exact_match = is_correct_normal
@@ -850,6 +867,7 @@ def evaluate_condition(
             "trajectory": transcript_for_record(traj),
             "ablation": probe.summary(gt_findings, traj.turns) if probe else None,
             "timestamp": time.time(),
+            **extra_scoring,
             **({"generation_refused": generation_refused} if generation_refused else {}),
         })
         records.append(record)

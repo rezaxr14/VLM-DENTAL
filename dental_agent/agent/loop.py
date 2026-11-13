@@ -313,15 +313,17 @@ def run_agent_no_tools(
     canonical_resize: bool = False,
     temperature: float = 0.0,
     max_new_tokens: int = 2048,
+    system_prompt: str | None = None,
 ) -> AgentTrajectory:
-    """H1 Ablation condition: One-turn direct reasoning without tool access (``NO_TOOLS_SYSTEM_PROMPT``)."""
+    """H1 Ablation condition: One-turn direct reasoning without tool access (``NO_TOOLS_SYSTEM_PROMPT``; ``system_prompt`` overrides it
+    for the official_test250 cohort only, everything else keeps the default)."""
     row = images_df[images_df["id"] == image_id].iloc[0]
     image = Image.open(row["local_path"]).convert("RGB")
     if canonical_resize:
         image = to_canonical(image, "FULL")
 
     messages = [
-        {"role": "system", "content": NO_TOOLS_SYSTEM_PROMPT},
+        {"role": "system", "content": system_prompt or NO_TOOLS_SYSTEM_PROMPT},
         {
             "role": "user",
             "content": [

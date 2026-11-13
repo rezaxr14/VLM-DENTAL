@@ -25,7 +25,7 @@ def main() -> None:
     p = argparse.ArgumentParser(description="Draw the evaluation-matrix figures from the aggregate tables.")
     p.add_argument("--output-dir", type=str, default="data/evaluations", help="Folder with the eval_*.jsonl files and matrix_<dataset>_<split>/.")
     p.add_argument("--dataset", type=str, default="dentex")
-    p.add_argument("--split", type=str, default="test", choices=["test", "dev"])
+    p.add_argument("--split", type=str, default="test", choices=["test", "dev", "official_test250"])
     p.add_argument("--figures-dir", type=str, default=None, help="Where to write the figures (default: <matrix folder>/figures).")
     p.add_argument("--formats", type=str, nargs="+", default=["png", "pdf"], choices=["png", "pdf", "svg"], help="File formats to write.")
     p.add_argument("--levels", type=str, nargs="+", default=list(figures.LEVELS), choices=list(figures.LEVELS),

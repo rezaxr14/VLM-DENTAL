@@ -91,7 +91,7 @@ def plan_copies(src: Path, out: Path, tag: str, stage: str, k: int | None) -> tu
         if not f.is_file():
             continue
         p = parse(src, f)
-        if p is None or p["tag"] != tag or p["stage"] != stage or p["split"] not in ("test", "dev"):
+        if p is None or p["tag"] != tag or p["stage"] != stage or p["split"] not in ("test", "dev", "official_test250"):
             continue
         kind, split, mode, this_k = p["kind"], p["split"], p["mode"], p["k"]
         if kind in MATRIX_KINDS and p["name"].startswith("eval_dentex_") and p["name"].endswith(".jsonl"):

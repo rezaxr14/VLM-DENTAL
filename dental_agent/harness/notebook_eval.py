@@ -176,7 +176,11 @@ def _image_ok(path, item):
 def prepare_inputs(data_dir, split, dev_split, api, download, token, files=None):
     """Resolve the entire cohort before any model load; train/test ID collisions stay separate."""
     data = Path(data_dir).expanduser().resolve()
-    if split not in {'dev','test'}: raise ValueError('Only fixed dev and official test are supported')
+    if split == 'official_test250':    # the official 250-image test cohort: its own loader, the 50-image 'test' branch below is untouched
+        from dental_agent.data.official_test250 import prepare_cohort
+        return prepare_cohort(data, api, download, token, inventory_roots(data) if files is None else files,
+                              image_ok=_image_ok, digest=digest, fingerprint=fingerprint, write=write)
+    if split not in {'dev','test'}: raise ValueError('Only fixed dev, official test (50 images) and official_test250 are supported')
     expected = set(map(int, json.loads(Path(dev_split).read_text())['image_ids'])) if split == 'dev' else None
     files = inventory_roots(data) if files is None else files
     candidates = []
@@ -438,7 +442,7 @@ class NotebookEvaluations:
                  vllm_executable='vllm', gpu_indices=None, port=8910, seed=42, serving_context_length=32768, ablation=None, api=None, download=None, profiles=None,
                  results_repo=None, results_repo_type=None, track="all", grpo_harness_modes='off',
                  speculative_harness_mode=None, speculative_target_kind=None, adapter_prefixes=None, draft_variant='original'):
-        if split not in {'test','dev'} or set(kinds)-set(KINDS) or not kinds: raise ValueError('Invalid split or kinds')
+        if split not in {'test','dev','official_test250'} or set(kinds)-set(KINDS) or not kinds: raise ValueError('Invalid split or kinds')
         if set(sizes)-{'canonical','original'} or not sizes: raise ValueError('Invalid sizes')
         if ablation and split!='dev': raise ValueError('Tool/grounding ablations belong to dev only')
         self.tracks = ('with_tools', 'no_tools') if track == 'all' else (track,)
@@ -457,7 +461,7 @@ class NotebookEvaluations:
         self.ablation = copy.deepcopy(ablation)
         if serving_context_length<=16384: raise ValueError('Serving total context must exceed the unchanged 16384 generation budget to leave input/image headroom')
         self.serving_context_length=serving_context_length
-        if split=='test' and selected_k=='all': raise ValueError('K sweep belongs to dev; select K before test')
+        if split in {'test','official_test250'} and selected_k=='all': raise ValueError('K sweep belongs to dev; select K before test')
         if api is None or download is None:
             from huggingface_hub import HfApi,hf_hub_download
             api = api or HfApi(token=os.environ.get('HF_TOKEN')); download = download or hf_hub_download
@@ -571,6 +575,8 @@ class NotebookEvaluations:
         if job.get('checkpoint_kind',job['kind']) == 'grpo' or job['kind'] == 'speculative':
             identity['harness_mode'] = mode
             if mode != 'off': identity['harness'] = harness_identity(mode)
+        if split == 'official_test250':    # versions and hashes of the COCO and the label mapping are part of every result's identity
+            identity['official_test250'] = self._input(split)['identity']
         meta_name = self._training_harness_metadata(job)
         if meta_name is not None: identity['checkpoint_files'][meta_name] = _metadata_digest(self.files[meta_name])
         if self.ablation: identity['ablation'] = self.ablation
@@ -670,10 +676,10 @@ class NotebookEvaluations:
                 suffix += spec.tag()
             result = folder/f"eval_dentex_{identity['split']}_{job['condition']}{suffix}.jsonl"
         elif kind == 'zeroshot':
-            if identity['split'] != 'test': raise ValueError('Legacy zero-shot runner has no fixed-dev split; run this cohort on test')
+            if identity['split'] not in ('test','official_test250'): raise ValueError('Legacy zero-shot runner has no fixed-dev split; run this cohort on test or official_test250')
             flags = runtime_flags(job['profile'], self.profile_configs); flags[0] = '--local-precision'
             command = [sys.executable,'-u','scripts/run_zero_shot.py','--provider','transformers','--model','Qwen/Qwen3.5-9B',
-                '--dataset','dentex','--split','test','--data-dir',cohort['data_dir'],'--output',str(folder/'results.jsonl'),'--output-dir',str(folder),
+                '--dataset','dentex','--split',('official_test250' if identity['split']=='official_test250' else 'test'),'--data-dir',cohort['data_dir'],'--output',str(folder/'results.jsonl'),'--output-dir',str(folder),
                 '--max-tokens',max_new_tokens,'--image-max-dim','0','--temperature','0','--pacing-delay','0','--git-sync-every','0','--no-retry-empty',*flags]
             if job['profile']=='tpu':    # static TPU vision slots: the canonical FULL letterbox view (labelled image_view=canonical in every record)
                 command += ['--canonical-resize','--canonical-letterbox']

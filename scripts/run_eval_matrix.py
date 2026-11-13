@@ -46,7 +46,7 @@ def parse_args(argv=None) -> argparse.Namespace:
                         "'grpo_policy' adapter is used).")
     p.add_argument("--model-id", type=str, default=os.environ.get("MODEL_NAME", "Qwen/Qwen3.5-9B"), help="Base VLM.")
     p.add_argument("--dataset", type=str, default="dentex")
-    p.add_argument("--split", type=str, default="test", choices=["test", "dev"],
+    p.add_argument("--split", type=str, default="test", choices=["test", "dev", "official_test250"],
                    help="test = official DENTEX validation set (final numbers only); dev = held-out train images (needs --dev-split).")
     p.add_argument("--dev-split", type=str, default=None, help="Dev split JSON (scripts/make_dev_split.py).")
     p.add_argument("--data-dir", type=str, default=os.environ.get("DENTAL_AGENT_DATA_DIR", "data"))

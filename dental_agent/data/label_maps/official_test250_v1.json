@@ -1,0 +1,210 @@
+{
+ "schema": 2,
+ "name": "official_test250",
+ "version": "v1",
+ "label_format": "<code>-<word>-<FDI>; the FDI tooth number is the LAST token (verified on all 1600 labels: 3 tokens each, 0 FDI outside quadrant 1-4 / tooth 1-8)",
+ "source": {
+  "repo": "ibrahimhamamci/DENTEX",
+  "file": "DENTEX/test_data.zip",
+  "sha256": "ed396d6daa133264ddb0ecdbed3f963868d2a31344ba0fab929a6a1773d82ce2",
+  "images": 250,
+  "polygons": 1600
+ },
+ "naming_rule": "Every code is a class named by the ENGLISH name of its Turkish word. Where DENTEX already names the class (Caries, Impacted, Periapical Lesion) that name and id are used; the others are appended to categories_3 after the four DENTEX classes.",
+ "dentex_categories_3": [
+  {
+   "id": 0,
+   "name": "Impacted",
+   "supercategory": "Impacted"
+  },
+  {
+   "id": 1,
+   "name": "Caries",
+   "supercategory": "Caries"
+  },
+  {
+   "id": 2,
+   "name": "Periapical Lesion",
+   "supercategory": "Periapical Lesion"
+  },
+  {
+   "id": 3,
+   "name": "Deep Caries",
+   "supercategory": "Deep Caries"
+  }
+ ],
+ "extra_categories_3": [
+  {
+   "id": 4,
+   "name": "Root Canal",
+   "supercategory": "Root Canal"
+  },
+  {
+   "id": 5,
+   "name": "Curettage",
+   "supercategory": "Curettage"
+  },
+  {
+   "id": 6,
+   "name": "Extraction",
+   "supercategory": "Extraction"
+  },
+  {
+   "id": 7,
+   "name": "Fracture",
+   "supercategory": "Fracture"
+  }
+ ],
+ "lesion_family_accepted_names": [
+  "Periapical Lesion",
+  "Non-Odontogenic Lesion",
+  "Pericoronal Lesion",
+  "Inter-Radicular Lesion"
+ ],
+ "roles": {
+  "finding": "a ground-truth annotation of the class named in target_name",
+  "negative": "the healthy-tooth polygon: not a finding; a disease predicted on this tooth is a false positive"
+ },
+ "scoring": {
+  "profile": "test250_scoring_v2",
+  "primary": "standard match_multi_findings (exact, FDI-localisation, closeness with its existing proximity credit, e.g. Caries<->Deep Caries 0.75) over all finding classes; nothing is dropped",
+  "family": "family_exact_*: Caries and Deep Caries folded into one class (the labels do not separate them)",
+  "lesion": "any 'lesion' class name a model can emit, Tufts lesion classes included, is normalised to Periapical Lesion by evaluation/metrics.py normalize_dental_diagnosis",
+  "class_names": "predictions written as e.g. 'Root Canal Treatment', 'tooth extraction', 'fractured tooth' are put into the canonical names by evaluation/test250_scoring.py"
+ },
+ "deep_caries_note": "DENTEX id 3 'Deep Caries' stays in the class list (it has 32 of 182 annotations in the official validation set) but no code of these 250 labels is Deep Caries by name; models may still predict it and receive the proximity credit against Caries.",
+ "codes": [
+  {
+   "code": 0,
+   "turkish": "saglam",
+   "turkish_proper": "sağlam",
+   "count": 91,
+   "status": "masked",
+   "role": "negative",
+   "target_source": null,
+   "target_name": null,
+   "target_id": null,
+   "confirmed_by": "Reza (2026-11-12: do not mask useful labels)",
+   "evidence": [
+    "step1_check_output.txt (Reza, 2026-11-12) (d): no DENTEX or Tufts class names a healthy tooth; it is the absence of a finding.",
+    "Scored as an explicit negative: a disease predicted on a saglam tooth is a false positive.",
+    "The raw labels spell the word 'saglam' (no ğ); 'sağlam' = sound/healthy is language knowledge."
+   ]
+  },
+  {
+   "code": 1,
+   "turkish": "çürük",
+   "turkish_proper": "çürük",
+   "count": 747,
+   "status": "translate",
+   "role": "finding",
+   "target_source": "dentex",
+   "target_name": "Caries",
+   "target_id": 1,
+   "confirmed_by": "Reza",
+   "evidence": [
+    "'diş çürüğü' = dental caries (rehberpanda.com Turkish dental glossary: 'Diş çürüğü = dental caries'); equals the DENTEX class (dentex.py:320, official categories_3 id 1).",
+    "step1b_output.txt (Reza, 2026-11-12): density 2.988 per image vs 3.105 (train); tooth-position distance to Caries 0.06 (nearest class).",
+    "The labels may include deep caries (no separate code): the proximity credit and family_exact_* cover it."
+   ]
+  },
+  {
+   "code": 2,
+   "turkish": "küretaj",
+   "turkish_proper": "küretaj",
+   "count": 265,
+   "status": "translate",
+   "role": "finding",
+   "target_source": "cohort",
+   "target_name": "Curettage",
+   "target_id": 5,
+   "confirmed_by": "Reza (2026-11-13: use the English names as their own classes)",
+   "evidence": [
+    "'diş kürretajı' = dental curettage (izzetbaysaladsm.saglik.gov.tr 'Diş Kürretajı', English text 'dental curettage').",
+    "step1_check_output.txt (Reza, 2026-11-12) (d): no DENTEX or Tufts class has this name; it is appended to categories_3 as id 5."
+   ]
+  },
+  {
+   "code": 3,
+   "turkish": "kanal",
+   "turkish_proper": "kanal",
+   "count": 161,
+   "status": "translate",
+   "role": "finding",
+   "target_source": "cohort",
+   "target_name": "Root Canal",
+   "target_id": 4,
+   "confirmed_by": "Reza (2026-11-13: check what kanal is in Turkish and use it as its own class)",
+   "evidence": [
+    "Turkish dental glossaries and a Turkish Ministry of Health clinic page give 'kanal tedavisi' = root canal treatment (rehberpanda.com/terminoloji/dental terms; preply.com/en/blog/dental-terms-in-turkish; silifkeadsm.saglik.gov.tr 'Kanal Tedavisi' = 'Root Canal Treatment').",
+    "step1_check_output.txt (Reza, 2026-11-12) (d): no DENTEX or Tufts class has this name; it is appended to categories_3 as id 4.",
+    "step1b_output.txt (Reza, 2026-11-12): its density (0.644 per image) also resembles Deep Caries (0.640 val, 0.820 train); tooth position cannot separate them. Not used for the mapping: the Turkish term names root canal."
+   ]
+  },
+  {
+   "code": 5,
+   "turkish": "çekim",
+   "turkish_proper": "çekim",
+   "count": 29,
+   "status": "translate",
+   "role": "finding",
+   "target_source": "cohort",
+   "target_name": "Extraction",
+   "target_id": 6,
+   "confirmed_by": "Reza (2026-11-13)",
+   "evidence": [
+    "'çekim' / 'diş çekimi' = (tooth) extraction (preply.com/en/blog/dental-terms-in-turkish; rehberpanda.com glossary: 'Diş çekimi = tooth extraction').",
+    "step1_check_output.txt (Reza, 2026-11-12) (d): no DENTEX or Tufts class has this name; appended as id 6."
+   ]
+  },
+  {
+   "code": 6,
+   "turkish": "gömülü",
+   "turkish_proper": "gömülü",
+   "count": 221,
+   "status": "translate",
+   "role": "finding",
+   "target_source": "dentex",
+   "target_name": "Impacted",
+   "target_id": 0,
+   "confirmed_by": "Reza",
+   "evidence": [
+    "'gömülü diş' = impacted tooth (rehberpanda.com glossary: 'Gömülü diş = impacted tooth'; silifkeadsm.saglik.gov.tr 'Gömülü Diş Çekimi' = 'Impacted Tooth Extraction'); equals the DENTEX class (dentex.py:319, id 0).",
+    "step1b_output.txt (Reza, 2026-11-12): tooth-position distance to Impacted 0.00, share of tooth position 8 = 1.00 (train 1.00), density 0.884 vs 0.857."
+   ]
+  },
+  {
+   "code": 7,
+   "turkish": "lezyon",
+   "turkish_proper": "lezyon",
+   "count": 75,
+   "status": "translate",
+   "role": "finding",
+   "target_source": "dentex",
+   "target_name": "Periapical Lesion",
+   "target_id": 2,
+   "confirmed_by": "Reza (2026-11-12: do not mask lesion; accept the Tufts lesion classes as well)",
+   "evidence": [
+    "step1_check_output.txt (Reza, 2026-11-12) (d): 'lesion' is contained in five class names (DENTEX Periapical Lesion; Tufts Periapical, Non-Odontogenic, Pericoronal, Inter-Radicular Lesion).",
+    "step1b_output.txt (Reza, 2026-11-12): nearest class is Periapical Lesion (tooth-position 0.16, FDI 0.26); density 0.300 vs 0.224 (train).",
+    "dental_agent/evaluation/metrics.py:92-94 normalises any 'lesion' name to Periapical Lesion, so a model's Tufts lesion classes match this code."
+   ]
+  },
+  {
+   "code": 8,
+   "turkish": "kırık",
+   "turkish_proper": "kırık",
+   "count": 11,
+   "status": "translate",
+   "role": "finding",
+   "target_source": "cohort",
+   "target_name": "Fracture",
+   "target_id": 7,
+   "confirmed_by": "Reza (2026-11-13)",
+   "evidence": [
+    "'kırık' = fracture/break; Turkish dental sources use 'kron kırığı' (crown fracture) and 'kök kırığı' / 'kök fraktürü' (root fracture) (openaccess.mku.edu.tr; rehberpanda.com glossary: 'Kök fraktürü = root fracture').",
+    "step1_check_output.txt (Reza, 2026-11-12) (d): no DENTEX or Tufts class has this name; appended as id 7."
+   ]
+  }
+ ]
+}

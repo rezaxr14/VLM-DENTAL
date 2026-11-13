@@ -51,6 +51,10 @@ def build_agent_system_prompt(
             ]
         elif dataset.lower() == "tufts":
             allowed_classes = ["Periapical Lesion"]
+        elif dataset.lower() == "official_test250":
+            # Official 250-image test cohort only (docs/OFFICIAL_TEST250.md): the DENTEX classes plus the other classes of its labels.
+            from dental_agent.data.official_test250 import PROMPT_CLASSES
+            allowed_classes = list(PROMPT_CLASSES)
         else:
             allowed_classes = ["Caries", "Deep Caries", "Periapical Lesion", "Impacted Tooth"]
 

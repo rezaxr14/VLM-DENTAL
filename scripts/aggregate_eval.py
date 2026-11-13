@@ -22,7 +22,7 @@ def main() -> None:
     p = argparse.ArgumentParser(description="Aggregate per-image evaluation results into the matrix tables.")
     p.add_argument("--output-dir", type=str, default="data/evaluations", help="Folder with the eval_*.jsonl files.")
     p.add_argument("--dataset", type=str, default="dentex")
-    p.add_argument("--split", type=str, default="test", choices=["test", "dev"])
+    p.add_argument("--split", type=str, default="test", choices=["test", "dev", "official_test250"])
     p.add_argument("--n-boot", type=int, default=2000)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--iou-threshold", type=float, default=0.5, help="IoU at which a box counts as hitting the annotated tooth.")
