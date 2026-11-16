@@ -29,6 +29,7 @@ FIGURES = {
     "design": ("fig_design_2x2", "fig_design_2x2"),
     "behaviour": ("fig_correction_behaviour", "fig_correction_behaviour"),
     "gallery": ("fig_gallery_episodes", "fig_gallery_episodes"),
+    "results": ("fig_results", "fig_results"),
 }
 
 

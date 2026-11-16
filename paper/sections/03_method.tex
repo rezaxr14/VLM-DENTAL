@@ -54,7 +54,7 @@ convolutions and \texttt{lm\_head} stay frozen.
 \begin{figure}[tbp]
   \centering
   \includegraphics[width=\linewidth]{fig_model_internals}
-  \caption{The model, Qwen3.5-9B, opened. Frozen parts are pale with a snowflake; trained parts are blue with a flame: LoRA on the attention, DeltaNet and MLP projections, the two merger layers, and the MTP block.}
+  \caption{The model, Qwen3.5-9B, opened. Frozen parts are pale with a snowflake; trained parts are blue with a flame: LoRA on the attention, DeltaNet and MLP projections, the two merger layers, and the MTP block, whose draft tokens the target verifies.}
   \label{fig:internals}
 \end{figure}
 
@@ -289,7 +289,7 @@ masked to assistant tokens only.
 \begin{figure}[tbp]
   \centering
   \includegraphics[width=\linewidth]{fig_training_reward}
-  \caption{Training. (1)~SFT on loss-masked verified traces. (2)~GRPO with live tool rollouts, a group of $K$ rollouts per image ($K \in \{1,2,4,8,16\}$), and the frozen SFT adapter as KL reference. (3)~The ground-truth-anchored reward $R$.}
+  \caption{Training. (1)~SFT on loss-masked verified traces. (2)~GRPO with live tool rollouts, a group of $K$ rollouts per image ($K \in \{1,2,4,8,16\}$), and the frozen SFT adapter as KL reference. (3)~The ground-truth-anchored reward $R$. (4)~The chunked output-head loss used by both stages.}
   \label{fig:training}
 \end{figure}
 

@@ -1,0 +1,100 @@
+{
+  "_note": "Exact F1 on the DENTEX validation set. null = pending; replace with the number (and ci_low / ci_high) and rebuild the results figure.",
+  "f1": {
+    "VLM-DENTAL": {
+      "value": null,
+      "ci_low": null,
+      "ci_high": null
+    },
+    "SFT + tools": {
+      "value": null,
+      "ci_low": null,
+      "ci_high": null
+    },
+    "SFT + GRPO": {
+      "value": null,
+      "ci_low": null,
+      "ci_high": null
+    },
+    "Qwen3.5-9B + tools, untrained": {
+      "value": null,
+      "ci_low": null,
+      "ci_high": null
+    },
+    "Moonshot Kimi-k3": {
+      "value": 0.222
+    },
+    "Meta Llama 3.2 90B": {
+      "value": 0.098
+    },
+    "Gemini 3.5 Flash": {
+      "value": 0.188
+    },
+    "MiniMax M3": {
+      "value": 0.11
+    },
+    "Gemini 3.5 Flash Lite": {
+      "value": 0.166
+    },
+    "Qwen3.5-9B, zero-shot": {
+      "value": 0.112
+    },
+    "Meta Llama 3.2 11B": {
+      "value": 0.01
+    },
+    "Majority-class floor": {
+      "value": 0.038
+    }
+  },
+  "per_class": {
+    "Caries": {
+      "zero_shot_best": null,
+      "vlm_dental": null
+    },
+    "Deep caries": {
+      "zero_shot_best": null,
+      "vlm_dental": null
+    },
+    "Periapical lesion": {
+      "zero_shot_best": null,
+      "vlm_dental": null
+    },
+    "Impacted tooth": {
+      "zero_shot_best": null,
+      "vlm_dental": null
+    }
+  },
+  "test250": {
+    "_note": "Exact F1 on the official 250-image DENTEX test split. null = pending.",
+    "VLM-DENTAL + harness": {
+      "value": null
+    },
+    "Kimi-k3 + harness": {
+      "value": null
+    },
+    "Gemini 3.5 Flash + harness": {
+      "value": null
+    },
+    "Gemini 3.5 Flash Lite + harness": {
+      "value": null
+    },
+    "Qwen3.5-9B, untrained": {
+      "value": null
+    },
+    "Qwen3.5-9B, untrained + harness": {
+      "value": null
+    }
+  },
+  "mmoral": {
+    "_note": "MMOral-OPG-Bench overall score (0-100). Published rows use other judges.",
+    "scored_by_us": {
+      "VLM-DENTAL (agent-assisted)": {
+        "value": null
+      }
+    },
+    "published": {
+      "OralGPT-Omni, own paper": 45.31,
+      "OralGPT-Omni, OPGAgent table": 59.06
+    }
+  }
+}

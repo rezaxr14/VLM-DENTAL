@@ -5,7 +5,7 @@ import sys
 
 def build(path):
     out.clear(); warns.clear()
-    W, H = 1000, 622
+    W, H = 1000, 852
     meta = json.load(open(SC + 'showcase.json'))
     gt = meta['flagship']['ground_truth']
     opg = Image.open(SC + 'flagship/image.jpg').convert('RGB')
@@ -19,6 +19,7 @@ def build(path):
     tl = [Image.open(SC + f'params_dentex/tool_{i}.jpg').convert('RGB') for i in (1, 5, 6)]
     thumbs = {'a': sq(cb), 'b': sq(ca), 'c': sq(tl[0], 'top'), 'd': sq(tl[1], 'top'), 'e': sq(tl[2], 'top')}
     GOOD, MID = GR, '#E0A030'
+    TR_C = '#1F5BFF'
 
     add(f'<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 {W} {H}" width="{W}" height="{H}" font-family="Helvetica, Arial, \'Liberation Sans\', sans-serif">')
     add(f'<rect width="{W}" height="{H}" fill="#FFFFFF"/>')
@@ -186,6 +187,72 @@ def build(path):
     text(px0 - 6, py0 + 5, '1', 12, False, 'end', MUTE); text(px0 - 6, py0 + ph + 4, '0', 12, False, 'end', MUTE)
     text(px0 + pw / 2, py0 + ph + 17, 'counted calls', 12, False, 'middle', MUTE)
     text(796, 556, 'past the budget: 1 / (1 + overage / budget)', 12, False, 'middle', MUTE, italic=True, maxw=340)
+    add('</g>')
+
+
+    # ======================= 4 CHUNKED OUTPUT-HEAD LOSS =======================
+    add('<g id="chunked-loss">')
+    PY = 636
+    rect(16, PY, 968, 200, GRAY, rx=14)
+    circ_num(36, PY + 24, 4); text(54, PY + 30, 'Chunked output-head loss', 15, True, maxw=300)
+    # (a) one long trace
+    seqrows = [[(MASK, 6), (TH, 8)], [(TH, 3), (CALL, 3), (TH, 4), (ANS, 4)], [(MASK, 4), (TH, 5), (CALL, 2), (ANS, 3)]]
+    for r_, row in enumerate(seqrows):
+        xx = 32
+        for col, n in row: xx = run(xx, PY + 58 + r_ * 16, n, col, 11, 2)
+    text(32, PY + 118, 'one trace, up to', 12, False, 'start', MUTE); text(32, PY + 134, '16,384 tokens', 12, True, 'start', INK)
+    arrow([(218, PY + 82), (240, PY + 82)], head=6)
+    rect(242, PY + 52, 84, 62, ('#E8EEF8', '#5B86C7'), rx=8, sw=1.6)
+    text(284, PY + 78, 'transformer', 12, True, 'middle', INK, maxw=80); text(284, PY + 94, 'body, one pass', 11.5, False, 'middle', MUTE, maxw=80)
+    arrow([(328, PY + 82), (346, PY + 82)], head=6)
+    # (b) hidden states, only the supervised positions are kept
+    pat = [0,0,0,1,1,1,2,2,1,1,0,0,1,1,3,3,3,0,1,2,3,3]
+    pcol = {0: MASK, 1: TH, 2: CALL, 3: ANS}
+    for i, k in enumerate(pat):
+        add(f'<rect x="348" y="{PY + 50 + i * 3.1:.1f}" width="16" height="2.5" rx="1" fill="{pcol[k]}"/>')
+    text(368, PY + 134, 'hidden states,', 11.5, False, 'end', MUTE, maxw=110)
+    text(368, PY + 148, 'supervised only', 11.5, True, 'end', INK, maxw=110)
+    # (c) chunks of C positions; one is alive at a time
+    for j, (lab, act) in enumerate((('chunk 1', False), ('chunk 2', True), ('chunk 3', False))):
+        yy = PY + 48 + j * 30
+        if act: add(f'<rect x="383" y="{yy - 3}" width="72" height="28" rx="9" fill="{TR_C}" fill-opacity="0.18"/>')
+        rect(386, yy, 66, 22, ('#FFFFFF' if act else '#EEF0F3', TR_C if act else '#B9BBC2'), rx=7, sw=2 if act else 1.3)
+        text(419, yy + 15, lab, 11.5, act, 'middle', INK if act else '#8A8F98')
+        add(f'<path d="M366,{PY + 82} H376 V{yy + 11} H384" fill="none" stroke="#9AA0A8" stroke-width="1.3"/>')
+    arrow([(455, PY + 89), (474, PY + 89)], head=6)
+    # frozen lm_head, logits tile, exact cross-entropy
+    add(f'<polygon points="476,{PY + 56} 484,{PY + 49} 504,{PY + 49} 496,{PY + 56}" fill="#E9ECF1"/><polygon points="496,{PY + 56} 504,{PY + 49} 504,{PY + 113} 496,{PY + 120}" fill="#C4C9D2"/><rect x="476" y="{PY + 56}" width="20" height="64" fill="#D7DBE2"/>')
+    snow(486, PY + 76, 5)
+    text(490, PY + 134, 'lm_head', 11.5, False, 'middle', INK); text(490, PY + 148, 'frozen', 11.5, False, 'middle', MUTE)
+    arrow([(508, PY + 89), (526, PY + 89)], head=6)
+    for r_ in range(7):
+        for c_ in range(9):
+            v = [0.12, 0.55, 0.3, 0.85, 0.2, 0.65, 0.4][(r_ * 3 + c_ * 2) % 7]
+            add(f'<rect x="{528 + c_ * 7.2:.1f}" y="{PY + 58 + r_ * 7.2:.1f}" width="6.4" height="6.4" rx="1.2" fill="{TR_C}" fill-opacity="{0.12 + 0.8 * v:.2f}"/>')
+    text(560, PY + 134, 'logits chunk', 11.5, False, 'middle', MUTE, maxw=100); text(560, PY + 148, 'C × V', 11.5, True, 'middle', INK, maxw=100)
+    arrow([(596, PY + 89), (614, PY + 89)], head=6)
+    add(f'<circle cx="632" cy="{PY + 89}" r="16" fill="#FFFFFF" stroke="#4B5563" stroke-width="1.6"/>'); text(632, PY + 94, 'CE', 12, True, 'middle', INK)
+    text(626, PY + 134, 'exact cross-', 11.5, False, 'middle', MUTE, maxw=70); text(626, PY + 148, 'entropy', 11.5, False, 'middle', MUTE, maxw=70)
+    arrow([(650, PY + 89), (674, PY + 89)], head=6)
+    rect(676, PY + 72, 72, 34, ('#E4F3E9', GR), rx=9, sw=1.6); text(712, PY + 93, 'sum / N', 12, True, 'middle', INK, maxw=66)
+    text(712, PY + 134, 'N = supervised', 11.5, False, 'middle', MUTE, maxw=84); text(712, PY + 148, 'tokens', 11.5, False, 'middle', MUTE, maxw=84)
+    # checkpointing bracket over lm_head .. CE
+    add(f'<path d="M476,{PY + 48} V{PY + 40} H650 V{PY + 48}" fill="none" stroke="#9AA0A8" stroke-width="1.3"/>')
+    text(563, PY + 34, 'checkpointed: logits recomputed, never stored', 11.5, False, 'middle', MUTE, italic=True, maxw=250)
+    # (d) memory
+    add('<line x1="762" y1="%d" x2="762" y2="%d" stroke="#D5D8DE" stroke-width="1.4"/>' % (PY + 44, PY + 150))
+    text(780, PY + 58, 'logit memory, one trace', 12.5, True, 'start', INK, maxw=190)
+    text(780, PY + 75, 'vocabulary V = 248,320 entries', 11.5, True, 'start', INK, maxw=190)
+    text(780, PY + 97, 'all positions at once', 11.5, False, 'start', MUTE, maxw=190)
+    add(f'<rect x="780" y="{PY + 102}" width="186" height="16" rx="3" fill="#C94F4F"/>'); text(873, PY + 114, 'about 15 GiB', 12, True, 'middle', '#FFFFFF', maxw=170)
+    text(780, PY + 136, 'one chunk at a time', 11.5, False, 'start', MUTE, maxw=190)
+    add(f'<rect x="780" y="{PY + 142}" width="7" height="16" rx="2" fill="{GR}"/>'); text(794, PY + 155, 'C × V × 4 bytes', 12, True, 'start', '#256B3E', maxw=170)
+    kx = 32
+    for col, lab, pre in [(MASK, 'input, masked', None), (TH, 'thought', 'loss on:'), (CALL, 'tool call', None), (ANS, 'answer', None)]:
+        if pre: text(kx, PY + 182, pre, 12, True, 'start', INK); kx += tw(pre, 12, True) + 8
+        rect(kx, PY + 172, 12, 11, (col, col if col != MASK else '#9AA0A8'), rx=3); text(kx + 17, PY + 182, lab, 12, False, 'start', INK)
+        kx += 17 + tw(lab, 12) + 14
+    text(968, PY + 182, 'same loss and gradient as the unchunked computation; used by SFT and GRPO', 12, False, 'end', MUTE, maxw=520)
     add('</g>')
 
     add('</svg>')

@@ -42,7 +42,9 @@ design.
 \begin{figure}[tbp]
   \centering
   \includegraphics[width=\linewidth]{fig_design_2x2}
-  \caption{Experimental design: SFT or SFT+GRPO, with or without tools. H1 compares rows, H2 columns, and H3 the full system with a supervised specialist, next to the zero-shot references of \cref{tab:zeroshot}.}
+  \caption{Experimental design. The four conditions form a diamond: blue edges add tools (H1), orange edges add RL (H2). The
+  harness is drawn as rings around the full system, H3 compares it with a supervised specialist, and the data splits are
+  shown in order of use.}
   \label{fig:design}
 \end{figure}
 
@@ -109,6 +111,16 @@ benefits require the controlled trained-agent comparisons, not extrapolation fro
 \cref{tab:main} is the paper's primary claim table: does the agentic recipe beat zero-shot
 inference and the same backbone without tools (H1: tools help; H2: RL helps), and where does it
 stand against a supervised specialist (H3, framed as a fair test rather than a guaranteed win).
+\Cref{fig:results} plots the same comparison, adds the official test split and the external benchmark of
+\cref{sec:external}, and is filled from the same runs.
+
+\begin{figure}[tbp]
+  \centering
+  \includegraphics[width=\linewidth]{fig_results}
+  \caption{Exact F1 against the zero-shot references on the validation set, on the official test split with and without
+  our harness, and on MMOral-OPG-Bench. Dashed cells are pending.}
+  \label{fig:results}
+\end{figure}
 
 \subsection{Mechanism analysis: does tiered perturbation elicit self-correction?}
 \label{sec:mechanism}

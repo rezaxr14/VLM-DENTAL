@@ -90,7 +90,9 @@ def build(path):
 
     # ============================ detector (3D block, trained) ============================
     DX, DY, DW, DH, DD = 448, 216, 56, 100, 18
-    arrow([(BX + BW, BY + BH / 2), (DX, BY + BH / 2)], head=8)
+    yd, yt = BY + h1 / 2, BY + h1 + (BH - h1) / 2
+    arrow([(BX + BW, yd), (BX + BW + 12, yd), (BX + BW + 12, DY + 26), (DX, DY + 26)], head=8)
+    arrow([(BX + BW, yt), (BX + BW + 12, yt), (BX + BW + 12, DY + DH - 26), (DX, DY + DH - 26)], head=8)
     add(f'<rect x="{DX - 5}" y="{DY - DD * 0.8 - 5}" width="{DW + DD + 10}" height="{DH + DD * 0.8 + 10}" rx="9" fill="{TR}" fill-opacity="0.16"/>')
     block3d(DX, DY, DW, DH, DD, TR)
     flame(DX + DW / 2 + 4, DY - 22, 1.1)

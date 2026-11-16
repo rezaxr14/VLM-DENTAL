@@ -1,0 +1,120 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1000 616" width="1000" height="616" font-family="Helvetica, Arial, 'Liberation Sans', sans-serif">
+<rect width="1000" height="616" fill="#FFFFFF"/>
+<rect x="16" y="16" width="590" height="584" rx="14" fill="#F5F5F7" stroke="#B9BBC2" stroke-width="1.6"/>
+<text x="32" y="41" font-size="14.5" font-weight="bold" text-anchor="start" fill="#1F2937">Exact F1 on the DENTEX validation set</text>
+<text x="32" y="59" font-size="12" text-anchor="start" fill="#5B6472">our conditions, the untrained base, and the zero-shot references</text>
+<line x1="252.0" y1="78" x2="252.0" y2="539.6" stroke="#DADDE3" stroke-width="1"/>
+<text x="252.0" y="559.6" font-size="11.5" text-anchor="middle" fill="#5B6472">0</text>
+<line x1="317.6" y1="78" x2="317.6" y2="539.6" stroke="#DADDE3" stroke-width="1"/>
+<text x="317.6" y="559.6" font-size="11.5" text-anchor="middle" fill="#5B6472">0.1</text>
+<line x1="383.2" y1="78" x2="383.2" y2="539.6" stroke="#DADDE3" stroke-width="1"/>
+<text x="383.20000000000005" y="559.6" font-size="11.5" text-anchor="middle" fill="#5B6472">0.2</text>
+<line x1="448.8" y1="78" x2="448.8" y2="539.6" stroke="#DADDE3" stroke-width="1"/>
+<text x="448.79999999999995" y="559.6" font-size="11.5" text-anchor="middle" fill="#5B6472">0.3</text>
+<line x1="514.4" y1="78" x2="514.4" y2="539.6" stroke="#DADDE3" stroke-width="1"/>
+<text x="514.4000000000001" y="559.6" font-size="11.5" text-anchor="middle" fill="#5B6472">0.4</text>
+<line x1="580.0" y1="78" x2="580.0" y2="539.6" stroke="#DADDE3" stroke-width="1"/>
+<text x="580.0" y="559.6" font-size="11.5" text-anchor="middle" fill="#5B6472">0.5</text>
+<line x1="32" y1="184.0" x2="590" y2="184.0" stroke="#C9CDD4" stroke-width="1" stroke-dasharray="3 3"/>
+<line x1="32" y1="285.8" x2="590" y2="285.8" stroke="#C9CDD4" stroke-width="1" stroke-dasharray="3 3"/>
+<text x="32" y="98" font-size="12.5" font-weight="bold" text-anchor="start" fill="#1F2937">VLM-DENTAL</text>
+<rect x="266" y="85" width="130" height="18" rx="4" fill="#FFFFFF" stroke="#C0392B" stroke-width="1.3" stroke-dasharray="4 3"/>
+<text x="331.0" y="98.0" font-size="11.5" font-weight="bold" text-anchor="middle" fill="#C0392B">pending</text>
+<text x="32" y="132" font-size="12.5" text-anchor="start" fill="#1F2937">SFT + tools</text>
+<rect x="266" y="119" width="130" height="18" rx="4" fill="#FFFFFF" stroke="#C0392B" stroke-width="1.3" stroke-dasharray="4 3"/>
+<text x="331.0" y="132.0" font-size="11.5" font-weight="bold" text-anchor="middle" fill="#C0392B">pending</text>
+<text x="32" y="166" font-size="12.5" text-anchor="start" fill="#1F2937">SFT + GRPO</text>
+<rect x="266" y="153" width="130" height="18" rx="4" fill="#FFFFFF" stroke="#C0392B" stroke-width="1.3" stroke-dasharray="4 3"/>
+<text x="331.0" y="166.0" font-size="11.5" font-weight="bold" text-anchor="middle" fill="#C0392B">pending</text>
+<text x="32" y="257.8" font-size="12.5" text-anchor="start" fill="#1F2937">Qwen3.5-9B + tools, untrained</text>
+<rect x="266" y="244.8" width="130" height="18" rx="4" fill="#FFFFFF" stroke="#C0392B" stroke-width="1.3" stroke-dasharray="4 3"/>
+<text x="331.0" y="257.8" font-size="11.5" font-weight="bold" text-anchor="middle" fill="#C0392B">pending</text>
+<text x="32" y="315.6" font-size="12.5" text-anchor="start" fill="#1F2937">Moonshot Kimi-k3</text>
+<circle cx="397.6" cy="311.6" r="6" fill="#6B7280" stroke="#FFFFFF" stroke-width="1.6"/>
+<text x="409.632" y="315.6" font-size="12" font-weight="bold" text-anchor="start" fill="#1F2937">0.222</text>
+<text x="32" y="349.6" font-size="12.5" text-anchor="start" fill="#1F2937">Meta Llama 3.2 90B</text>
+<circle cx="316.3" cy="345.6" r="6" fill="#6B7280" stroke="#FFFFFF" stroke-width="1.6"/>
+<text x="328.288" y="349.6" font-size="12" font-weight="bold" text-anchor="start" fill="#1F2937">0.098</text>
+<text x="32" y="383.6" font-size="12.5" text-anchor="start" fill="#1F2937">Gemini 3.5 Flash</text>
+<circle cx="375.3" cy="379.6" r="6" fill="#6B7280" stroke="#FFFFFF" stroke-width="1.6"/>
+<text x="387.328" y="383.6" font-size="12" font-weight="bold" text-anchor="start" fill="#1F2937">0.188</text>
+<text x="32" y="417.6" font-size="12.5" text-anchor="start" fill="#1F2937">MiniMax M3</text>
+<circle cx="324.2" cy="413.6" r="6" fill="#6B7280" stroke="#FFFFFF" stroke-width="1.6"/>
+<text x="336.15999999999997" y="417.6" font-size="12" font-weight="bold" text-anchor="start" fill="#1F2937">0.110</text>
+<text x="32" y="451.6" font-size="12.5" text-anchor="start" fill="#1F2937">Gemini 3.5 Flash Lite</text>
+<circle cx="360.9" cy="447.6" r="6" fill="#6B7280" stroke="#FFFFFF" stroke-width="1.6"/>
+<text x="372.896" y="451.6" font-size="12" font-weight="bold" text-anchor="start" fill="#1F2937">0.166</text>
+<text x="32" y="223.8" font-size="12.5" text-anchor="start" fill="#1F2937">Qwen3.5-9B, zero-shot</text>
+<circle cx="325.5" cy="219.8" r="6" fill="#3B6BB5" stroke="#FFFFFF" stroke-width="1.6"/>
+<text x="337.472" y="223.8" font-size="12" font-weight="bold" text-anchor="start" fill="#1F2937">0.112</text>
+<text x="32" y="485.6" font-size="12.5" text-anchor="start" fill="#1F2937">Meta Llama 3.2 11B</text>
+<circle cx="258.6" cy="481.6" r="6" fill="#6B7280" stroke="#FFFFFF" stroke-width="1.6"/>
+<text x="270.56" y="485.6" font-size="12" font-weight="bold" text-anchor="start" fill="#1F2937">0.010</text>
+<text x="32" y="519.6" font-size="12.5" text-anchor="start" fill="#1F2937">Majority-class floor</text>
+<circle cx="276.9" cy="515.6" r="6" fill="#6B7280" stroke="#FFFFFF" stroke-width="1.6"/>
+<text x="288.928" y="519.6" font-size="12" font-weight="bold" text-anchor="start" fill="#1F2937">0.038</text>
+<rect x="622" y="16" width="362" height="390" rx="14" fill="#F5F5F7" stroke="#B9BBC2" stroke-width="1.6"/>
+<text x="638" y="41" font-size="14.5" font-weight="bold" text-anchor="start" fill="#1F2937">Official DENTEX test split, 250 images</text>
+<text x="638" y="59" font-size="12" text-anchor="start" fill="#5B6472">exact F1, with and without our harness</text>
+<line x1="842.0" y1="76" x2="842.0" y2="230" stroke="#DADDE3" stroke-width="1"/>
+<text x="842.0" y="246" font-size="11.5" text-anchor="middle" fill="#5B6472">0</text>
+<line x1="905.0" y1="76" x2="905.0" y2="230" stroke="#DADDE3" stroke-width="1"/>
+<text x="905.0" y="246" font-size="11.5" text-anchor="middle" fill="#5B6472">0.25</text>
+<line x1="968.0" y1="76" x2="968.0" y2="230" stroke="#DADDE3" stroke-width="1"/>
+<text x="968.0" y="246" font-size="11.5" text-anchor="middle" fill="#5B6472">0.5</text>
+<text x="638" y="96" font-size="12.5" font-weight="bold" text-anchor="start" fill="#1F2937">VLM-DENTAL + harness</text>
+<rect x="846" y="83" width="96" height="18" rx="4" fill="#FFFFFF" stroke="#C0392B" stroke-width="1.3" stroke-dasharray="4 3"/>
+<text x="894.0" y="96.0" font-size="11.5" font-weight="bold" text-anchor="middle" fill="#C0392B">pending</text>
+<text x="638" y="121" font-size="12.5" text-anchor="start" fill="#1F2937">Kimi-k3 + harness</text>
+<rect x="846" y="108" width="96" height="18" rx="4" fill="#FFFFFF" stroke="#C0392B" stroke-width="1.3" stroke-dasharray="4 3"/>
+<text x="894.0" y="121.0" font-size="11.5" font-weight="bold" text-anchor="middle" fill="#C0392B">pending</text>
+<text x="638" y="146" font-size="12.5" text-anchor="start" fill="#1F2937">Gemini 3.5 Flash + harness</text>
+<rect x="846" y="133" width="96" height="18" rx="4" fill="#FFFFFF" stroke="#C0392B" stroke-width="1.3" stroke-dasharray="4 3"/>
+<text x="894.0" y="146.0" font-size="11.5" font-weight="bold" text-anchor="middle" fill="#C0392B">pending</text>
+<text x="638" y="171" font-size="12.5" text-anchor="start" fill="#1F2937">Gemini 3.5 Flash Lite + harness</text>
+<rect x="846" y="158" width="96" height="18" rx="4" fill="#FFFFFF" stroke="#C0392B" stroke-width="1.3" stroke-dasharray="4 3"/>
+<text x="894.0" y="171.0" font-size="11.5" font-weight="bold" text-anchor="middle" fill="#C0392B">pending</text>
+<text x="638" y="196" font-size="12.5" text-anchor="start" fill="#1F2937">Qwen3.5-9B, untrained</text>
+<rect x="846" y="183" width="96" height="18" rx="4" fill="#FFFFFF" stroke="#C0392B" stroke-width="1.3" stroke-dasharray="4 3"/>
+<text x="894.0" y="196.0" font-size="11.5" font-weight="bold" text-anchor="middle" fill="#C0392B">pending</text>
+<text x="638" y="221" font-size="12.5" text-anchor="start" fill="#1F2937">Qwen3.5-9B, untrained + harness</text>
+<rect x="846" y="208" width="96" height="18" rx="4" fill="#FFFFFF" stroke="#C0392B" stroke-width="1.3" stroke-dasharray="4 3"/>
+<text x="894.0" y="221.0" font-size="11.5" font-weight="bold" text-anchor="middle" fill="#C0392B">pending</text>
+<line x1="638" y1="260" x2="968" y2="260" stroke="#C9CDD4" stroke-width="1" stroke-dasharray="3 3"/>
+<text x="638" y="284" font-size="14.5" font-weight="bold" text-anchor="start" fill="#1F2937">External benchmark: MMOral-OPG-Bench</text>
+<text x="638" y="302" font-size="12" text-anchor="start" fill="#5B6472">overall score; published rows use other judges</text>
+<line x1="842.0" y1="318" x2="842.0" y2="376" stroke="#DADDE3" stroke-width="1"/>
+<text x="842.0" y="394" font-size="11.5" text-anchor="middle" fill="#5B6472">0</text>
+<line x1="905.0" y1="318" x2="905.0" y2="376" stroke="#DADDE3" stroke-width="1"/>
+<text x="905.0" y="394" font-size="11.5" text-anchor="middle" fill="#5B6472">50</text>
+<line x1="968.0" y1="318" x2="968.0" y2="376" stroke="#DADDE3" stroke-width="1"/>
+<text x="968.0" y="394" font-size="11.5" text-anchor="middle" fill="#5B6472">100</text>
+<text x="638" y="336" font-size="12.5" font-weight="bold" text-anchor="start" fill="#1F2937">VLM-DENTAL (agent-assisted)</text>
+<rect x="845.78" y="323" width="96" height="18" rx="4" fill="#FFFFFF" stroke="#C0392B" stroke-width="1.3" stroke-dasharray="4 3"/>
+<text x="893.78" y="336.0" font-size="11.5" font-weight="bold" text-anchor="middle" fill="#C0392B">pending</text>
+<text x="638" y="362" font-size="12.5" text-anchor="start" fill="#1F2937">OralGPT-Omni, own paper</text>
+<circle cx="899.1" cy="358" r="5" fill="#9AA3AE" stroke="#FFFFFF" stroke-width="1.4"/>
+<text x="889.0906" y="362" font-size="11.5" font-weight="bold" text-anchor="end" fill="#1F2937">45.31</text>
+<text x="638" y="384" font-size="12.5" text-anchor="start" fill="#1F2937">OralGPT-Omni, OPGAgent table</text>
+<circle cx="916.4" cy="380" r="5" fill="#9AA3AE" stroke="#FFFFFF" stroke-width="1.4"/>
+<text x="906.4156" y="384" font-size="11.5" font-weight="bold" text-anchor="end" fill="#1F2937">59.06</text>
+<rect x="622" y="418" width="362" height="182" rx="14" fill="#F5F5F7" stroke="#B9BBC2" stroke-width="1.6"/>
+<text x="638" y="443" font-size="14.5" font-weight="bold" text-anchor="start" fill="#1F2937">Exact F1 by diagnosis class</text>
+<circle cx="644" cy="462" r="5" fill="#6B7280"/>
+<text x="654" y="466" font-size="12" text-anchor="start" fill="#1F2937">best zero-shot</text>
+<circle cx="764" cy="462" r="5" fill="#D9822B"/>
+<text x="774" y="466" font-size="12" text-anchor="start" fill="#1F2937">VLM-DENTAL</text>
+<text x="968" y="466" font-size="11.5" font-weight="bold" text-anchor="end" fill="#C0392B">dashed: pending</text>
+<text x="638" y="498" font-size="12.5" text-anchor="start" fill="#1F2937">Caries</text>
+<rect x="790" y="486" width="120" height="8" rx="3" fill="#FFFFFF" stroke="#6B7280" stroke-width="1.3" stroke-dasharray="4 3"/>
+<rect x="790" y="498" width="120" height="8" rx="3" fill="#FFFFFF" stroke="#D9822B" stroke-width="1.3" stroke-dasharray="4 3"/>
+<text x="638" y="524" font-size="12.5" text-anchor="start" fill="#1F2937">Deep caries</text>
+<rect x="790" y="512" width="120" height="8" rx="3" fill="#FFFFFF" stroke="#6B7280" stroke-width="1.3" stroke-dasharray="4 3"/>
+<rect x="790" y="524" width="120" height="8" rx="3" fill="#FFFFFF" stroke="#D9822B" stroke-width="1.3" stroke-dasharray="4 3"/>
+<text x="638" y="550" font-size="12.5" text-anchor="start" fill="#1F2937">Periapical lesion</text>
+<rect x="790" y="538" width="120" height="8" rx="3" fill="#FFFFFF" stroke="#6B7280" stroke-width="1.3" stroke-dasharray="4 3"/>
+<rect x="790" y="550" width="120" height="8" rx="3" fill="#FFFFFF" stroke="#D9822B" stroke-width="1.3" stroke-dasharray="4 3"/>
+<text x="638" y="576" font-size="12.5" text-anchor="start" fill="#1F2937">Impacted tooth</text>
+<rect x="790" y="564" width="120" height="8" rx="3" fill="#FFFFFF" stroke="#6B7280" stroke-width="1.3" stroke-dasharray="4 3"/>
+<rect x="790" y="576" width="120" height="8" rx="3" fill="#FFFFFF" stroke="#D9822B" stroke-width="1.3" stroke-dasharray="4 3"/>
+</svg>
