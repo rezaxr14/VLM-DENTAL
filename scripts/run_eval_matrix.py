@@ -44,7 +44,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--grpo-adapter", type=str, default=None,
                    help="GRPO checkpoint folder, e.g. .../grpo-with_tools-final (needed by grpo_* conditions; its trained "
                         "'grpo_policy' adapter is used).")
-    p.add_argument("--model-id", type=str, default=os.environ.get("MODEL_NAME", "Qwen/Qwen3.5-9B"), help="Base VLM.")
+    p.add_argument("--model-id", type=str, default=os.environ.get("MODEL_NAME") or __import__("dental_agent.utils.model_size", fromlist=["x"]).default_model_id(), help="Base VLM.")
     p.add_argument("--dataset", type=str, default="dentex")
     p.add_argument("--split", type=str, default="test", choices=["test", "dev", "official_test250"],
                    help="test = official DENTEX validation set (final numbers only); dev = held-out train images (needs --dev-split).")

@@ -66,7 +66,7 @@ def add_common(p, *, results=True):
 def add_model_args(p):
     from dental_agent.model.local_runtime import add_runtime_args
     from dental_agent.utils.canonical import add_letterbox_arg
-    p.add_argument("--model-id", default=os.environ.get("MODEL_NAME", "Qwen/Qwen3.5-9B"))
+    p.add_argument("--model-id", default=os.environ.get("MODEL_NAME") or __import__("dental_agent.utils.model_size", fromlist=["x"]).default_model_id())
     p.add_argument("--model-revision", default="", help="Hub revision to pin for external models (recorded; empty = unpinned).")
     p.add_argument("--precision", default="bf16", choices=["bf16", "fp16", "fp32", "qlora"])
     p.add_argument("--max-new-tokens", type=int, required=True)

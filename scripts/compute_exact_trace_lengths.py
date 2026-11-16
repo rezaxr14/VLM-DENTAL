@@ -62,7 +62,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--model-id",
         type=str,
-        default=os.environ.get("MODEL_NAME", "Qwen/Qwen3.5-9B"),
+        default=os.environ.get("MODEL_NAME") or __import__("dental_agent.utils.model_size", fromlist=["x"]).default_model_id(),
         help="Model ID or local path for tokenizer/processor",
     )
     parser.add_argument(

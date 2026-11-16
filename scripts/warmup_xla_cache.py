@@ -360,7 +360,7 @@ def run_warmup_worker(index: int, args: argparse.Namespace):
             if is_tpu and args.tpu_loss_chunk_tokens:
                 from dental_agent.training.tpu_chunked_loss import install_tpu_chunked_loss
                 install_tpu_chunked_loss(model, args.tpu_loss_chunk_tokens, mesh=spmd_mesh)
-            model = wrap_spmd_model(model, mesh=spmd_mesh, is_master=is_master)
+            model = wrap_spmd_model(model, mesh=spmd_mesh, is_master=is_master, replicate_weights=args.replicate_weights)
         else:
             model = wrap_distributed_model(
                 model,
@@ -583,7 +583,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--model-id",
         type=str,
-        default=os.environ.get("MODEL_NAME", "Qwen/Qwen3.5-9B"),
+        default=os.environ.get("MODEL_NAME") or __import__("dental_agent.utils.model_size", fromlist=["x"]).default_model_id(),
         help="Base VLM model identifier or local directory",
     )
     parser.add_argument(
@@ -652,6 +652,10 @@ def parse_args() -> argparse.Namespace:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Enable PyTorch/XLA FSDP parameter sharding across TPU cores",
+    )
+    parser.add_argument(
+        "--replicate-weights", action=argparse.BooleanOptionalAction, default=False,
+        help="Compile the TPU data-parallel layout (a full bf16 weight copy per core, no FSDPv2). Must match the training command, or the cache will not be hit.",
     )
     parser.add_argument(
         "--kaggle-dataset-id",

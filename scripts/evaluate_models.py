@@ -733,6 +733,17 @@ def evaluate_condition(
             print("[WARNING] Falling back to live evaluation...")
 
     eligible_imgs = eligible_images(imgs_df, args.limit)
+    shard_count = int(getattr(args, "shard_count", 1) or 1)
+    if shard_count > 1:
+        # Data-parallel evaluation: this process is one of ``shard_count`` independent single-GPU replicas, each taking every
+        # shard_count-th image of the SAME ordered cohort (the launcher merges the shard files; nothing crosses between processes).
+        shard_index = int(args.shard_index)
+        if not 0 <= shard_index < shard_count:
+            raise SystemExit(f"--shard-index must be in [0, {shard_count}); got {shard_index}.")
+        if args.reuse_cached or getattr(args, "tpu_generation_chunk_tokens", 0):
+            raise SystemExit("--shard-count > 1 is for GPU evaluation of a live model (not --reuse-cached, not TPU generation).")
+        eligible_imgs = eligible_imgs.iloc[shard_index::shard_count]
+        print(f"[SHARD] replica {shard_index + 1} of {shard_count}: {len(eligible_imgs)} of the cohort's images.", flush=True)
 
     print_condition_banner(condition, len(eligible_imgs), output_path)
 
@@ -917,7 +928,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--model-id",
         type=str,
-        default=os.environ.get("MODEL_NAME", "Qwen/Qwen3.5-9B"),
+        default=os.environ.get("MODEL_NAME") or __import__("dental_agent.utils.model_size", fromlist=["x"]).default_model_id(),
         help="Base VLM model identifier or local directory",
     )
     parser.add_argument(
@@ -968,6 +979,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=str, default=DEFAULT_OUTPUT_DIR, help="Evaluation output directory")
     parser.add_argument("--reuse-cached", action="store_true", help="For base_no_tools: load existing zero-shot results instead of recomputing")
     parser.add_argument("--limit", type=int, default=None, help="Optional sample limit for quick smoke tests")
+    parser.add_argument("--shard-index", type=int, default=0,
+                        help="Data-parallel evaluation: this replica's index (0-based). Set by the notebook runner together with --shard-count; "
+                             "one single-GPU process per replica, no cross-GPU traffic.")
+    parser.add_argument("--shard-count", type=int, default=1, help="Data-parallel evaluation: number of replicas (1 = the whole cohort in this process).")
     parser.add_argument(
         "--max-turns", type=int, default=None,
         help="Maximum assistant turns (with_tools conditions). Default: --max-tool-calls + 15, the bound GRPO rollouts use. "

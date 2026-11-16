@@ -34,7 +34,7 @@ class DataConfig:
 class ModelConfig:
     """VLM backbone settings."""
 
-    name: str = "Qwen/Qwen3.5-9B"
+    name: str = field(default_factory=lambda: __import__("dental_agent.utils.model_size", fromlist=["x"]).default_model_id())
     load_in_4bit: bool = True
     bnb_quant_type: str = "nf4"
     bnb_compute_dtype: str = "bfloat16"

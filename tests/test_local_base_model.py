@@ -390,7 +390,7 @@ def test_zero_shot_cell_keeps_the_name_and_hands_the_resolved_folder_to_the_prov
     monkeypatch.setenv(ENV, str(folder))
     monkeypatch.delenv("TRANSFORMERS_LOAD_IN_4BIT", raising=False)
     ns = {"os": os}
-    exec(code_of("VLM_Dental_Colab_ZeroShot.ipynb", 'MODEL = "Qwen/Qwen3.5-9B"'), ns)
+    exec(code_of("VLM_Dental_Colab_ZeroShot.ipynb", 'MODEL = _hub_id()'), ns)
     assert ns["MODEL"] == "Qwen/Qwen3.5-9B" and ns["QWEN_PATH"] == str(folder) and ns["PROVIDER"] == "transformers"
     assert os.environ[ENV] == str(folder) and f"Qwen3.5-9B source: env -> {folder}" in capsys.readouterr().out
     assert inp.local_model_alias(ns["MODEL"]) == str(folder)                                      # what run_zero_shot.py's provider loads

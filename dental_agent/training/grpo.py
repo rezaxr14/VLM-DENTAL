@@ -28,6 +28,7 @@ from tqdm import tqdm
 from dental_agent.config import ProjectConfig, TrainingConfig
 from dental_agent.model.backbone import load_model, apply_lora, safe_process_vision_info
 from dental_agent.model.checkpoints import save_checkpoint
+from dental_agent.training import ddp
 from dental_agent.training import tpu_diagnostics as _diag  # opt-in run report; no-op without --tpu-report-dir
 from dental_agent.agent.loop import run_agent, run_agent_no_tools, AgentTrajectory
 from dental_agent.model.tpu_generation import GenerationTooLong, SlotOverflow
@@ -539,6 +540,7 @@ def grpo_step(
     max_new_tokens: int = 2048,
     grad_scaler: Any = None,
     harness: Any = None,
+    ddp_sync: bool = False,
 ) -> tuple[dict[str, Any], float]:
     """One GRPO update cycle over on-policy sampled groups.
 
@@ -728,6 +730,10 @@ def grpo_step(
         elif is_tpu:
             xm.optimizer_step(optimizer)
         else:
+            if ddp_sync:
+                # --data-parallel: every rank trained on its OWN image; average the LoRA gradients over the ranks that had rollouts. A rank
+                # with none still joins (zero gradients), and identical gradients keep the GradScaler's finite check identical.
+                ddp.sync_trainable_grads(model.parameters(), contributed=bool(groups), average_over_contributors=True)
             if grad_scaler is not None:
                 grad_scaler.step(optimizer)
                 grad_scaler.update()
@@ -880,6 +886,7 @@ def train_grpo(
     path_in_repo_prefix: str | None = None,
     num_cores: int = 1,
     use_fsdp: bool = True,
+    replicate_weights: bool = False,
     canonical_resize: bool = False,
     temperature: float = 0.7,
     use_spmd: bool = False,
@@ -897,6 +904,7 @@ def train_grpo(
     tpu_generation_chunk_tokens: int = 0,
     tpu_generation_tiers: tuple[int, ...] = (8192, 16384, 32768),
     tpu_generation_warmup: bool = True,
+    data_parallel: bool = False,
 ) -> str:
     """Execute Stage 2 GRPO policy optimization with dual-adapter reference and group advantage normalization."""
     from peft import PeftModel, LoraConfig
@@ -904,9 +912,13 @@ def train_grpo(
     validate_harness_mode(harness_mode, track)
     harness = harness_options(harness_mode)
     harness_record = harness_identity(harness_mode)
+    if data_parallel != ddp.is_active():
+        raise ValueError("data_parallel=True needs the process group set up by the launcher (torchrun + --data-parallel); "
+                         "a process group without data_parallel=True would run duplicate copies of this training.")
     if seed is not None:
         import random
-        random.seed(seed); np.random.seed(seed); torch.manual_seed(seed)
+        _s = seed + ddp.rank()          # a different sampling stream per rank (each rank rolls out its own image)
+        random.seed(_s); np.random.seed(_s); torch.manual_seed(_s)
     tr_cfg = config.training if isinstance(config, ProjectConfig) else (config or TrainingConfig())
     G = group_size or tr_cfg.grpo_group_size
     lr = learning_rate or tr_cfg.grpo_lr
@@ -932,10 +944,13 @@ def train_grpo(
     if tpu_logprob_chunk_tokens:
         from dental_agent.training.tpu_chunked_loss import require_xla_loop
         require_xla_loop()  # fail before the 9B weights load; there is no Python-unrolled fallback
-    if runtime_options is None:
-        model, processor = load_model(config)  # preserve legacy stand-in loaders in tests/callers
-    else:
-        model, processor = load_model(config, runtime_options=runtime_options, is_tpu=is_tpu)
+    _dm = {"device_map": ddp.device_map()} if data_parallel else {}   # whole model on THIS GPU instead of split over both
+
+    def _load():
+        if runtime_options is None:
+            return load_model(config, **_dm)  # preserve legacy stand-in loaders in tests/callers
+        return load_model(config, runtime_options=runtime_options, is_tpu=is_tpu, **_dm)
+    model, processor = ddp.in_rank_order(_load)   # a plain call without --data-parallel; one replica at a time with it (host RAM)
     _diag.mark("model_loaded")
     from dental_agent.model.local_runtime import configure_model, runtime_for, runtime_record
     opts = runtime_for(model)
@@ -981,7 +996,7 @@ def train_grpo(
     # Training scores request use_cache=False; rollout generation requests True.
     cuda_fp16 = torch.cuda.is_available() and runtime_dtype == torch.float16
     grad_scaler = torch.amp.GradScaler('cuda', enabled=cuda_fp16, init_scale=128.0)
-    if opts:
+    if opts and ddp.is_main():
         from dental_agent.training.gpu_runtime import runtime_metadata
         Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
         with open(Path(checkpoint_dir) / 'grpo_runtime.json', 'w') as f:
@@ -1009,6 +1024,10 @@ def train_grpo(
                 f"(pool {meta.get('pool_fingerprint')} vs {pool_fp}, K {meta.get('group_size')} vs {G}). Resume with the same "
                 "--dev-split, --seed, --max-images, --include-healthy and --group-size, or start a new run without --resume."
             )
+        if int(meta.get("world_size", 1)) != ddp.world_size():
+            raise ValueError(
+                f"Checkpoint {ckpt_path.name} was trained with {meta.get('world_size', 1)} data-parallel process(es) (one update = that many "
+                f"images); this run has {ddp.world_size()}. Resume with the same launch, or start a new run without --resume.")
         load_policy_state(model, ckpt_path)
         start_step = int(meta["step"])
         resume_baseline = float(meta.get("baseline", 0.0))
@@ -1036,6 +1055,9 @@ def train_grpo(
     if use_spmd and is_tpu:
         if not use_fsdp:
             raise ValueError("SPMD shards weights through FSDPv2; use_fsdp=False would replicate 18 GB on every core.")
+        if replicate_weights:
+            from dental_agent.training import ddp as _ddp
+            _ddp.check_replica_fits("bf16", 15.0)   # a v5e core has about 15 GiB of HBM: refuse a model that cannot be replicated, before loading
         from dental_agent.training.sft import freeze_and_guard_vision_tower, setup_spmd_mesh, wrap_spmd_model
         # Same rule as the CUDA branch above: the projector (merger) LoRA the SFT trained keeps training in GRPO.
         # It used to be frozen unconditionally on TPU, so GRPO silently stopped adapting the vision projector there.
@@ -1062,7 +1084,7 @@ def train_grpo(
             install_tpu_generation(model, TPUGenerationConfig(
                 chunk_tokens=tpu_generation_chunk_tokens, cache_tiers=tuple(tpu_generation_tiers),
                 slot_budget=dict(slot_budget or _DEFAULT_SLOTS), batch_multiple=num_cores, mesh=spmd_mesh))
-        model = wrap_spmd_model(model, mesh=spmd_mesh, is_master=True)
+        model = wrap_spmd_model(model, mesh=spmd_mesh, is_master=True, replicate_weights=replicate_weights)
         rows_per_forward = num_cores  # one trajectory per core in every policy forward
         if tpu_generation_chunk_tokens and tpu_generation_warmup:
             from dental_agent.model.tpu_generation import warmup_tpu_generation
@@ -1090,6 +1112,11 @@ def train_grpo(
           + f"pad_vision_to_slots={pad_vision_to_slots} max_seq_len={max_seq_len} rows_per_forward={rows_per_forward} "
           f"num_cores={num_cores}")
 
+    if data_parallel:
+        n_synced = ddp.broadcast_trainable(model.parameters())   # identical policy on every replica (also after a resume)
+        if ddp.is_main():
+            print(f"[DDP] {ddp.world_size()} replicas; {n_synced} trainable tensors broadcast from rank 0. One update = "
+                  f"{ddp.world_size()} images (each rank rolls out its own).", flush=True)
     # One optimizer for the whole run: Adam moments must persist across GRPO steps.
     optimizer = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=lr)
 
@@ -1097,6 +1124,15 @@ def train_grpo(
     registry = ToolRegistry.create_default() if track == "with_tools" else None
 
     valid_images = images_df.dropna(subset=["local_path"])
+    if data_parallel:
+        # Rank r trains on images r, r+W, r+2W, ... of the pool; the ragged tail (fewer than W images) is dropped so every rank runs
+        # the same number of updates. One logged "step" is one optimizer update = W images.
+        usable = (len(valid_images) // ddp.world_size()) * ddp.world_size()
+        if usable == 0:
+            raise ValueError(f"the pool has {len(valid_images)} images, fewer than the {ddp.world_size()} data-parallel processes")
+        if ddp.is_main() and usable != len(valid_images):
+            print(f"[DDP] {len(valid_images) - usable} tail image(s) of the pool are not trained on (pool is not a multiple of {ddp.world_size()}).")
+        valid_images = valid_images.iloc[:usable].iloc[ddp.rank()::ddp.world_size()]
     total_steps = len(valid_images)
     current_baseline = resume_baseline
 
@@ -1143,18 +1179,26 @@ def train_grpo(
             max_new_tokens=max_new_tokens,
             grad_scaler=grad_scaler,
             harness=harness,
+            ddp_sync=data_parallel,
         )
-        log_grpo_step(stats, log_path=log_path, extra={"step": step, "image_id": int(img_id), "harness_mode": harness_mode})
-        print(f"[GRPO Step {step}/{total_steps}] mean_reward={stats['mean_reward']:.3f} kl={stats['kl_divergence']:.4f}"
-              + (f" dropped(slots={stats.get('n_dropped_slot_overflow', 0)}, length={stats.get('n_dropped_overlength', 0)}, "
-                 f"generation={stats.get('n_dropped_generation', 0)})"
-                 if (stats.get('n_dropped_slot_overflow', 0) or stats.get('n_dropped_overlength', 0)
-                     or stats.get('n_dropped_generation', 0)) else ""))
+        if data_parallel:
+            # Mean over the ranks for the logged curve and a shared EMA baseline (kept identical on every rank).
+            n_ranks = ddp.world_size()
+            mr, kl, current_baseline = (x / n_ranks for x in ddp.all_reduce_sum(
+                [stats["mean_reward"], stats["kl_divergence"], current_baseline], next(model.parameters()).device))
+            stats = {**stats, "mean_reward": mr, "kl_divergence": kl, "world_size": n_ranks, "rank0_image_id": int(img_id)}
+        if ddp.is_main():
+            log_grpo_step(stats, log_path=log_path, extra={"step": step, "image_id": int(img_id), "harness_mode": harness_mode})
+            print(f"[GRPO Step {step}/{total_steps}] mean_reward={stats['mean_reward']:.3f} kl={stats['kl_divergence']:.4f}"
+                  + (f" dropped(slots={stats.get('n_dropped_slot_overflow', 0)}, length={stats.get('n_dropped_overlength', 0)}, "
+                     f"generation={stats.get('n_dropped_generation', 0)})"
+                     if (stats.get('n_dropped_slot_overflow', 0) or stats.get('n_dropped_overlength', 0)
+                         or stats.get('n_dropped_generation', 0)) else ""))
         _diag.step(step, mean_reward=stats['mean_reward'], kl=stats['kl_divergence'],
                    dropped_slots=stats.get('n_dropped_slot_overflow', 0), dropped_length=stats.get('n_dropped_overlength', 0),
                    dropped_generation=stats.get('n_dropped_generation', 0))
 
-        if (push_every_steps > 0 and step % push_every_steps == 0) or step == total_steps:
+        if ((push_every_steps > 0 and step % push_every_steps == 0) or step == total_steps) and ddp.is_main():
             step_tag = f"grpo-{track}-step-{step}"
             ckpt_path = save_checkpoint(
                 model=unwrap_peft_model(model),
@@ -1164,6 +1208,7 @@ def train_grpo(
                 extra_metadata={
                     "step": step, "mean_reward": stats["mean_reward"], "track": track, "baseline": float(current_baseline),
                     "group_size": G, "pool_fingerprint": pool_fp, "pool_size": total_steps, "harness": harness_record,
+                    "world_size": ddp.world_size(),
                 },
             )
             if hf_repo:
@@ -1175,19 +1220,25 @@ def train_grpo(
                 )
 
     final_tag = f"grpo-{track}-final"
-    final_path = save_checkpoint(
-        model=unwrap_peft_model(model),
-        processor=processor,
-        tag=final_tag,
-        checkpoint_dir=checkpoint_dir,
-        extra_metadata={"track": track, "group_size": G, "harness": harness_record, "step": total_steps},
-    )
-    if hf_repo:
+    if ddp.is_main():
+        final_path = save_checkpoint(
+            model=unwrap_peft_model(model),
+            processor=processor,
+            tag=final_tag,
+            checkpoint_dir=checkpoint_dir,
+            extra_metadata={"track": track, "group_size": G, "harness": harness_record, "step": total_steps,
+                            "world_size": ddp.world_size()},
+        )
+    else:
+        final_path = os.path.join(str(checkpoint_dir), final_tag)   # rank 0 writes it; the other rank only reports the same path
+    if hf_repo and ddp.is_main():
         upload_checkpoint_to_hf(
             checkpoint_dir=final_path,
             hf_repo=hf_repo,
             step=total_steps,
             path_in_repo=f"{repo_prefix}/{final_tag}",
         )
-    print(f"Stage 2 GRPO complete. Checkpoint saved to: {final_path}")
+    ddp.barrier()   # --data-parallel: the other rank waits here until rank 0 has written (and uploaded) the final checkpoint
+    if ddp.is_main():
+        print(f"Stage 2 GRPO complete. Checkpoint saved to: {final_path}")
     return final_path

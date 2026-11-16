@@ -1307,14 +1307,33 @@ def wrap_spmd_model(
     model: Any,
     mesh: Any,
     is_master: bool = True,
+    replicate_weights: bool = False,
 ) -> Any:
     """Wrap model with SPMD-based FSDPv2 (SpmdFullyShardedDataParallel).
+
+    ``replicate_weights=True`` (opt-in, Qwen3.5-4B) skips FSDPv2: the whole model is placed on every core (SPMD's default for a tensor
+    with no sharding annotation) and only the batch is sharded over the 'fsdp' axis, i.e. pure data parallelism; the compiler
+    all-reduces the gradients of the replicated LoRA parameters. Memory trade: a full copy per core instead of 1/num_cores of it.
 
     SPMD runs as a SINGLE process controlling all TPU cores through one shared
     device mesh; the compiler produces one sharded program, compiled once, with sharding
     and cross-chip communication inserted automatically.
     """
     import torch_xla.distributed.spmd as xs
+    if replicate_weights:
+        import torch_xla.core.xla_model as xm
+        device = xm.xla_device()
+        model = model.to(device)
+
+        def _shard_logits(module, inputs, output):
+            real_output = output.logits if hasattr(output, "logits") else output
+            xs.mark_sharding(real_output, mesh, ("fsdp", None, None))
+
+        model.register_forward_hook(_shard_logits)
+        if is_master:
+            print(f"[SPMD DATA PARALLEL] Full weight copy on every core of the {getattr(mesh, 'shape', '')} mesh; the batch is sharded "
+                  "over the 'fsdp' axis. No FSDPv2 wrapper.")
+        return model
     try:
         from torch_xla.experimental.spmd_fully_sharded_data_parallel import (
             SpmdFullyShardedDataParallel as FSDPv2,
@@ -1503,7 +1522,7 @@ def train_sft(
     data_path: str | Path,
     track: str = "with_tools",
     config: ProjectConfig | TrainingConfig | None = None,
-    output_dir: str | Path = "data/models/qwen3_5_9b_sft_tools",
+    output_dir: str | Path | None = None,
     checkpoint_dir: str | Path = "data/models",
     epochs: int = 3,
     batch_size: int = 1,
@@ -1554,6 +1573,9 @@ def train_sft(
     )
 
     total_steps = 0
+    if output_dir is None:
+        from dental_agent.utils.model_size import slug
+        output_dir = f"data/models/{slug()}_sft_tools"      # qwen3_5_9b_sft_tools unless DENTAL_MODEL_SIZE=4b
     log_file = Path(output_dir) / "training_loss.jsonl"
     log_file.parent.mkdir(parents=True, exist_ok=True)
 

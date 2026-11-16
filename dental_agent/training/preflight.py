@@ -72,7 +72,7 @@ def _check_sft_adapter(args: Any, candidates: list[Path], rep: _Report) -> Path 
     if found is None:
         if args.sft_model_dir:
             rep.add(FAIL, "SFT adapter", f"--sft-model-dir {args.sft_model_dir} does not exist; an explicit folder is never "
-                    "replaced by another adapter. train_sft.py writes data/models/qwen3_5_9b_sft_<track>_<stage>_<precision>.")
+                    "replaced by another adapter. train_sft.py writes data/models/<model slug>_sft_<track>_<stage>_<precision>.")
             return None
         searched = ", ".join(str(c) for c in candidates)
         if args.hf_repo:
@@ -90,7 +90,7 @@ def _check_sft_adapter(args: Any, candidates: list[Path], rep: _Report) -> Path 
                         f"sft/{names[0]}/. Train it (scripts/train_sft.py) or pass --sft-model-dir.")
         else:
             rep.add(FAIL, "SFT adapter", f"not found (searched {searched}). Pass --sft-model-dir "
-                    "(train_sft.py writes data/models/qwen3_5_9b_sft_<track>_<stage>_<precision> by default).")
+                    "(train_sft.py writes data/models/<model slug>_sft_<track>_<stage>_<precision> by default).")
         return None
     has_cfg = (found / "adapter_config.json").is_file()
     has_w = (found / "adapter_model.safetensors").is_file() or (found / "adapter_model.bin").is_file()
@@ -651,7 +651,7 @@ def _check_sft_flags(args: Any, rep: _Report) -> None:
 
 
 def _check_sft_output(args: Any, rep: _Report) -> Path:
-    out = Path(args.output_dir or f"data/models/qwen3_5_9b_sft_{args.track}_{args.stage}_{args.precision}")
+    out = Path(args.output_dir or f"data/models/{__import__('dental_agent.utils.model_size', fromlist=['x']).slug()}_sft_{args.track}_{args.stage}_{args.precision}")
     if out.is_dir() and inp.has_adapter_config(out):
         if args.resume_hf:
             rep.add(INFO, "output folder", f"{out} already holds an adapter; --resume-hf overlays the Hub checkpoint on it.")

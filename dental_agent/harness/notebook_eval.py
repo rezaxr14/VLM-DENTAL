@@ -18,13 +18,18 @@ import time
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
+from dental_agent.harness.eval_replicas import SHARDABLE_KINDS, eval_replicas, merge_replicas, replica_commands, seed_replicas, start_replicas
+from dental_agent.utils.model_size import profile_parts, select_profile, set_active_size, slug as model_slug, spec as model_spec
 PROFILES = {
-    'dual_t4': dict(tag='dual_t4_fp16', precision='qlora', compute='fp16', attention='sdpa', kv='on', loader='staged', threads=1, letterbox=False),
+    'dual_t4': dict(tag='dual_t4_fp16', precision='qlora', compute='fp16', attention='sdpa', kv='on', loader='staged', threads=1, letterbox=False, replicas=2),
     'rtx4090_qlora': dict(tag='rtx4090_bf16', precision='qlora', compute='bf16', attention='auto', kv='auto', loader='standard', threads=0, letterbox=False),
     'workstation48_lora': dict(tag='workstation48_lora_bf16', precision='bf16', compute='auto', attention='auto', kv='auto', loader='standard', threads=0, letterbox=False),
     'quadro_rtx8000': dict(tag='quadro_rtx8000_fp16', precision='fp16', compute='auto', attention='sdpa', kv='auto', loader='standard', threads=0, letterbox=False, serving_dtype='float16'),
     'tpu': dict(tag='tpu_bf16', precision='bf16', compute='auto', attention='sdpa', kv='off', loader='standard', threads=0, letterbox=True),
-    'dual_t4_fp16': dict(tag='dual_t4_unquantized_fp16', precision='fp16', compute='auto', attention='sdpa', kv='on', loader='staged', threads=1, letterbox=False),
+    'dual_t4_fp16': dict(tag='dual_t4_unquantized_fp16', precision='fp16', compute='auto', attention='sdpa', kv='on', loader='staged', threads=1, letterbox=False, replicas=2),
+    # `replicas`: with Qwen3.5-4B (a replica fits one T4) an evaluation runs one single-GPU process per GPU on alternate images instead of splitting one
+    # model over the PCIe link; ignored for 9B. The data-parallel-trained adapter differs from dual_t4_fp16 only in its tag (the cohort).
+    'dual_t4_ddp_fp16': dict(tag='dual_t4_ddp_unquantized_fp16', precision='fp16', compute='auto', attention='sdpa', kv='on', loader='staged', threads=1, letterbox=False, replicas=2),
 }
 ALIASES = {'rtx4090': 'rtx4090_qlora', 'rtxpro6000_48gb': 'workstation48_lora'}
 KINDS = ('zeroshot', 'baseline', 'sft', 'grpo', 'rules_skills', 'speculative')
@@ -33,7 +38,7 @@ PRIMARY = ('base_no_tools', 'base_with_tools', 'sft_no_tools', 'sft_with_tools',
 
 def generation_budget(profile):
     """Generation budget is profile-defined: TPU always 24K; every GPU profile remains 16K."""
-    return 24576 if ALIASES.get(profile, profile) == 'tpu' else 16384
+    return 24576 if profile_parts(ALIASES.get(profile, profile))[0] == 'tpu' else 16384
 
 
 def fingerprint(value):
@@ -55,15 +60,27 @@ def write(path, value):
 
 
 def select_profiles(target, profiles=None):
+    """Profile names as written in a notebook (``tpu``, ``tpu_4b``, ``tpu_4b_dp``, ``dual_t4_fp16_4b``, ...) -> the hardware profiles they run on."""
     profiles = PROFILES if profiles is None else profiles
     values = list(profiles) if target == 'all' else ([target] if isinstance(target, str) else list(target))
     result = []
     for value in values:
         value = ALIASES.get(value, value)
-        if value not in profiles: raise ValueError('Unknown EVAL_TARGET_PROFILES: ' + str(value))
-        if value not in result: result.append(value)
+        base = profile_parts(value)[0]
+        if base not in profiles: raise ValueError('Unknown EVAL_TARGET_PROFILES: ' + str(value))
+        if base not in result: result.append(base)
     if not result: raise ValueError('Select at least one evaluation profile')
     return result
+
+
+def select_model_size(target, profiles=None):
+    """The model size the selected profile names run with (and make active). ``'all'`` keeps the active size: it is not a profile choice."""
+    if target == 'all': return None
+    values = [target] if isinstance(target, str) else list(target)
+    sizes = {profile_parts(ALIASES.get(v, v))[1] for v in values}
+    if len(sizes) > 1: raise ValueError('EVAL_TARGET_PROFILES mixes model sizes ' + str(sorted(sizes)) + ': evaluate one size per session')
+    if not sizes: return None
+    return select_profile(ALIASES.get(values[0], values[0]))[1]
 
 
 # TPU static-shape generation (dental_agent/model/tpu_generation.py). Kept in code, not in the profile dict: the notebooks embed
@@ -105,8 +122,11 @@ def hardware_reason(profile, kind, devices, profiles=None):
     p = (PROFILES if profiles is None else profiles)[profile]
     if (p['precision'] == 'bf16' or p['compute'] == 'bf16') and any(d['capability'][0] < 8 for d in devices):
         return 'pending: this cohort requires native BF16 (Ampere or newer)'
-    if p['precision'] != 'qlora' and sum(d['gib'] for d in devices) < 18:
-        return 'pending: device memory is below the 16-bit 9B weight footprint, before activations'
+    need = model_spec()['weights_gib_16bit']
+    if p['precision'] != 'qlora' and sum(d['gib'] for d in devices) < need:
+        return f"pending: device memory is below the 16-bit {model_spec()['folder']} weight footprint (about {need:g} GiB), before activations"
+    if (profile == 'dual_t4_ddp_fp16' or (p.get('replicas', 1) > 1 and model_spec()['size'] == '4b')) and p['precision'] != 'qlora' and any(d['gib'] < need + 1.0 for d in devices):   # a FULL replica on EACH GPU, memory is not pooled
+        return f"pending: data parallel keeps a full 16-bit {model_spec()['folder']} replica (about {need:g} GiB, an estimate) on every GPU; a GPU here is smaller"
     if kind == 'speculative' and any(tuple(d['capability']) < (7, 5) for d in devices):
         return 'pending: the configured NVIDIA vLLM serving path requires compute capability 7.5 or newer'
     return None
@@ -121,7 +141,7 @@ def discover(files, profiles, stages=None, selected_k=4, profile_configs=None):
         named_mode = re.search(r'--harness_(rules_skills_index|rules_skills_full)(?=/)', name)
         mode = named_mode[1] if named_mode else 'off'
         parsed_name = re.sub(r'--harness_(rules_skills_index|rules_skills_full)(?=/)', '', name)
-        match = re.fullmatch(r'(sft|grpo)/(qwen3_5_9b_(?:sft|grpo)_(with_tools|no_tools)_(?:k(\d+)_)?(.+)_(qlora|bf16|fp16)__([A-Za-z0-9_-]+))(.*)/adapter_config\.json', parsed_name)
+        match = re.fullmatch(r'(sft|grpo)/(' + re.escape(model_slug()) + r'_(?:sft|grpo)_(with_tools|no_tools)_(?:k(\d+)_)?(.+)_(qlora|bf16|fp16)__([A-Za-z0-9_-]+))(.*)/adapter_config\.json', parsed_name)
         if not match: continue
         kind, stem, track, k, stage, precision, tag, tail = match.groups()
         if mode != 'off' and (kind != 'grpo' or track != 'with_tools'): continue
@@ -294,7 +314,9 @@ def result_repo_type(api, repo, configured=None):
 def result_path(identity):
     """Readable cohort names; content identity separates settings/checkpoint revisions."""
     runtime = identity.get('runtime') or {}
-    parts = ['evaluations', 'dentex', identity['split'], runtime.get('tag', identity['profile']),
+    tag = runtime.get('tag', identity['profile'])
+    if model_spec()['size'] != '9b': tag = f"{tag}_{model_slug()}"   # 4B results sit in their own folder of the SAME results repo; 9B paths are unchanged
+    parts = ['evaluations', 'dentex', identity['split'], tag,
              identity.get('stage', 'base'), identity['kind'], identity['condition']]
     if identity.get('harness_mode','off') != 'off': parts.append('harness_'+identity['harness_mode'])
     if identity.get('k') is not None: parts.append('k'+str(identity['k']))
@@ -468,6 +490,7 @@ class NotebookEvaluations:
         self.repo = os.environ.get('HF_ARTIFACT_REPO','Reza-Nadimi/vlm-dental-models')
         self.results_repo = results_repo or os.environ.get('HF_EVAL_REPO','Reza-Nadimi/vlm-dental-evaluations')
         self.results_repo_type = result_repo_type(api, self.results_repo, results_repo_type)
+        select_model_size(target_profiles)    # the profile names decide the model size; nothing else has to agree with them
         self.profile_configs = copy.deepcopy(PROFILES if profiles is None else profiles)
         self.api,self.download,self.token = api,download,os.environ.get('HF_TOKEN')
         self.profiles,self.kinds,self.stages,self.k = select_profiles(target_profiles, self.profile_configs),tuple(kinds),stages,selected_k
@@ -568,7 +591,7 @@ class NotebookEvaluations:
         hashes = {} if not job['adapter'] else {name:_metadata_digest(self.files[name]) for name in (job['adapter']+'/adapter_config.json',job['weight'])}
         identity = dict(schema=1,profile=job['profile'],runtime=self.profile_configs[job['profile']],kind=job['kind'],condition=job['condition'],
             checkpoint_kind=job.get('checkpoint_kind',job['kind']),track=job.get('track','no_tools'),stage=job['stage'],k=job['k'],adapter=job['adapter'],checkpoint_files=hashes,
-            base_model='Qwen/Qwen3.5-9B',software=self.software,split=split,dev_split_sha256=digest(self.dev_split) if split=='dev' else None,source_sha256=self.source,
+            base_model=model_spec()['hub_id'],software=self.software,split=split,dev_split_sha256=digest(self.dev_split) if split=='dev' else None,source_sha256=self.source,
             max_new_tokens=generation_budget(job['profile']),max_tool_calls=50,max_turns=None,malformed_retries=0,seed=self.seed,size=job.get('size','canonical'))
         from dental_agent.harness.configuration import harness_identity
         mode = job.get('harness_mode','off')
@@ -678,7 +701,7 @@ class NotebookEvaluations:
         elif kind == 'zeroshot':
             if identity['split'] not in ('test','official_test250'): raise ValueError('Legacy zero-shot runner has no fixed-dev split; run this cohort on test or official_test250')
             flags = runtime_flags(job['profile'], self.profile_configs); flags[0] = '--local-precision'
-            command = [sys.executable,'-u','scripts/run_zero_shot.py','--provider','transformers','--model','Qwen/Qwen3.5-9B',
+            command = [sys.executable,'-u','scripts/run_zero_shot.py','--provider','transformers','--model',model_spec()['hub_id'],
                 '--dataset','dentex','--split',('official_test250' if identity['split']=='official_test250' else 'test'),'--data-dir',cohort['data_dir'],'--output',str(folder/'results.jsonl'),'--output-dir',str(folder),
                 '--max-tokens',max_new_tokens,'--image-max-dim','0','--temperature','0','--pacing-delay','0','--git-sync-every','0','--no-retry-empty',*flags]
             if job['profile']=='tpu':    # static TPU vision slots: the canonical FULL letterbox view (labelled image_view=canonical in every record)
@@ -701,6 +724,7 @@ class NotebookEvaluations:
         else:
             ck = self.spec_checkpoints[job['profile']][job['adapter']]
             indices = self.gpu_indices or '0'
+            if eval_replicas(p, None, model_spec()['size']) > 1: indices = indices.split(',')[0]   # the 4B model fits one GPU: no tensor parallelism over PCIe
             command = [sys.executable,'-u','scripts/bench/spec_decode_bench.py','--checkpoint',str(ck),'--data-dir',cohort['data_dir'],
                 '--dev-split',str(self.dev_split),'--split','dev','--max-new-tokens',max_new_tokens,'--max-model-len',str(self.serving_context_length),
                 '--max-tool-calls','50','--seed',str(self.seed),'--conditions',*identity['conditions'],'--vllm-executable',self.vllm,
@@ -785,12 +809,25 @@ class NotebookEvaluations:
                 write(folder/'command.json',command)
                 env = os.environ.copy(); env['PYTHONHASHSEED']=str(self.seed); env['PYTHONUNBUFFERED']='1'
                 if job['kind']=='zeroshot':
-                    env['QWEN35_9B_LOCAL_DIR']=str(self.model_id)
+                    env[model_spec()['local_env']]=str(self.model_id)
+                    env['DENTAL_MODEL_SIZE']=model_spec()['size']
+                # Data parallel evaluation: with Qwen3.5-4B (a replica fits ONE GPU) every GPU runs its own full replica on alternate images, so
+                # no layer is split over the PCIe link. 9B, TPU and the non-shardable kinds keep their single process.
+                replicas = eval_replicas(self.profile_configs[job['profile']],devices,model_spec()['size'])
+                rep_jobs = []
+                if replicas>1 and job['kind'] in SHARDABLE_KINDS:
+                    rep_jobs = replica_commands(command,job['kind'],folder,result,replicas)
+                    seed_replicas(result,rep_jobs)
+                    write(folder/'replicas.json',[dict(command=j['command'],env=j['env']) for j in rep_jobs])
+                    print(f"[REPLICAS] {replicas} single-GPU replicas of {model_spec()['folder']} (one per GPU, no PCIe traffic between them):",job['kind'],job.get('condition',''),flush=True)
+                elif replicas>1 and job['kind']=='rules_skills':
+                    env['CUDA_VISIBLE_DEVICES']=(self.gpu_indices or '0').split(',')[0]    # one whole 4B replica on one GPU instead of a layer split over PCIe
                 row['status']='running'; self._save_inventory()
-                write(folder/'runtime.json',dict(devices=devices,python=sys.version,software=self.software,command=command,checkpoint_revision=self.revision))
-                child = subprocess.Popen(command,cwd=ROOT,env=env)
+                write(folder/'runtime.json',dict(devices=devices,python=sys.version,software=self.software,command=command,checkpoint_revision=self.revision,replicas=len(rep_jobs) or 1))
+                children = start_replicas(rep_jobs,env,ROOT) if rep_jobs else [subprocess.Popen(command,cwd=ROOT,env=env)]
                 last = time.monotonic()
                 def sync(final=False):
+                    if rep_jobs: merge_replicas(result,[j['result'] for j in rep_jobs],identity['image_ids'])
                     payloads,n,done = validate_document(job['kind'],result,identity)
                     if n:
                         payloads['runtime.json']=(folder/'runtime.json').read_bytes()
@@ -807,20 +844,22 @@ class NotebookEvaluations:
                         self._upload_results(folder,prefix,identity,payloads,n,done,row,attempts=3 if final else 1)
                     return n,done
                 try:
-                    while child.poll() is None:
-                        try: child.wait(timeout=5)
-                        except subprocess.TimeoutExpired: pass
+                    while any(c.poll() is None for c in children):
+                        time.sleep(5)
+                        if any(c.poll() not in (None,0) for c in children): break     # a replica failed: stop the others, keep every finished record
                         if time.monotonic()-last>=60: sync(); last=time.monotonic()
                     n,done = sync(final=True)
-                    if child.returncode or not done: raise RuntimeError(f'Evaluation unfinished or failed ({child.returncode}); saved {n} episodes at {folder}')
+                    codes = [c.returncode for c in children]
+                    if any(codes) or not done: raise RuntimeError(f'Evaluation unfinished or failed ({codes}); saved {n} episodes at {folder}')
                     row.update(status='complete',episodes=n)
                 except BaseException:
                     row['status']='failed_or_canceled'; raise
                 finally:
-                    if child.poll() is None:
-                        child.terminate()
-                        try: child.wait(timeout=15)
-                        except subprocess.TimeoutExpired: child.kill(); child.wait()
+                    for child in children:
+                        if child.poll() is None:
+                            child.terminate()
+                            try: child.wait(timeout=15)
+                            except subprocess.TimeoutExpired: child.kill(); child.wait()
                     try: sync(final=True)
                     except Exception as error: print('[SYNC FAILED] Local evidence preserved:',type(error).__name__,str(error))
                     self._save_inventory()

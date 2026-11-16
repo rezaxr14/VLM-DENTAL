@@ -615,7 +615,7 @@ def build_trace_gen_graph(
     registry: ToolRegistry,
     ground_truth: list[dict[str, Any]] | None = None,
     provider: str = "local",
-    model: str = "Qwen/Qwen3.5-9B",
+    model: str | None = None,   # None = the active size's Hub id (DENTAL_MODEL_SIZE; 9B when unset)
     max_tool_calls: int = 50,
     min_turns: int = 5,
     max_turns: int = 25,
@@ -630,6 +630,9 @@ def build_trace_gen_graph(
     max_identical_repeats: int = 3,
 ):
     """Build and compile the LangGraph for ground-truth-directed, real-tool-execution generation."""
+    if model is None:
+        from dental_agent.utils.model_size import default_model_id
+        model = default_model_id()
     graph = StateGraph(TraceGenState)
 
     graph.add_node("reasoning", _reasoning_node_factory(
@@ -668,7 +671,7 @@ def run_trace_gen(
     registry: ToolRegistry,
     system_prompt: str,
     provider: str = "local",
-    model: str = "Qwen/Qwen3.5-9B",
+    model: str | None = None,   # None = the active size's Hub id (DENTAL_MODEL_SIZE; 9B when unset)
     max_turns: int = 25,
     min_turns: int = 5,
     max_tool_calls: int = 50,
@@ -686,6 +689,9 @@ def run_trace_gen(
     
     Returns (trajectory_dict, None) on success or (None, error_reason) on failure.
     """
+    if model is None:
+        from dental_agent.utils.model_size import default_model_id
+        model = default_model_id()
     if not ground_truth:
         directive = (
             "TEACHER DIRECTIVE: You are generating an expert demonstration trace for SFT on a clinically verified healthy scan.\n"

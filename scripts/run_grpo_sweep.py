@@ -27,6 +27,7 @@ from dental_agent.config import load_config
 from dental_agent.data.dentex import load_dentex_dataset
 from dental_agent.data.dev_split import load_dev_keys, select_training_pool
 from dental_agent.data.tufts import load_tufts_dataset
+from dental_agent.training import ddp
 from dental_agent.training.grpo import train_grpo
 from dental_agent.utils.canonical import SLOT_BUDGET, add_letterbox_arg, check_gpu_image_policy, parse_slot_budget, set_letterbox
 from scripts.run_grpo import ensure_pool_images, resolve_grpo_inputs, resolve_sft_reference, sft_reference_candidates
@@ -97,6 +98,11 @@ def parse_args():
         default=True,
         help="Enable PyTorch/XLA FSDP parameter sharding across TPU cores to fit 9B BF16 model within 16 GB HBM (default: True on multi-core TPU)",
     )
+    parser.add_argument(
+        "--replicate-weights", action=argparse.BooleanOptionalAction, default=False,
+        help="TPU SPMD only: a FULL bf16 weight copy on every core (pure data parallel) instead of FSDPv2 sharding. Needs a model that fits one "
+             "core's HBM (Qwen3.5-4B). Costs about 9.5 GiB of every core's HBM (an estimate). Off = unchanged FSDPv2 sharding.",
+    )
     parser.add_argument("--temperature", type=float, default=0.7,
                         help="Sampling temperature of the GRPO rollouts (default 0.7; must be > 0).")
     parser.add_argument("--precision", type=str, default="bf16", choices=["bf16", "fp16", "qlora"],
@@ -134,6 +140,9 @@ def parse_args():
     parser.add_argument("--include-healthy", action=argparse.BooleanOptionalAction, default=True,
                         help="Keep healthy images (ground truth []) in the pool.")
     from dental_agent.harness.configuration import HARNESS_MODES
+    parser.add_argument("--data-parallel", action=argparse.BooleanOptionalAction, default=False,
+                        help="CUDA only: one process per GPU with a full replica (profile dual_t4_ddp_fp16); launch this script with "
+                             "python -m torch.distributed.run --nproc_per_node 2. Every K runs data-parallel. Off = unchanged.")
     parser.add_argument("--harness-mode", choices=HARNESS_MODES, default="off",
                         help="Rules/skills during GRPO rollouts; off preserves the original control")
     return parser.parse_args()
@@ -173,6 +182,18 @@ def main():
         raise SystemExit("--resume-hf only downloads checkpoints; add --resume to continue the sweep from them.")
     if args.preflight:
         sys.exit(1 if _preflight_all(args) else 0)
+    ddp.require_consistent(args.data_parallel)   # --data-parallel and the torchrun launch must agree; neither is guessed from the other
+    if args.data_parallel:
+        ddp.init_process_group()
+    try:
+        _sweep(args)
+    finally:
+        ddp.shutdown()
+
+
+def _sweep(args) -> None:
+    if args.data_parallel:
+        ddp.check_replica_fits_here(args.precision)
     if args.spmd:
         try:
             import torch_xla.runtime as xr
@@ -205,9 +226,9 @@ def main():
     # Load dataset
     # TRAIN images only (the default split of load_dentex_dataset is the official validation = test set).
     # Every input is found (or fetched) once, before the first K loads the 9B model.
-    sft_dir = resolve_grpo_inputs(args, cfg.data_dir)
+    sft_dir = ddp.in_rank_order(lambda: resolve_grpo_inputs(args, cfg.data_dir))   # plain call without --data-parallel
     images_df, annots_df, categories_df = load_dentex_dataset(cfg.data_dir, split_name="train")
-    images_df = ensure_pool_images(images_df, "dentex", cfg.data_dir)
+    images_df = ddp.in_rank_order(lambda: ensure_pool_images(images_df, "dentex", cfg.data_dir))
     images_df = select_training_pool(
         images_df, annots_df, dataset="dentex", dev_keys=load_dev_keys(args.dev_split),
         include_healthy=args.include_healthy, max_images=args.max_images, seed=args.seed,
@@ -230,7 +251,7 @@ def main():
             assert_harness_identity(json.loads(final_meta.read_text()).get("extra", {}).get("harness"), args.harness_mode)
             print(f">>> K={k} is already complete ({final_meta.parent}); skipped. <<<")
             continue
-        if args.resume_hf:
+        if args.resume_hf and ddp.is_main():
             try:
                 from dental_agent.training.grpo_resume import fetch_latest_checkpoint_from_hub
                 tag = fetch_latest_checkpoint_from_hub(
@@ -239,6 +260,7 @@ def main():
             except Exception as e:
                 print(f"[RESUME WARNING] K={k}: could not restore from the Hub: {e}")
 
+        ddp.barrier()   # --data-parallel: the other rank reads the checkpoint folder only after rank 0 finished downloading it
         from dental_agent.model.local_runtime import runtime_from_args
         final_ckpt = train_grpo(
             images_df=images_df,
@@ -259,6 +281,7 @@ def main():
             path_in_repo_prefix=path_in_repo_prefix,
             num_cores=args.num_cores,
             use_fsdp=args.fsdp,
+            replicate_weights=args.replicate_weights,
             canonical_resize=args.canonical_resize,
             temperature=args.temperature,
             use_spmd=args.spmd,
@@ -270,6 +293,7 @@ def main():
             runtime_options=runtime_from_args(args),
             gradient_checkpointing=args.gradient_checkpointing,
             harness_mode=args.harness_mode, seed=args.seed,
+            data_parallel=args.data_parallel,
         )
 
         elapsed = time.time() - start_time
@@ -289,8 +313,9 @@ def main():
         }
 
         results_table.append(k_result)
-        with open(sweep_log, "a", encoding="utf-8") as f:
-            f.write(json.dumps(k_result) + "\n")
+        if ddp.is_main():
+            with open(sweep_log, "a", encoding="utf-8") as f:
+                f.write(json.dumps(k_result) + "\n")
 
     print("\n======================================================================")
     print("GRPO K-SWEEP EXPERIMENT SUMMARY")

@@ -303,16 +303,20 @@ def estimate_grpo_memory(
     group_size: int = 4,
     seq_len: int = 2048,
     lora_fraction: float = 0.01,
+    hidden_size: int | None = None,
 ) -> dict[str, float]:
-    """Analytical GRPO VRAM budget estimator."""
+    """Analytical GRPO VRAM budget estimator. ``hidden_size`` defaults to the active model size's text hidden size (9B 4096, 4B 2560)."""
+    if hidden_size is None:
+        from dental_agent.utils.model_size import spec
+        hidden_size = spec()["text_hidden"]
     base_model_gb = param_count_billions * 1e9 * (quant_bits / 8) / (1024**3)
     lora_params = param_count_billions * 1e9 * lora_fraction
     lora_optimizer_gb = lora_params * 16 / (1024**3)
     lora_weights_gb = lora_params * 2 / (1024**3)
 
     # Approximated activation & KV memory per group rollout
-    activations_gb = (group_size * seq_len * 4096 * 4 * 2) / (1024**3)
-    ref_policy_pass_gb = (seq_len * 4096 * 2) / (1024**3)
+    activations_gb = (group_size * seq_len * hidden_size * 4 * 2) / (1024**3)
+    ref_policy_pass_gb = (seq_len * hidden_size * 2) / (1024**3)
     cuda_overhead_gb = 1.2
 
     total_gb = (

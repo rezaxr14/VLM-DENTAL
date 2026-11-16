@@ -224,7 +224,7 @@ class APISessionPool:
 
         # Cache identity includes the resolved local weight folder and every runtime control.
         if load_name != model_name:
-            print(f"[MODEL] {model_name}: weights from local folder {load_name} (QWEN35_9B_LOCAL_DIR), no download.", flush=True)
+            print(f"[MODEL] {model_name}: weights from local folder {load_name} (the QWEN35_*_LOCAL_DIR folder), no download.", flush=True)
         cfg = ModelConfig(name=load_name, load_in_4bit=load_4bit)
 
         print(f"Loading native Transformers model '{model_name}' (device_map='auto', 4bit={load_4bit})...", flush=True)

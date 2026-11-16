@@ -37,6 +37,7 @@ from dental_agent.config import load_config
 from dental_agent.data.dentex import load_dentex_dataset
 from dental_agent.data.dev_split import load_dev_keys, select_training_pool
 from dental_agent.data.tufts import load_tufts_dataset
+from dental_agent.training import ddp
 from dental_agent.training.grpo import train_grpo
 from dental_agent.utils.canonical import SLOT_BUDGET, add_letterbox_arg, check_gpu_image_policy, parse_slot_budget, set_letterbox, slot_totals
 
@@ -156,7 +157,7 @@ def main() -> None:
     parser.add_argument(
         "--model-id",
         type=str,
-        default=os.environ.get("MODEL_NAME", "Qwen/Qwen3.5-9B"),
+        default=os.environ.get("MODEL_NAME") or __import__("dental_agent.utils.model_size", fromlist=["x"]).default_model_id(),
         help="Base VLM model identifier or local directory (e.g. /kaggle/input/qwen3-5-9b)",
     )
     parser.add_argument("--output-dir", type=str, default="data/models", help="Directory to save RL checkpoints")
@@ -194,6 +195,11 @@ def main() -> None:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Enable PyTorch/XLA FSDP parameter sharding across TPU cores to fit 9B BF16 model within 16 GB HBM (default: True on multi-core TPU)",
+    )
+    parser.add_argument(
+        "--replicate-weights", action=argparse.BooleanOptionalAction, default=False,
+        help="TPU SPMD only: a FULL bf16 weight copy on every core (pure data parallel) instead of FSDPv2 sharding. Needs a model that fits one "
+             "core's HBM (Qwen3.5-4B). Costs about 9.5 GiB of every core's HBM (an estimate). Off = unchanged FSDPv2 sharding.",
     )
     parser.add_argument(
         "--temperature",
@@ -333,6 +339,11 @@ def main() -> None:
     from dental_agent.harness.configuration import HARNESS_MODES
     parser.add_argument("--harness-mode", choices=HARNESS_MODES, default="off",
                         help="Rules/skills during GRPO rollouts; off preserves the original control")
+    parser.add_argument(
+        "--data-parallel", action=argparse.BooleanOptionalAction, default=False,
+        help="CUDA only: one process per GPU with a FULL model replica (profile dual_t4_ddp_fp16). Each rank rolls out its own image; one "
+             "update averages the LoRA gradients of --nproc_per_node images. Needs: python -m torch.distributed.run --nproc_per_node 2 "
+             "scripts/run_grpo.py ... Off = unchanged.")
     from dental_agent.training.tpu_diagnostics import add_report_arguments
     add_report_arguments(parser)  # opt-in run report; unset --tpu-report-dir keeps everything off
     args = parser.parse_args()
@@ -343,6 +354,7 @@ def main() -> None:
         from dental_agent.training.preflight import run_preflight
         sys.exit(1 if run_preflight(args, sft_reference_candidates(args.track, args.sft_stage, args.precision)) else 0)
 
+    ddp.require_consistent(args.data_parallel)   # --data-parallel and the torchrun launch must agree; neither is guessed from the other
     from dental_agent.training.tpu_diagnostics import start_report
     start_report(args, role="grpo")  # None (and nothing is created) unless --tpu-report-dir is given
     is_tpu = False
@@ -366,6 +378,14 @@ def main() -> None:
             print("[DIAGNOSTIC] If running from Jupyter/Colab/Kaggle, ensure the notebook kernel did not call xm.xla_device() before launching this script.")
             print("[DIAGNOSTIC] Please restart the notebook session (Run -> Restart Session) and re-run to release /dev/vfio/*.\n")
             raise RuntimeError(f"Multi-core Cloud TPU GRPO launch failed: {e}") from e
+    elif args.data_parallel:
+        if is_tpu:
+            raise SystemExit("--data-parallel is for the CUDA path; the TPU path shards through SPMD.")
+        ddp.init_process_group()
+        try:
+            run_worker(ddp.local_rank(), args)
+        finally:
+            ddp.shutdown()
     else:
         run_worker(0, args)
 
@@ -391,7 +411,7 @@ def run_worker(index: int, args: argparse.Namespace):
         device = xm.xla_device()
         is_master = xm.is_master_ordinal()
     except Exception:
-        is_master = True
+        is_master = ddp.is_main()   # True without --data-parallel; rank 0 only with it
 
     if args.temperature <= 0:
         raise SystemExit("--temperature must be > 0 (greedy rollouts give identical samples and zero advantages).")
@@ -408,6 +428,8 @@ def run_worker(index: int, args: argparse.Namespace):
     set_letterbox(args.canonical_letterbox)
     import torch
     check_gpu_image_policy(args.canonical_resize, args.canonical_letterbox, cuda=torch.cuda.is_available(), tpu=is_tpu, what="GRPO")
+    if args.data_parallel:
+        ddp.check_replica_fits_here(args.precision)
     slot_budget = parse_slot_budget(*args.vision_slots)
     if args.pad_vision_to_slots and args.max_seq_len <= slot_totals(slot_budget)["tokens"]:
         raise SystemExit(f"--max-seq-len {args.max_seq_len} cannot hold the static vision tokens of --vision-slots.")
@@ -417,7 +439,7 @@ def run_worker(index: int, args: argparse.Namespace):
 
     # Every input is found (or fetched) before the 9B model is touched: SFT adapter (incl. the _<precision> folder, Kaggle
     # inputs, Hub), base model, YOLO checkpoint, dev split. A missing one stops here, never as a fresh-LoRA run.
-    resolved_sft_dir = resolve_grpo_inputs(args, cfg.data_dir)
+    resolved_sft_dir = ddp.in_rank_order(lambda: resolve_grpo_inputs(args, cfg.data_dir))   # plain call without --data-parallel
 
     # Checkpoint directory naming: qwen3_5_9b_grpo_{track}_k{group_size}_{sft_stage}
     target_name = grpo_name(args.track, args.group_size, args.sft_stage, args.precision, args.hf_run_tag, harness_mode=args.harness_mode)
@@ -436,6 +458,7 @@ def run_worker(index: int, args: argparse.Namespace):
             print(f"[RESUME] Downloaded {tag} to {out_dir}." if tag else "[RESUME] The Hub holds no step checkpoint for this run.")
         except Exception as e:
             print(f"[RESUME WARNING] Could not restore from HF Hub: {e}")
+    ddp.barrier()   # --data-parallel: the other rank reads the checkpoint folder only after rank 0 finished downloading it
 
     dataset_name = args.dataset.strip().lower()
     if dataset_name == "tufts":
@@ -443,7 +466,7 @@ def run_worker(index: int, args: argparse.Namespace):
     else:
         # TRAIN images only. The default split of load_dentex_dataset is the official validation set = the test set.
         images_df, annots_df, categories_df = load_dentex_dataset(cfg.data_dir, split_name="train")
-    images_df = ensure_pool_images(images_df, dataset_name, cfg.data_dir)
+    images_df = ddp.in_rank_order(lambda: ensure_pool_images(images_df, dataset_name, cfg.data_dir))   # rank 0 fetches any missing image first
     images_df = select_training_pool(
         images_df,
         annots_df,
@@ -491,6 +514,7 @@ def run_worker(index: int, args: argparse.Namespace):
         path_in_repo_prefix=path_in_repo_prefix,
         num_cores=args.num_cores,
         use_fsdp=args.fsdp,
+        replicate_weights=args.replicate_weights,
         canonical_resize=args.canonical_resize,
         temperature=args.temperature,
         use_spmd=args.spmd,
@@ -507,6 +531,7 @@ def run_worker(index: int, args: argparse.Namespace):
         tpu_generation_chunk_tokens=args.tpu_generation_chunk_tokens,
         tpu_generation_tiers=tuple(args.tpu_generation_tiers),
         tpu_generation_warmup=args.tpu_generation_warmup,
+        data_parallel=args.data_parallel,
     )
 
 

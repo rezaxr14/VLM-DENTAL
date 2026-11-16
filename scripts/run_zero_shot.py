@@ -177,14 +177,16 @@ def resolve_provider_and_model(args: argparse.Namespace) -> tuple[str, str]:
             or os.environ.get("GENERATOR_MODEL")
         )
         if not model:
+            from dental_agent.utils.model_size import default_model_id
+            _qwen_default = default_model_id()
             default_models = {
                 "gemini": "gemini-3.5-flash-lite",
                 "nvidia_nim": "meta/llama-3.2-11b-vision-instruct",
                 "groq": "qwen/qwen3.6-27b",
                 "openrouter": "google/gemma-4-31b-it:free",
-                "local": "Qwen/Qwen3.5-9B",
-                "transformers": "Qwen/Qwen3.5-9B",
-                "local_hf": "Qwen/Qwen3.5-9B",
+                "local": _qwen_default,
+                "transformers": _qwen_default,
+                "local_hf": _qwen_default,
                 "openai": "gpt-4o",
                 "anthropic": "claude-3-7-sonnet-20250219",
             }

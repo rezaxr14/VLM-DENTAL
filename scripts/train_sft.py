@@ -66,6 +66,7 @@ repo_root = str(Path(__file__).resolve().parent.parent)
 if repo_root not in sys.path:
     sys.path.insert(0, repo_root)
 
+from dental_agent.training import ddp
 from dental_agent.training.sft import (
     DentalSFTDataset,
     BucketedQwenVLCollator,
@@ -111,7 +112,7 @@ def parse_args():
     parser.add_argument(
         "--model-id",
         type=str,
-        default=os.environ.get("MODEL_NAME", "Qwen/Qwen3.5-9B"),
+        default=os.environ.get("MODEL_NAME") or __import__("dental_agent.utils.model_size", fromlist=["x"]).default_model_id(),
         help="Base VLM model identifier or local directory",
     )
     parser.add_argument(
@@ -320,6 +321,10 @@ def parse_args():
         help="Enable PyTorch/XLA FSDP parameter sharding across TPU cores to fit 9B BF16 model within 16 GB HBM (default: True on multi-core TPU)",
     )
     parser.add_argument(
+        "--replicate-weights", action=argparse.BooleanOptionalAction, default=False,
+        help="TPU SPMD only: keep a FULL bf16 copy of the weights on every core (pure data parallel: the batch is split over the cores, LoRA gradients are all-reduced by the compiler) instead of sharding them with FSDPv2. Needs a model that fits one core's HBM (Qwen3.5-4B; a 9B copy does not). Costs about 9.5 GiB of every core's HBM (an estimate), which is activation room taken from the context length. Off = unchanged FSDPv2 sharding.",
+    )
+    parser.add_argument(
         "--xla-cache-dir",
         type=str,
         default=None,
@@ -331,6 +336,11 @@ def parse_args():
         help="Check this exact command (base model, traces, trace images, token-length manifest, dev split, flag combination, "
              "hub token, hardware, disk) and exit without loading the model. Read-only: it never changes a setting.",
     )
+    parser.add_argument(
+        "--data-parallel", action=argparse.BooleanOptionalAction, default=False,
+        help="CUDA only: one process per GPU, each with a FULL model replica, LoRA gradients summed across processes at every optimizer "
+             "update (profile dual_t4_ddp_fp16). Needs a torchrun launch: python -m torch.distributed.run --nproc_per_node 2 "
+             "scripts/train_sft.py ... Effective batch = --batch-size x --gradient-accumulation-steps x processes. Off = unchanged.")
     args = parser.parse_args()
     if args.gradient_accumulation_steps is None:
         args.gradient_accumulation_steps = 1 if args.num_cores > 1 else 16
@@ -642,7 +652,7 @@ def _run_training(index: int, args: argparse.Namespace):
         raise FileNotFoundError(f"No valid trace files found for stage='{args.stage}', track='{args.track}'")
 
     if args.output_dir is None:
-        args.output_dir = f"data/models/qwen3_5_9b_sft_{args.track}_{args.stage}_{args.precision}"
+        args.output_dir = f"data/models/{__import__('dental_agent.utils.model_size', fromlist=['x']).slug()}_sft_{args.track}_{args.stage}_{args.precision}"
 
     out_path = Path(args.output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
@@ -663,6 +673,11 @@ def _run_training(index: int, args: argparse.Namespace):
     if is_tpu:
         import torch_xla.core.xla_model as xm
         is_master = xm.is_master_ordinal()
+    elif ddp.is_active():
+        is_master = ddp.is_main()   # rank 0 owns every print, file, Hub and validation; the other rank only trains
+        if is_tpu or args.debug_steps or device.type != "cuda":
+            raise SystemExit("--data-parallel is CUDA-only and does not combine with --debug-steps (debug one GPU first, without it).")
+        ddp.check_replica_fits_here(args.precision)
 
     canonical_resize = args.canonical_resize
     set_letterbox(args.canonical_letterbox)   # one value for the dataset, its DataLoader workers and the manifest check
@@ -702,6 +717,11 @@ def _run_training(index: int, args: argparse.Namespace):
     if is_tpu and args.xla_spmd and not args.fsdp:
         raise SystemExit("--spmd shards the weights through FSDPv2; --no-fsdp would replicate 18 GB on every core. "
                          "Use --spmd --fsdp, or --no-spmd for the legacy path.")
+    if args.replicate_weights:
+        if not (is_tpu and args.xla_spmd and args.fsdp):
+            raise SystemExit("--replicate-weights is the TPU SPMD data-parallel layout: it needs a TPU run with --spmd --fsdp "
+                             "(--fsdp names the mesh axis the batch is sharded on).")
+        ddp.check_replica_fits("bf16", 15.0)   # a v5e core has about 15 GiB of HBM: a 9B copy cannot be replicated, refuse before loading
     if is_master and args.hf_repo and not args.debug_steps and args.hf_upload_check:
         from dental_agent.model.hub_artifacts import check_hub_write_access
         check_hub_write_access(args.hf_repo, path_in_repo, metadata={
@@ -808,25 +828,28 @@ def _run_training(index: int, args: argparse.Namespace):
         # NF4 + double quantization + this compute dtype; the vision tower (projector included) and lm_head stay 16-bit
         # (QLORA_SKIP_MODULES), the same list GRPO / evaluation / inference load with.
         load_kwargs["quantization_config"] = qlora_bnb_config(bnb_compute_dtype)
-        load_kwargs["device_map"] = "auto"
+        load_kwargs["device_map"] = ddp.device_map()   # "auto" (split over the GPUs) unless --data-parallel: then the whole model on THIS GPU
     elif not is_tpu and torch.cuda.is_available():
-        load_kwargs["device_map"] = "auto"
+        load_kwargs["device_map"] = ddp.device_map()
 
     if is_master:
         if is_tpu and args.fsdp and args.num_cores > 1:
             print(f"[MODEL] Loading {args.model_id} (master weights: float32 for FSDP sharding across {args.num_cores} cores, compute: bfloat16)...")
         else:
             print(f"[MODEL] Loading {args.model_id}...")
-    with model_loading_context(args.loader_mode, args.load_cpu_threads, args.load_traceback_seconds):
-        try:
-            model = ModelClass.from_pretrained(args.model_id, **load_kwargs)
-        except TypeError as exc:
-            # Only retry an unsupported dtype keyword; never repeat a partial
-            # 9B load for an unrelated TypeError raised inside the loader.
-            if "dtype" not in str(exc) or "unexpected keyword" not in str(exc):
-                raise
-            load_kwargs["torch_dtype"] = load_kwargs.pop("dtype")
-            model = ModelClass.from_pretrained(args.model_id, **load_kwargs)
+    def _load_base_model():
+        with model_loading_context(args.loader_mode, args.load_cpu_threads, args.load_traceback_seconds):
+            try:
+                return ModelClass.from_pretrained(args.model_id, **load_kwargs)
+            except TypeError as exc:
+                # Only retry an unsupported dtype keyword; never repeat a partial
+                # 9B load for an unrelated TypeError raised inside the loader.
+                if "dtype" not in str(exc) or "unexpected keyword" not in str(exc):
+                    raise
+                load_kwargs["torch_dtype"] = load_kwargs.pop("dtype")
+                return ModelClass.from_pretrained(args.model_id, **load_kwargs)
+
+    model = ddp.in_rank_order(_load_base_model)   # plain call without --data-parallel; one replica at a time with it (host RAM)
     print("[LOAD] Model loading finished; loader hooks and CPU thread count restored.", flush=True)
 
     # Define LoRA Target Modules (Language Model + optional Vision Projector)
@@ -907,7 +930,7 @@ def _run_training(index: int, args: argparse.Namespace):
         if is_tpu and args.tpu_loss_chunk_tokens:
             from dental_agent.training.tpu_chunked_loss import install_tpu_chunked_loss
             install_tpu_chunked_loss(model, args.tpu_loss_chunk_tokens, mesh=spmd_mesh)
-        model = wrap_spmd_model(model, mesh=spmd_mesh, is_master=is_master)
+        model = wrap_spmd_model(model, mesh=spmd_mesh, is_master=is_master, replicate_weights=args.replicate_weights)
     else:
         model = wrap_distributed_model(
             model,
@@ -967,7 +990,7 @@ def _run_training(index: int, args: argparse.Namespace):
             pass
 
     # Dataset & Collator: pass max_seq_len for instant O(1) manifest filtering
-    full_dataset = DentalSFTDataset(
+    full_dataset = ddp.in_rank_order(lambda: DentalSFTDataset(   # rank 0 builds any on-disk manifest cache first, rank 1 then reads it
         resolved_traces,
         processor=processor,
         track=args.track,
@@ -978,7 +1001,7 @@ def _run_training(index: int, args: argparse.Namespace):
         slot_budget=slot_budget,
         mask_malformed_turns=args.mask_malformed_turns,
         exclude_keys=load_dev_keys(args.dev_split),
-    )
+    ))
     val_size = max(int(len(full_dataset) * 0.05), 1) if len(full_dataset) >= 20 else 0
     train_size = len(full_dataset) - val_size
 
@@ -1069,6 +1092,21 @@ def _run_training(index: int, args: argparse.Namespace):
             print(f"[LOADER] SPMD global batch {global_batch_size}: {len(train_dataloader)} steps x {global_batch_size} = {kept} of "
                   f"{len(train_dataset)} training samples per epoch ({len(train_dataset) - kept} dropped, reshuffled every epoch); "
                   f"validation {len(val_dataloader) * global_batch_size if val_dataloader else 0} of {len(val_dataset) if val_dataset else 0}.")
+    elif ddp.is_active():
+        # Same seeded global order on every rank; global batch b goes to rank b % world. Every rank runs the same number of batches
+        # (the ragged tail is dropped and reshuffled each epoch), so the gradient collectives always pair up.
+        resumable_sampler = ddp.RankStridedBatches(ResumableShuffleSampler(len(train_dataset), SFT_SHUFFLE_SEED),
+                                                   args.batch_size, ddp.rank(), ddp.world_size())
+        train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, sampler=resumable_sampler, collate_fn=collator)
+        if len(train_dataloader) == 0:
+            raise SystemExit(f"[DDP] {len(train_dataset)} training samples are fewer than one global batch of "
+                             f"{args.batch_size * ddp.world_size()} (--batch-size {args.batch_size} x {ddp.world_size()} processes).")
+        val_dataloader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, collate_fn=collator) if (val_dataset and is_master) else None
+        if is_master:
+            kept = len(train_dataloader) * args.batch_size * ddp.world_size()
+            print(f"[LOADER] DDP x{ddp.world_size()}: {len(train_dataloader)} batches per rank per epoch = {kept} of {len(train_dataset)} "
+                  f"training samples ({len(train_dataset) - kept} dropped, reshuffled every epoch); effective batch "
+                  f"{args.batch_size * args.gradient_accumulation_steps * ddp.world_size()}.")
     elif is_tpu and ws > 1:
         train_sampler = torch.utils.data.distributed.DistributedSampler(
             train_dataset,
@@ -1083,6 +1121,10 @@ def _run_training(index: int, args: argparse.Namespace):
         train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, sampler=resumable_sampler, collate_fn=collator)
         val_dataloader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, collate_fn=collator) if (val_dataset and is_master) else None
 
+    if ddp.is_active():
+        n_synced = ddp.broadcast_trainable(model.parameters())   # identical LoRA on every replica before the first step
+        if is_master:
+            print(f"[DDP] {ddp.world_size()} replicas; {n_synced} trainable tensors broadcast from rank 0.", flush=True)
     optimizer = torch.optim.AdamW(
         [p for p in model.parameters() if p.requires_grad],
         lr=args.learning_rate,
@@ -1114,63 +1156,76 @@ def _run_training(index: int, args: argparse.Namespace):
     order_identity = ({"sampler_seed": SFT_SHUFFLE_SEED, "loader_batch_size": int(loader_batch_size),
                        "grad_accum_steps": int(args.gradient_accumulation_steps), "train_samples": len(train_dataset)}
                       if resumable_sampler is not None else None)
+    if order_identity is not None and ddp.is_active():
+        order_identity["world_size"] = ddp.world_size()   # a checkpoint of a different process count cannot be resumed into this order
     resume_batches_done, resume_epoch_start_step = 0, None   # set by an exact mid-epoch resume
 
     # Resume capability from HF Hub or local checkpoint
     state_file = out_path / "training_state.json"
-    if args.resume_hf and is_master and not args.debug_steps:
-        print(f"[RESUME] Checking HF Hub for latest checkpoint in {args.resume_hf} (subfolder={path_in_repo})...")
-        try:
-            from huggingface_hub import snapshot_download
-            import shutil
-            download_dir = out_path.parent / ".hf_cache"
-            snapshot_download(
-                repo_id=args.resume_hf,
-                allow_patterns=[f"{path_in_repo}/*"],
-                local_dir=str(download_dir),
-            )
-            sub_dir = download_dir / path_in_repo
-            if sub_dir.exists():
-                for item in sub_dir.iterdir():
-                    dst = out_path / item.name
-                    if item.is_file():
-                        shutil.copy2(item, dst)
-                    elif item.is_dir():
-                        shutil.copytree(item, dst, dirs_exist_ok=True)
-            elif (download_dir / "training_state.json").exists():
-                for item in download_dir.iterdir():
-                    if item.name != ".hf_cache":
+    if args.resume_hf and not args.debug_steps and (is_master or ddp.is_active()):
+        # Rank 0 downloads; EVERY rank then restores the same folder (weights, optimizer moments, schedule, scaler), so the replicas
+        # start identical. Without --data-parallel this is the unchanged single-process path.
+        download_failed = False
+        if is_master:
+            print(f"[RESUME] Checking HF Hub for latest checkpoint in {args.resume_hf} (subfolder={path_in_repo})...")
+            try:
+                from huggingface_hub import snapshot_download
+                import shutil
+                download_dir = out_path.parent / ".hf_cache"
+                snapshot_download(
+                    repo_id=args.resume_hf,
+                    allow_patterns=[f"{path_in_repo}/*"],
+                    local_dir=str(download_dir),
+                )
+                sub_dir = download_dir / path_in_repo
+                if sub_dir.exists():
+                    for item in sub_dir.iterdir():
                         dst = out_path / item.name
                         if item.is_file():
                             shutil.copy2(item, dst)
                         elif item.is_dir():
                             shutil.copytree(item, dst, dirs_exist_ok=True)
+                elif (download_dir / "training_state.json").exists():
+                    for item in download_dir.iterdir():
+                        if item.name != ".hf_cache":
+                            dst = out_path / item.name
+                            if item.is_file():
+                                shutil.copy2(item, dst)
+                            elif item.is_dir():
+                                shutil.copytree(item, dst, dirs_exist_ok=True)
 
-            if state_file.is_file():
-                # Weights, optimizer moments and the schedule position come back together (restore_sft_checkpoint). A failure here is
-                # fatal: continuing would train a fresh LoRA under a resumed schedule and lose the progress without saying so.
-                try:
-                    restored = restore_sft_checkpoint(out_path, model, optimizer, scheduler, resumable_order=order_identity)
-                except Exception as e:
-                    raise SystemExit(f"[RESUME FAILED] {out_path} holds a checkpoint that cannot be restored: {e}") from e
-                if scaler.is_enabled() and (out_path / "scaler.pt").exists():
-                    scaler.load_state_dict(torch.load(out_path / "scaler.pt", map_location="cpu", weights_only=True))
-                total_steps = restored["step"]
-                start_epoch = restored["epoch"]
-                best_val_loss = restored["best_val_loss"]
-                checkpoint_epoch = start_epoch if restored["mid_epoch"] else start_epoch - 1
-                if "epoch_batches_done" in restored:
-                    resume_batches_done, resume_epoch_start_step = restored["epoch_batches_done"], restored["epoch_start_step"]
-                print(f"[RESUME] Restored HF checkpoint from Epoch {checkpoint_epoch}, Step {total_steps} (best_val_loss={best_val_loss:.4f}); "
-                      f"{restored['tensors']} adapter tensors restored"
-                      + (f"; exact mid-epoch resume: skipping the {resume_batches_done} batches of epoch {start_epoch} already trained on." if resume_batches_done
-                         else ("; the checkpoint was written mid-epoch by an older run (no stored batch position), so this epoch restarts from its first batch." if restored["mid_epoch"] else ".")))
-            else:
-                print(f"[RESUME] {args.resume_hf} holds no checkpoint for {path_in_repo}: starting at step 1.")
-        except SystemExit:
-            raise
-        except Exception as e:
-            print(f"[RESUME WARNING] Could not download a checkpoint from HF ({e}); starting at step 1.")
+            except Exception as e:
+                print(f"[RESUME WARNING] Could not download a checkpoint from HF ({e}); starting at step 1.")
+                download_failed = True
+        # also the barrier: rank 1 waits here until rank 0 has finished downloading and copying
+        download_failed = ddp.all_reduce_sum([1.0 if download_failed else 0.0], device)[0] > 0
+        if not download_failed:
+            try:
+                if state_file.is_file():
+                    # Weights, optimizer moments and the schedule position come back together (restore_sft_checkpoint). A failure here is
+                    # fatal: continuing would train a fresh LoRA under a resumed schedule and lose the progress without saying so.
+                    try:
+                        restored = restore_sft_checkpoint(out_path, model, optimizer, scheduler, resumable_order=order_identity)
+                    except Exception as e:
+                        raise SystemExit(f"[RESUME FAILED] {out_path} holds a checkpoint that cannot be restored: {e}") from e
+                    if scaler.is_enabled() and (out_path / "scaler.pt").exists():
+                        scaler.load_state_dict(torch.load(out_path / "scaler.pt", map_location="cpu", weights_only=True))
+                    total_steps = restored["step"]
+                    start_epoch = restored["epoch"]
+                    best_val_loss = restored["best_val_loss"]
+                    checkpoint_epoch = start_epoch if restored["mid_epoch"] else start_epoch - 1
+                    if "epoch_batches_done" in restored:
+                        resume_batches_done, resume_epoch_start_step = restored["epoch_batches_done"], restored["epoch_start_step"]
+                    print(f"[RESUME] Restored HF checkpoint from Epoch {checkpoint_epoch}, Step {total_steps} (best_val_loss={best_val_loss:.4f}); "
+                          f"{restored['tensors']} adapter tensors restored"
+                          + (f"; exact mid-epoch resume: skipping the {resume_batches_done} batches of epoch {start_epoch} already trained on." if resume_batches_done
+                             else ("; the checkpoint was written mid-epoch by an older run (no stored batch position), so this epoch restarts from its first batch." if restored["mid_epoch"] else ".")))
+                else:
+                    print(f"[RESUME] {args.resume_hf} holds no checkpoint for {path_in_repo}: starting at step 1.")
+            except SystemExit:
+                raise
+            except Exception as e:
+                print(f"[RESUME WARNING] Could not download a checkpoint from HF ({e}); starting at step 1.")
 
     # ``epoch`` is the resume cursor; ``checkpoint_epoch`` names the epoch that produced the saved weights.
     # A checkpoint written inside an epoch
@@ -1180,7 +1235,7 @@ def _run_training(index: int, args: argparse.Namespace):
                 "batches_done": resume_batches_done}   # loader batches of this epoch consumed up to the last optimizer step
 
     def save_sft_checkpoint(epoch_num: int, is_preemption: bool = False, mid_epoch: bool = False):
-        if args.debug_steps:
+        if args.debug_steps or not is_master:   # under --data-parallel only rank 0 writes (a SIGTERM reaches every rank)
             return
         checkpoint_epoch = epoch_num if mid_epoch else epoch_num - 1
         state_data = {
@@ -1299,12 +1354,20 @@ def _run_training(index: int, args: argparse.Namespace):
                 del loss_out
 
             if (step + 1) % args.gradient_accumulation_steps == 0 or (step + 1) == len(train_dataloader):
-                if accum_valid_tokens == 0 and not is_tpu:
+                if ddp.is_active():
+                    # Sum the loss, the valid-token count and every trainable gradient across the ranks. Dividing the summed gradient by the
+                    # GLOBAL token count below is exactly the one-process token mean, and identical gradients keep the GradScaler in step.
+                    win_loss, win_tokens = ddp.all_reduce_sum([accum_loss_sum, float(accum_valid_tokens)], device)
+                    win_tokens = int(win_tokens)
+                    ddp.sync_trainable_grads(model.parameters(), contributed=accum_valid_tokens > 0)
+                else:
+                    win_loss, win_tokens = accum_loss_sum, accum_valid_tokens
+                if win_tokens == 0 and not is_tpu:
                     optimizer.zero_grad(set_to_none=True)
                     continue
                 scaler.unscale_(optimizer)
                 # Normalize accumulated gradients by total valid tokens across the window
-                if accum_valid_tokens > 0:
+                if win_tokens > 0:
                     if use_spmd:
                         scale = 1.0 / max(float(accum_valid_tokens), 1.0)
                     elif is_tpu and get_xla_world_size(is_tpu) > 1:
@@ -1313,7 +1376,7 @@ def _run_training(index: int, args: argparse.Namespace):
                         global_tokens = xm.all_reduce(reduce_op, token_t).item()
                         scale = 1.0 / max(global_tokens, 1.0)
                     else:
-                        scale = 1.0 / max(float(accum_valid_tokens), 1.0)
+                        scale = 1.0 / max(float(win_tokens), 1.0)
 
                     for p in model.parameters():
                         if p.grad is not None:
@@ -1351,7 +1414,7 @@ def _run_training(index: int, args: argparse.Namespace):
                 total_steps += 1
                 progress["batches_done"] = step + 1
 
-                step_loss = accum_loss_sum / max(accum_valid_tokens, 1)
+                step_loss = win_loss / max(win_tokens, 1)
                 accum_loss_sum = 0.0
                 accum_valid_tokens = 0
                 _diag.step(total_steps, loss=step_loss, epoch=epoch)
@@ -1429,6 +1492,8 @@ def _run_training(index: int, args: argparse.Namespace):
     if args.debug_steps:
         raise RuntimeError("[DEBUG INCOMPLETE] Not enough optimizer windows; increase epochs or supply more traces")
 
+    ddp.barrier()   # --data-parallel: rank 1 waits here until rank 0 has validated and written the final checkpoint
+
     if is_master:
         print(f"\n[COMPLETE] Stage 1 SFT ({args.stage}) finished! Final checkpoint saved to {out_path}.")
         if best_adapter_path.exists():
@@ -1490,6 +1555,7 @@ def main():
     if args.preflight:
         from dental_agent.training.preflight import run_sft_preflight
         sys.exit(1 if run_sft_preflight(args) else 0)
+    ddp.require_consistent(args.data_parallel)   # --data-parallel and the torchrun launch must agree; neither is guessed from the other
     _diag.start_report(args, role="sft")  # None (and nothing is created) unless --tpu-report-dir is given
     is_tpu = False
     try:
@@ -1498,8 +1564,19 @@ def main():
     except ImportError:
         pass
 
-    # Every input is found (or fetched) before the 9B model is touched.
-    resolve_sft_inputs(args, is_tpu)
+    if args.data_parallel:
+        if is_tpu:
+            raise SystemExit("--data-parallel is for the CUDA path; the TPU path shards through SPMD.")
+        ddp.init_process_group()
+    try:
+        _main_body(args, is_tpu)
+    finally:
+        ddp.shutdown()
+
+
+def _main_body(args, is_tpu: bool) -> None:
+    # Every input is found (or fetched) before the 9B model is touched. Under --data-parallel rank 0 resolves (and downloads) first.
+    ddp.in_rank_order(lambda: resolve_sft_inputs(args, is_tpu))
 
     use_spmd = bool(getattr(args, "xla_spmd", False) and is_tpu)  # SPMD only exists on TPU; --spmd is inert on GPU/CPU
     if is_tpu and args.num_cores > 1 and not use_spmd:
@@ -1530,7 +1607,7 @@ def main():
     else:
         if use_spmd:
             print(f"[LAUNCH] Running PyTorch/XLA GSPMD SFT training in single-process mode across {args.num_cores} TPU cores...")
-        run_training(0, args)
+        run_training(ddp.local_rank() if args.data_parallel else 0, args)
 
 
 if __name__ == "__main__":

@@ -55,6 +55,11 @@ class SetupError(RuntimeError):
 # --------------------------------------------------------------------------------------------------------------------
 # Versions and nvidia-smi parsing
 # --------------------------------------------------------------------------------------------------------------------
+def _ms():
+    from dental_agent.utils.model_size import spec
+    return spec()
+
+
 def version_tuple(text: str) -> tuple[int, ...]:
     """``'570.172.08'`` -> ``(570, 172, 8)``; compares correctly as a tuple."""
     return tuple(int(x) for x in re.findall(r"\d+", text or ""))
@@ -670,18 +675,18 @@ def collect_report(repo: Path, venv: Path, wheelhouse: Path, min_free_gb: float 
     same_fs = os.stat(probe).st_dev == os.stat(home).st_dev
     have = {"python_env": dir_size_gb(venv) if venv.exists() else 0.0,
             "wheelhouse": dir_size_gb(wheelhouse) if wheelhouse.exists() else 0.0,
-            "model": dir_size_gb(repo / "data/models/Qwen3.5-9B") if (repo / "data/models/Qwen3.5-9B").exists() else 0.0,
+            "model": dir_size_gb(repo / "data/models" / _ms()['folder']) if (repo / "data/models" / _ms()['folder']).exists() else 0.0,
             "datasets": sum(dir_size_gb(repo / d) for d in ("data/dentex", "data/Tufts") if (repo / d).exists())}
     verdict = disk_plan(repo_free, home_free, same_fs, have, min_free_gb)
     lines.append(f"Disk free: {repo_free:.0f} GB at the repo, {home_free:.0f} GB at ~" + (" (same filesystem)" if same_fs else ""))
     done = ", ".join(f"{k} {v:.1f} GB" for k, v in have.items() if v > 0.05)
     lines.append("Already on disk (counted as done): " + (done or "nothing"))
-    lines.append(f"Still needed: about {verdict.need_repo_gb + verdict.need_home_gb:.0f} GB (model 19 GB is from the repo docs; the other "
+    lines.append(f"Still needed: about {verdict.need_repo_gb + verdict.need_home_gb:.0f} GB (model {_ms()['download_gb']:.0f} GB is from the repo docs / the config shapes; the other "
                  "figures are allowances, not measurements; --min-free-gb overrides)")
-    vram_left = g0.vram_gib - 18.0
+    vram_left = g0.vram_gib - _ms()["weights_gib_16bit"]
     precision_note = (" native BF16 is unavailable on this pre-Ampere GPU; select explicit FP16 LoRA (or QLoRA with FP16 compute)."
                       if g0.cc[0] < 8 else " native BF16 is available.")
-    hint = (f"hint only, nothing is changed (PRECISION is set in the notebook): the 9B weights in 16-bit are about 18 GB, which leaves "
+    hint = (f"hint only, nothing is changed (PRECISION is set in the notebook): the {_ms()['folder']} weights in 16-bit are about {_ms()['weights_gib_16bit']:g} GB, which leaves "
             f"about {max(vram_left, 0):.0f} GiB of this {g0.vram_gib:.0f} GiB card for activations and optimizer state;"
             f"{precision_note} no memory peak has been measured by this script")
     lines.append("Precision " + hint + ".")

@@ -27,6 +27,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Literal, Sequence
 
+from dental_agent.utils import model_size as _ms
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 KAGGLE_INPUT = Path("/kaggle/input")
 KAGGLE_WORKING = Path("/kaggle/working")
@@ -504,7 +506,7 @@ def probe_images_on_hub(missing: Sequence[tuple[str, str, str]]) -> tuple[int, i
 # SFT adapter (input of GRPO and of the K sweep)
 # --------------------------------------------------------------------------------------------------------------------
 def sft_adapter_name(track: str, stage: str, precision: str | None = None) -> str:
-    base = f"qwen3_5_9b_sft_{track}_{stage}"
+    base = f"{_ms.slug()}_sft_{track}_{stage}"
     return f"{base}_{precision}" if precision else base
 
 
@@ -513,14 +515,13 @@ def sft_adapter_candidates(track: str, stage: str, precision: str | None = None)
     run's own explicit ``--precision``, never guessed) that folder is first. The other precision's folder is never a
     candidate: a bf16 run does not pick up a QLoRA adapter and nothing switches it."""
     cands = [Path(f"data/models/{sft_adapter_name(track, stage, precision)}")] if precision else []
-    cands += [
-        Path(f"data/models/qwen3_5_9b_sft_{track}_{stage}"),
-        Path(f"checkpoints/sft_{track}_{stage}"),
-        Path(f"data/models/qwen3_5_9b_sft_{track}"),
-    ]
+    cands += [Path(f"data/models/{_ms.slug()}_sft_{track}_{stage}")]
+    if _ms.active_size() == "9b":     # the size-less legacy folder is a 9B artifact: a 4B run never picks it up
+        cands.append(Path(f"checkpoints/sft_{track}_{stage}"))
+    cands.append(Path(f"data/models/{_ms.slug()}_sft_{track}"))
     if precision:  # where a Hub download of this resolver lands
         cands.append(Path(f"data/models/sft/{sft_adapter_name(track, stage, precision)}"))
-    cands.append(Path(f"data/models/sft/qwen3_5_9b_sft_{track}_{stage}"))
+    cands.append(Path(f"data/models/sft/{_ms.slug()}_sft_{track}_{stage}"))
     return cands
 
 
@@ -904,15 +905,38 @@ def resolve_yolo_checkpoint(explicit: str | Path | None = None, repo: str | None
 # Base model
 # --------------------------------------------------------------------------------------------------------------------
 _HUB_ID = re.compile(r"^[A-Za-z0-9][\w.-]*/[\w.-]+$")
-KAGGLE_BASE_MODEL_DIRS = [
-    "/kaggle/input/datasets/rezanadimikj/qwen3-5-9b", "/kaggle/input/qwen3-5-9b", "/kaggle/input/qwen3_5_9b",
-    "/kaggle/input/qwen-3-5-9b", "/kaggle/input/qwen3-5-9b-base",
-]
+# The next four names follow DENTAL_MODEL_SIZE (9b default, 4b). They are resolved on access, so ``from dental_agent.utils.inputs import
+# LOCAL_BASE_MODEL_ENV`` in a notebook cell sees the size chosen in an earlier cell.
+_DYNAMIC_MODEL_NAMES = {
+    "KAGGLE_BASE_MODEL_DIRS": lambda: list(_ms.spec()["kaggle_dirs"]),
+    "LOCAL_BASE_MODEL_ENV": lambda: _ms.spec()["local_env"],       # QWEN35_9B_LOCAL_DIR / QWEN35_4B_LOCAL_DIR
+    "BASE_MODEL_HUB_ID": lambda: _ms.spec()["hub_id"],             # Qwen/Qwen3.5-9B / Qwen/Qwen3.5-4B
+    "QWEN_FOLDER_NAME": lambda: _ms.spec()["folder"],              # exact casing: Kaggle's file system is case-sensitive
+}
 
 
-LOCAL_BASE_MODEL_ENV = "QWEN35_9B_LOCAL_DIR"
-BASE_MODEL_HUB_ID = "Qwen/Qwen3.5-9B"
-QWEN_FOLDER_NAME = "Qwen3.5-9B"          # exact casing: Kaggle's file system is case-sensitive
+def __getattr__(name: str):
+    if name in _DYNAMIC_MODEL_NAMES:
+        return _DYNAMIC_MODEL_NAMES[name]()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def _env_name() -> str:
+    return _ms.spec()["local_env"]
+
+
+def _hub_id() -> str:
+    return _ms.spec()["hub_id"]
+
+
+def _folder() -> str:
+    return _ms.spec()["folder"]
+
+
+def _kaggle_dirs() -> list[str]:
+    return list(_ms.spec()["kaggle_dirs"])
+
+
 _TOKENIZER_FILES = ("tokenizer.json", "tokenizer_config.json")
 _PROCESSOR_FILES = ("preprocessor_config.json", "processor_config.json")
 
@@ -934,6 +958,13 @@ def qwen_folder_problems(path: str | os.PathLike) -> list[str]:
 
     if size("config.json") == 0:
         problems.append("no config.json")
+    else:
+        try:   # a 4B run pointed at a 9B folder (or the reverse) is refused before any weight is read
+            wrong = _ms.config_problem(json.loads((p / "config.json").read_text(encoding="utf-8")))
+        except (OSError, ValueError):
+            wrong = None
+        if wrong:
+            problems.append(wrong)
     if not any(size(n) for n in _TOKENIZER_FILES):
         problems.append("no tokenizer.json / tokenizer_config.json")
     if not any(size(n) for n in _PROCESSOR_FILES):
@@ -958,13 +989,13 @@ def qwen_folder_problems(path: str | os.PathLike) -> list[str]:
 
 def qwen_canonical_dir() -> Path:
     """<repo root>/data/models/Qwen3.5-9B, resolved from this file (the folder holding dental_agent/), never from the working directory."""
-    return REPO_ROOT / "data" / "models" / QWEN_FOLDER_NAME
+    return REPO_ROOT / "data" / "models" / _folder()
 
 
 def _qwen_kaggle_candidates() -> list[Path]:
     """Attached Kaggle model / dataset folders (read-only, used in place): the known names, then any folder in the Kaggle input layouts
     (see the patterns below) whose path reads like Qwen3.5-9B and holds a config.json."""
-    found = [Path(d) for d in KAGGLE_BASE_MODEL_DIRS]
+    found = [Path(d) for d in _kaggle_dirs()]
     if KAGGLE_INPUT.is_dir():
         # /kaggle/input/<name>[/<framework>/<variation>/<version>], /kaggle/input/datasets/<owner>/<name>[/...],
         # /kaggle/input/models/<owner>/<name>/<framework>/<variation>/<version>
@@ -972,7 +1003,8 @@ def _qwen_kaggle_candidates() -> list[Path]:
                         "models/*/*/*/*/*/config.json"):
             for cfg in sorted(KAGGLE_INPUT.glob(pattern)):
                 norm = re.sub(r"[^a-z0-9]", "", str(cfg.parent.relative_to(KAGGLE_INPUT)).lower())
-                if ("qwen359b" in norm or ("qwen35" in norm and "9b" in norm)) and cfg.parent not in found:
+                sp = _ms.spec()
+                if (any(n in norm for n in sp["norm_names"]) or (sp["norm_pair"][0] in norm and sp["norm_pair"][1] in norm)) and cfg.parent not in found:
                     found.append(cfg.parent)
     return found
 
@@ -983,14 +1015,14 @@ def _colab_models_dir() -> Path | None:
 
     if detect_environment() != "colab":
         return None
-    return Path(os.environ.get("DENTAL_AGENT_PERSIST_DIR") or _default_persist_dir("colab")) / "models" / QWEN_FOLDER_NAME
+    return Path(os.environ.get("DENTAL_AGENT_PERSIST_DIR") or _default_persist_dir("colab")) / "models" / _folder()
 
 
 def _qwen_hf_cache_snapshots() -> list[Path]:
     roots = _hf_cache_roots() + [REPO_ROOT / "data" / "models" / "vllm_cache" / "hub", Path("data/models/vllm_cache/hub")]
     snaps: list[Path] = []
     for root in roots:
-        for snap in sorted(root.glob(f"models--{BASE_MODEL_HUB_ID.replace('/', '--')}/snapshots/*")):
+        for snap in sorted(root.glob(f"models--{_hub_id().replace('/', '--')}/snapshots/*")):
             if snap not in snaps:
                 snaps.append(snap)
     return snaps
@@ -1008,7 +1040,7 @@ def _hub_offline() -> bool:
 
 
 def resolve_qwen_model(*, download: bool = True, force_download: bool = False, environ: dict | None = None, say: Any = print) -> tuple[str, str]:
-    """THE place that decides where Qwen3.5-9B's weights come from. Returns ``(path, source)`` and prints
+    """THE place that decides where the base model's weights come from (Qwen3.5-9B by default; Qwen3.5-4B when DENTAL_MODEL_SIZE=4b). Returns ``(path, source)`` and prints
     ``Qwen3.5-9B source: <source> -> <path>``. First valid candidate wins; nothing is copied or moved.
 
       1. env QWEN35_9B_LOCAL_DIR            (set but unusable = error: an explicit choice is never skipped)   source ``env``
@@ -1025,19 +1057,19 @@ def resolve_qwen_model(*, download: bool = True, force_download: bool = False, e
     notes: list[str] = []
 
     def done(path: Path, source: str) -> tuple[str, str]:
-        say(f"Qwen3.5-9B source: {source} -> {path}")
+        say(f"{_ms.label()} source: {source} -> {path}")
         return str(path), source
 
     if not force_download:
-        raw = (env.get(LOCAL_BASE_MODEL_ENV) or "").strip()
+        raw = (env.get(_env_name()) or "").strip()
         if raw:
             problems = qwen_folder_problems(raw)
             if problems:
-                raise InputNotFound(f"{LOCAL_BASE_MODEL_ENV}={raw}", problems,
-                                    f"point {LOCAL_BASE_MODEL_ENV} at the folder holding config.json, the tokenizer files and all .safetensors shards, "
+                raise InputNotFound(f"{_env_name()}={raw}", problems,
+                                    f"point {_env_name()} at the folder holding config.json, the tokenizer files and all .safetensors shards, "
                                     "or unset it (then the other locations are searched)")
             return done(Path(raw).expanduser(), "env")
-        notes.append(f"{LOCAL_BASE_MODEL_ENV}: not set")
+        notes.append(f"{_env_name()}: not set")
         for cand in _qwen_kaggle_candidates():
             if cand.is_dir():
                 problems = qwen_folder_problems(cand)
@@ -1064,11 +1096,11 @@ def resolve_qwen_model(*, download: bool = True, force_download: bool = False, e
         notes.append("force_download: existing copies skipped")
 
     target = qwen_canonical_dir()
-    where = f"{target} (or point {LOCAL_BASE_MODEL_ENV} at the folder)"
+    where = f"{target} (or point {_env_name()} at the folder)"
     if not download:
-        raise InputNotFound("Qwen3.5-9B", notes, f"place the model in {where}, or run with downloads allowed")
+        raise InputNotFound(_ms.label(), notes, f"place the model in {where}, or run with downloads allowed")
     if _hub_offline():
-        raise InputNotFound("Qwen3.5-9B", notes + ["HF_HUB_OFFLINE=1: no download possible"],
+        raise InputNotFound(_ms.label(), notes + ["HF_HUB_OFFLINE=1: no download possible"],
                             f"copy the model (config.json, tokenizer + processor files, all .safetensors shards) into {where}, or unset HF_HUB_OFFLINE")
     try:
         target.mkdir(parents=True, exist_ok=True)
@@ -1077,34 +1109,34 @@ def resolve_qwen_model(*, download: bool = True, force_download: bool = False, e
         probe.unlink()
     except OSError:
         if KAGGLE_WORKING.is_dir():
-            target = KAGGLE_WORKING / "models" / QWEN_FOLDER_NAME
-            say(f"WARNING: {qwen_canonical_dir()} is not writable; downloading to {target}. The model is about 19 GB and counts "
+            target = KAGGLE_WORKING / "models" / _folder()
+            say(f"WARNING: {qwen_canonical_dir()} is not writable; downloading to {target}. The model is about {_ms.spec()['download_gb']:.0f} GB and counts "
                 "against Kaggle's working-disk limit.")
         else:
-            raise InputNotFound("Qwen3.5-9B", notes + [f"{target} is not writable"], f"make {target} writable or set {LOCAL_BASE_MODEL_ENV}") from None
+            raise InputNotFound(_ms.label(), notes + [f"{target} is not writable"], f"make {target} writable or set {_env_name()}") from None
     partial = target.is_dir() and any(target.iterdir())
-    say(f"Qwen3.5-9B not found locally: {'resuming the partial download in' if partial else 'downloading to'} {target} (about 19 GB)...")
+    say(f"{_ms.label()} not found locally: {'resuming the partial download in' if partial else 'downloading to'} {target} (about {_ms.spec()['download_gb']:.0f} GB)...")
     try:
-        hub_snapshot_model(BASE_MODEL_HUB_ID, target)
+        hub_snapshot_model(_hub_id(), target)
     except Exception as e:
-        raise InputNotFound("Qwen3.5-9B", notes + [f"download of {BASE_MODEL_HUB_ID} failed: {type(e).__name__}: {e}"],
+        raise InputNotFound(_ms.label(), notes + [f"download of {_hub_id()} failed: {type(e).__name__}: {e}"],
                             f"get network access / HF_TOKEN and run again (it resumes), or copy the model into {where}") from e
     problems = qwen_folder_problems(target)
     if problems:
-        raise InputNotFound("Qwen3.5-9B", [f"{target}: {p}" for p in problems], f"run again (the download resumes) or copy the model into {where}")
+        raise InputNotFound(_ms.label(), [f"{target}: {p}" for p in problems], f"run again (the download resumes) or copy the model into {where}")
     return done(target, "downloaded")
 
 
 def local_base_model_dir(environ: dict | None = None) -> Path | None:
     """The folder named by QWEN35_9B_LOCAL_DIR: None when unset or empty, the folder when complete. Set but unusable RAISES
-    (InputNotFound): a typo must never turn into a silent 19 GB download."""
-    raw = ((os.environ if environ is None else environ).get(LOCAL_BASE_MODEL_ENV) or "").strip()
+    (InputNotFound): a typo must never turn into a silent multi-GB download."""
+    raw = ((os.environ if environ is None else environ).get(_env_name()) or "").strip()
     if not raw:
         return None
     problems = qwen_folder_problems(raw)
     if problems:
-        raise InputNotFound(f"{LOCAL_BASE_MODEL_ENV}={raw}", problems,
-                            f"point {LOCAL_BASE_MODEL_ENV} at the folder holding config.json, the tokenizer files and all .safetensors shards, or unset it")
+        raise InputNotFound(f"{_env_name()}={raw}", problems,
+                            f"point {_env_name()} at the folder holding config.json, the tokenizer files and all .safetensors shards, or unset it")
     return Path(raw).expanduser()
 
 
@@ -1112,7 +1144,7 @@ def local_model_alias(model_id: str, environ: dict | None = None) -> str:
     """Zero-shot / API-pool loading: ``Qwen/Qwen3.5-9B`` names the model (output file names and result records keep that id) and, when
     QWEN35_9B_LOCAL_DIR is set (the notebooks set it to the folder resolve_qwen_model() chose), loads from that folder instead of the
     Hub. Any other id is returned unchanged. An unusable folder raises."""
-    if model_id != BASE_MODEL_HUB_ID:
+    if model_id != _hub_id():
         return model_id
     local = local_base_model_dir(environ)
     return str(local) if local is not None else model_id
@@ -1128,7 +1160,7 @@ def model_file_tag(model_id: str, environ: dict | None = None) -> str:
     if local is not None:
         try:
             if Path(model_id).expanduser().resolve() == local.resolve():
-                model_id = BASE_MODEL_HUB_ID
+                model_id = _hub_id()
         except OSError:
             pass
     return model_id.replace("/", "--").replace(":", "-")
@@ -1152,7 +1184,7 @@ def resolve_base_model(model_id: str, *, hub: HubMode = "off") -> Resolved:
         if has_cfg and has_w:
             return Resolved(p, "local")
         raise InputNotFound(f"Base model folder {model_id}", [f"{p}: " + ("no config.json" if not has_cfg else "no weight files (.safetensors/.bin)")],
-                            "attach the complete Kaggle model input or pass --model-id Qwen/Qwen3.5-9B (Hub)")
+                            f"attach the complete Kaggle model input or pass --model-id {_hub_id()} (Hub)")
     if _HUB_ID.match(model_id) and not os.path.isabs(model_id) and not model_id.startswith("."):
         cached = hf_cached_model(model_id)
         if cached is not None:
@@ -1166,5 +1198,5 @@ def resolve_base_model(model_id: str, *, hub: HubMode = "off") -> Resolved:
             if not ok:
                 raise InputNotFound(f"Base model {model_id}", [f"Hub {model_id}: no config.json"], "check the model id")
         return Resolved(Path(model_id), "hub-available")
-    raise InputNotFound(f"Base model {model_id}", [f"{model_id}: no such folder"] + [f"{d}" for d in KAGGLE_BASE_MODEL_DIRS],
-                        "pass --model-id Qwen/Qwen3.5-9B (Hub) or the folder of the attached Kaggle model")
+    raise InputNotFound(f"Base model {model_id}", [f"{model_id}: no such folder"] + [f"{d}" for d in _kaggle_dirs()],
+                        f"pass --model-id {_hub_id()} (Hub) or the folder of the attached Kaggle model")
