@@ -123,8 +123,26 @@ PROFILE_VARIANTS: dict[str, tuple[str, str, str]] = {
 }
 
 
-def profile_parts(name: str) -> tuple[str, str, str]:
-    """``(hardware profile, model size, weight layout)`` of a profile name. ``layout`` is ``sharded`` (FSDPv2 / layers split) or ``replicated``."""
+WEIGHT_LAYOUTS = ("sharded", "replicated")
+ROW_KEYS = ("base", "model", "weights")   # descriptive columns of a notebook profile table; never part of a result's identity
+
+
+def profile_parts(name: str, table: dict | None = None) -> tuple[str, str, str]:
+    """``(hardware profile, model size, weight layout)`` of a profile name. ``layout`` is ``sharded`` (FSDPv2 / layers split) or ``replicated``.
+
+    A notebook passes its own profile table: a row written as a dict with a ``model`` column is the ground truth
+    (``"dual_t4_fp16_4b": {"base": "dual_t4_fp16", "model": "4b", "weights": "sharded"}``). Rows without that column and names that are not in
+    the table follow the naming rules below (``<profile>`` = 9B, ``<profile>_4b`` = 4B, the two data-parallel names)."""
+    row = table.get(name) if table else None
+    if isinstance(row, dict) and "model" in row:
+        size, layout, base = str(row["model"]).strip().lower(), row.get("weights", "sharded"), row.get("base", name)
+        if size not in SPECS:
+            raise ValueError(f"profile {name!r}: model={row['model']!r} is not one of {sorted(SPECS)}")
+        if layout not in WEIGHT_LAYOUTS:
+            raise ValueError(f"profile {name!r}: weights={layout!r} is not one of {WEIGHT_LAYOUTS}")
+        if base != name and base not in table:
+            raise ValueError(f"profile {name!r}: base={base!r} is not a row of the profile table")
+        return base, size, layout
     if name in PROFILE_VARIANTS:
         return PROFILE_VARIANTS[name]
     for size in SPECS:
@@ -133,8 +151,11 @@ def profile_parts(name: str) -> tuple[str, str, str]:
     return name, DEFAULT_SIZE, "sharded"
 
 
-def select_profile(name: str, environ: dict | None = None) -> tuple[str, str, str]:
-    """Resolve a profile name and make its model size the active one (exports ``DENTAL_MODEL_SIZE``). Returns ``profile_parts(name)``."""
-    base, size, layout = profile_parts(name)
+def select_profile(name: str, table: dict | None = None, environ: dict | None = None) -> tuple[str, str, str]:
+    """Resolve a profile name and make its model size the active one (exports ``DENTAL_MODEL_SIZE``). Returns ``profile_parts(name, table)``.
+    With a table, the name must be one of its rows: a typo raises and lists the rows instead of falling through to a naming rule."""
+    if table is not None and name not in table:
+        raise ValueError(f"HARDWARE_PROFILE {name!r} is not a row of this notebook's profile table; choose one of {list(table)}")
+    base, size, layout = profile_parts(name, table)
     set_active_size(size, environ)
     return base, size, layout

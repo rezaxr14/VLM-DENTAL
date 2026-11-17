@@ -202,8 +202,8 @@ def test_profile_parts():
 
 def test_select_profile_exports_the_size_and_a_plain_name_is_always_9b():
     env = {}
-    assert ms.select_profile("tpu_4b", env) == ("tpu", "4b", "sharded") and env[ms.SIZE_ENV] == "4b"
-    assert ms.select_profile("tpu", env)[1] == "9b" and env[ms.SIZE_ENV] == "9b"     # a stale 4b in the environment cannot leak into a 9B profile
+    assert ms.select_profile("tpu_4b", None, env) == ("tpu", "4b", "sharded") and env[ms.SIZE_ENV] == "4b"
+    assert ms.select_profile("tpu", None, env)[1] == "9b" and env[ms.SIZE_ENV] == "9b"     # a stale 4b in the environment cannot leak into a 9B profile
 
 
 def test_eval_selection_normalises_names_and_refuses_mixed_sizes(monkeypatch):
@@ -230,6 +230,73 @@ def test_no_notebook_has_a_separate_model_size_switch(path):
 def test_training_notebooks_select_the_profile_before_the_model_is_resolved(name):
     for src in _code(ROOT / "notebooks" / name):
         if "resolve_qwen_model(" in src and "FORCE_HF_MODEL_DOWNLOAD = False" in src:
-            assert src.index("select_profile(HARDWARE_PROFILE)") < src.index("= resolve_qwen_model(")
+            assert src.index("select_profile(HARDWARE_PROFILE, ") < src.index("= resolve_qwen_model(")
             return
     pytest.fail("no model-resolution cell")
+
+
+# ---- the profile tables of the notebooks carry the model size and the weight layout as rows ---------------------------------------------
+import re as _re
+
+_TABLES = ("EVAL_PROFILES", "_PROFILES", "RUNTIME_PROFILES")
+
+
+def _tables(path):
+    """Every profile table of a notebook, executed from its source: ``{cell, name, table}``."""
+    found = []
+    for src in _code(path):
+        for name in _TABLES:
+            m = _re.search(r"^" + name + r" = \{\n", src, _re.M)
+            if not m or (name == "_PROFILES" and "EVAL_PROFILES = {" in src[m.start() - 5:m.start() + 5]):
+                continue
+            end = _re.compile(r"^\}", _re.M).search(src, m.end())
+            ns = {}
+            exec(compile(src[m.start():end.end()], "table", "exec"), ns)
+            found.append((name, ns[name]))
+    return found
+
+
+def _all_notebooks():
+    return sorted(str(p.relative_to(ROOT / "notebooks")) for p in (ROOT / "notebooks").rglob("*.ipynb") if "deprecated" not in p.name)
+
+
+@pytest.mark.parametrize("name", _all_notebooks())
+def test_every_notebook_table_lists_the_4b_and_data_parallel_profiles_as_rows(name):
+    for tname, table in _tables(ROOT / "notebooks" / name):
+        hardware = [k for k, v in table.items() if not (isinstance(v, dict) and "base" in v) and k != "dual_t4_ddp_fp16"]
+        for k in hardware:
+            row = table[k]
+            assert isinstance(row, dict) and row["model"] == "9b" and row["weights"] == "sharded", (name, tname, k)   # the 9B rows say so
+            assert table[k + "_4b"]["base"] == k and table[k + "_4b"]["model"] == "4b", (name, tname, k)
+            assert ms.profile_parts(k + "_4b", table) == (k, "4b", "sharded")
+        if "dual_t4_ddp_fp16" in table:
+            assert ms.profile_parts("dual_t4_ddp_fp16", table) == ("dual_t4_ddp_fp16", "4b", "replicated")
+        if "tpu" in table:
+            assert ms.profile_parts("tpu_4b_dp", table) == ("tpu", "4b", "replicated")
+        for k in table:                                                    # every row selects, and an unknown name raises
+            ms.select_profile(k, table, {})
+        with pytest.raises(ValueError):
+            ms.select_profile("dual_t4_fp16_8b", table, {})
+
+
+def test_all_training_notebooks_have_a_table_with_model_columns():
+    for name in ("VLM_Dental_Colab_SFT.ipynb", "TPU/TPU_SFT.ipynb", "VLM_Dental_Colab_GRPO.ipynb", "TPU/TPU_GRPO.ipynb"):
+        tables = [n for n, _ in _tables(ROOT / "notebooks" / name)]
+        assert "_PROFILES" in tables or "RUNTIME_PROFILES" in tables, name
+
+
+def test_table_row_checks_reject_bad_rows():
+    table = {"a": {"model": "9b", "weights": "sharded"}, "b_4b": {"base": "a", "model": "4b", "weights": "sharded"}}
+    assert ms.profile_parts("b_4b", table) == ("a", "4b", "sharded")
+    for bad in ({"base": "nope", "model": "4b"}, {"base": "a", "model": "7b"}, {"base": "a", "model": "4b", "weights": "mirrored"}):
+        with pytest.raises(ValueError):
+            ms.profile_parts("x", {**table, "x": bad})
+
+
+def test_result_identity_ignores_the_descriptive_columns_and_replicas():
+    from dental_agent.harness import notebook_eval as ne
+    row = {"tag": "t", "precision": "fp16", "compute": "auto", "attention": "sdpa", "kv": "on", "loader": "staged", "threads": 1, "letterbox": False}
+    table = {"dual_t4_fp16": {**row, "model": "9b", "weights": "sharded", "replicas": 2}, "dual_t4_fp16_4b": {"base": "dual_t4_fp16", "model": "4b", "weights": "sharded"}}
+    configs = {k: {c: v for c, v in r.items() if c not in ms.ROW_KEYS} for k, r in table.items() if "base" not in r}
+    assert ne.select_profiles("dual_t4_fp16_4b", table) == ["dual_t4_fp16"] and ne.select_profiles("all", table) == ["dual_t4_fp16"]
+    assert {c: v for c, v in configs["dual_t4_fp16"].items() if c not in ne.IDENTITY_EXCLUDED} == row

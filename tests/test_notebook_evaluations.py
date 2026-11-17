@@ -321,7 +321,7 @@ def test_cell_profile_edits_drive_discovery_identity_and_runtime(tmp_path, monke
     session._input = lambda split: dict(ids=list(range(50)), fingerprint='cohort')
     job = dict(session.jobs[0], size='canonical')
     identity = session._identity(job)
-    assert identity['runtime'] == profiles['dual_t4'] and identity['track'] == 'with_tools'
+    assert identity['runtime'] == {k: v for k, v in profiles['dual_t4'].items() if k != 'replicas'} and identity['track'] == 'with_tools'
     session.inputs = {'test': dict(data_dir='/inputs')}
     session._adapter = lambda job: '/adapter'
     command, _, _ = session._command(job, identity, tmp_path)

@@ -19,7 +19,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
 from dental_agent.harness.eval_replicas import SHARDABLE_KINDS, eval_replicas, merge_replicas, replica_commands, seed_replicas, start_replicas
-from dental_agent.utils.model_size import profile_parts, select_profile, set_active_size, slug as model_slug, spec as model_spec
+from dental_agent.utils.model_size import ROW_KEYS, profile_parts, select_profile, set_active_size, slug as model_slug, spec as model_spec
 PROFILES = {
     'dual_t4': dict(tag='dual_t4_fp16', precision='qlora', compute='fp16', attention='sdpa', kv='on', loader='staged', threads=1, letterbox=False, replicas=2),
     'rtx4090_qlora': dict(tag='rtx4090_bf16', precision='qlora', compute='bf16', attention='auto', kv='auto', loader='standard', threads=0, letterbox=False),
@@ -31,6 +31,7 @@ PROFILES = {
     # model over the PCIe link; ignored for 9B. The data-parallel-trained adapter differs from dual_t4_fp16 only in its tag (the cohort).
     'dual_t4_ddp_fp16': dict(tag='dual_t4_ddp_unquantized_fp16', precision='fp16', compute='auto', attention='sdpa', kv='on', loader='staged', threads=1, letterbox=False, replicas=2),
 }
+IDENTITY_EXCLUDED = ('replicas',)   # execution detail of a profile row: adding it must not change the fingerprint of any existing result
 ALIASES = {'rtx4090': 'rtx4090_qlora', 'rtxpro6000_48gb': 'workstation48_lora'}
 KINDS = ('zeroshot', 'baseline', 'sft', 'grpo', 'rules_skills', 'speculative')
 PRIMARY = ('base_no_tools', 'base_with_tools', 'sft_no_tools', 'sft_with_tools', 'grpo_no_tools', 'grpo_with_tools')
@@ -62,11 +63,12 @@ def write(path, value):
 def select_profiles(target, profiles=None):
     """Profile names as written in a notebook (``tpu``, ``tpu_4b``, ``tpu_4b_dp``, ``dual_t4_fp16_4b``, ...) -> the hardware profiles they run on."""
     profiles = PROFILES if profiles is None else profiles
-    values = list(profiles) if target == 'all' else ([target] if isinstance(target, str) else list(target))
+    values = [k for k, v in profiles.items() if 'base' not in v] if target == 'all' else ([target] if isinstance(target, str) else list(target))   # 'all' = the hardware rows (9B)
     result = []
     for value in values:
         value = ALIASES.get(value, value)
-        base = profile_parts(value)[0]
+        base = profile_parts(value, profiles)[0]
+        base = ALIASES.get(base, base)    # a training table's rtx4090 / rtx4090_4b row is the evaluation table's rtx4090_qlora hardware
         if base not in profiles: raise ValueError('Unknown EVAL_TARGET_PROFILES: ' + str(value))
         if base not in result: result.append(base)
     if not result: raise ValueError('Select at least one evaluation profile')
@@ -77,10 +79,10 @@ def select_model_size(target, profiles=None):
     """The model size the selected profile names run with (and make active). ``'all'`` keeps the active size: it is not a profile choice."""
     if target == 'all': return None
     values = [target] if isinstance(target, str) else list(target)
-    sizes = {profile_parts(ALIASES.get(v, v))[1] for v in values}
+    sizes = {profile_parts(ALIASES.get(v, v), profiles)[1] for v in values}
     if len(sizes) > 1: raise ValueError('EVAL_TARGET_PROFILES mixes model sizes ' + str(sorted(sizes)) + ': evaluate one size per session')
     if not sizes: return None
-    return select_profile(ALIASES.get(values[0], values[0]))[1]
+    return select_profile(ALIASES.get(values[0], values[0]), profiles if profiles is not None and ALIASES.get(values[0], values[0]) in profiles else None)[1]
 
 
 # TPU static-shape generation (dental_agent/model/tpu_generation.py). Kept in code, not in the profile dict: the notebooks embed
@@ -491,9 +493,11 @@ class NotebookEvaluations:
         self.results_repo = results_repo or os.environ.get('HF_EVAL_REPO','Reza-Nadimi/vlm-dental-evaluations')
         self.results_repo_type = result_repo_type(api, self.results_repo, results_repo_type)
         select_model_size(target_profiles)    # the profile names decide the model size; nothing else has to agree with them
-        self.profile_configs = copy.deepcopy(PROFILES if profiles is None else profiles)
+        table = copy.deepcopy(PROFILES if profiles is None else profiles)
+        self.profile_table = table    # the notebook's rows, including the model-size rows (<profile>_4b, tpu_4b_dp) that only name a base row
+        self.profile_configs = {k: {c: v for c, v in row.items() if c not in ROW_KEYS} for k, row in table.items() if 'base' not in row}   # hardware rows only
         self.api,self.download,self.token = api,download,os.environ.get('HF_TOKEN')
-        self.profiles,self.kinds,self.stages,self.k = select_profiles(target_profiles, self.profile_configs),tuple(kinds),stages,selected_k
+        self.profiles,self.kinds,self.stages,self.k = select_profiles(target_profiles, self.profile_table),tuple(kinds),stages,selected_k
         self.data,self.dev_split,self.output = Path(data_dir),Path(dev_split),Path(output_dir)
         self.model_id,self.split,self.sizes = model_id,split,tuple(sizes)
         self.spec_checkpoints = spec_checkpoints or {}; self.vllm,self.gpu_indices,self.port,self.seed = vllm_executable,gpu_indices,port,seed
@@ -589,7 +593,7 @@ class NotebookEvaluations:
     def _identity(self, job):
         split = 'dev' if job['kind'] in {'rules_skills','speculative'} else self.split
         hashes = {} if not job['adapter'] else {name:_metadata_digest(self.files[name]) for name in (job['adapter']+'/adapter_config.json',job['weight'])}
-        identity = dict(schema=1,profile=job['profile'],runtime=self.profile_configs[job['profile']],kind=job['kind'],condition=job['condition'],
+        identity = dict(schema=1,profile=job['profile'],runtime={c: v for c, v in self.profile_configs[job['profile']].items() if c not in IDENTITY_EXCLUDED},kind=job['kind'],condition=job['condition'],
             checkpoint_kind=job.get('checkpoint_kind',job['kind']),track=job.get('track','no_tools'),stage=job['stage'],k=job['k'],adapter=job['adapter'],checkpoint_files=hashes,
             base_model=model_spec()['hub_id'],software=self.software,split=split,dev_split_sha256=digest(self.dev_split) if split=='dev' else None,source_sha256=self.source,
             max_new_tokens=generation_budget(job['profile']),max_tool_calls=50,max_turns=None,malformed_retries=0,seed=self.seed,size=job.get('size','canonical'))
