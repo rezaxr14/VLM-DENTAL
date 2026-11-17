@@ -21,7 +21,7 @@ def metadata(files):
 def trained_files():
     files=[]
     for name,p in w.PROFILES.items():
-        if name in ('dual_t4_fp16','dual_t4_ddp_fp16'): continue   # the two unquantized dual-T4 cohorts are exercised separately
+        if name in ('dual_t4_fp16','dual_t4_ddp_fp16_4b'): continue   # the two unquantized dual-T4 cohorts are exercised separately
         for track in ('with_tools','no_tools'):
             for prefix in (f"sft/qwen3_5_9b_sft_{track}_dentex_alone_{p['precision']}__{p['tag']}",
                            f"grpo/qwen3_5_9b_grpo_{track}_k4_dentex_alone_{p['precision']}__{p['tag']}/grpo-{track}-final/grpo_policy"):

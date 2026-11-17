@@ -341,7 +341,7 @@ def main() -> None:
                         help="Rules/skills during GRPO rollouts; off preserves the original control")
     parser.add_argument(
         "--data-parallel", action=argparse.BooleanOptionalAction, default=False,
-        help="CUDA only: one process per GPU with a FULL model replica (profile dual_t4_ddp_fp16). Each rank rolls out its own image; one "
+        help="CUDA only: one process per GPU with a FULL model replica (profile dual_t4_ddp_fp16_4b). Each rank rolls out its own image; one "
              "update averages the LoRA gradients of --nproc_per_node images. Needs: python -m torch.distributed.run --nproc_per_node 2 "
              "scripts/run_grpo.py ... Off = unchanged.")
     from dental_agent.training.tpu_diagnostics import add_report_arguments

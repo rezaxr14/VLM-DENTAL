@@ -1,6 +1,6 @@
 """Explicit data parallelism for the CUDA path: one process per GPU, each holding a FULL replica, LoRA gradients all-reduced.
 
-This is the ``dual_t4_ddp_fp16`` profile: two T4s, one Qwen3.5-4B fp16 replica on each, so no layer is split across the PCIe link and
+This is the ``dual_t4_ddp_fp16_4b`` profile: two T4s, one Qwen3.5-4B fp16 replica on each, so no layer is split across the PCIe link and
 nothing crosses it except the LoRA gradients (and a few scalars) once per optimizer update.
 
 Deliberately NOT ``torch.nn.parallel.DistributedDataParallel``: the model is a frozen base plus a small LoRA with non-reentrant

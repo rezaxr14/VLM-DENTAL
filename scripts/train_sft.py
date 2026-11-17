@@ -339,7 +339,7 @@ def parse_args():
     parser.add_argument(
         "--data-parallel", action=argparse.BooleanOptionalAction, default=False,
         help="CUDA only: one process per GPU, each with a FULL model replica, LoRA gradients summed across processes at every optimizer "
-             "update (profile dual_t4_ddp_fp16). Needs a torchrun launch: python -m torch.distributed.run --nproc_per_node 2 "
+             "update (profile dual_t4_ddp_fp16_4b). Needs a torchrun launch: python -m torch.distributed.run --nproc_per_node 2 "
              "scripts/train_sft.py ... Effective batch = --batch-size x --gradient-accumulation-steps x processes. Off = unchanged.")
     args = parser.parse_args()
     if args.gradient_accumulation_steps is None:

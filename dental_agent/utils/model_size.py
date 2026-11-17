@@ -119,7 +119,7 @@ def config_problem(cfg: dict, size: str | None = None) -> str | None:
 PROFILE_VARIANTS: dict[str, tuple[str, str, str]] = {
     # name: (hardware profile, model size, weight layout)
     "tpu_4b_dp": ("tpu", "4b", "replicated"),                       # a full bf16 copy of the 4B model on every v5e core, batch split over the 8 cores
-    "dual_t4_ddp_fp16": ("dual_t4_ddp_fp16", "4b", "replicated"),   # one process per T4 with a full 4B fp16 replica (torchrun)
+    "dual_t4_ddp_fp16_4b": ("dual_t4_ddp_fp16_4b", "4b", "replicated"),   # one process per T4 with a full 4B fp16 replica (torchrun)
 }
 
 

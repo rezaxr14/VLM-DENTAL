@@ -141,7 +141,7 @@ def parse_args():
                         help="Keep healthy images (ground truth []) in the pool.")
     from dental_agent.harness.configuration import HARNESS_MODES
     parser.add_argument("--data-parallel", action=argparse.BooleanOptionalAction, default=False,
-                        help="CUDA only: one process per GPU with a full replica (profile dual_t4_ddp_fp16); launch this script with "
+                        help="CUDA only: one process per GPU with a full replica (profile dual_t4_ddp_fp16_4b); launch this script with "
                              "python -m torch.distributed.run --nproc_per_node 2. Every K runs data-parallel. Off = unchanged.")
     parser.add_argument("--harness-mode", choices=HARNESS_MODES, default="off",
                         help="Rules/skills during GRPO rollouts; off preserves the original control")

@@ -24,7 +24,7 @@ def test_replicas_only_for_4b_and_only_with_the_profile_key():
 
 
 def test_profile_tables_declare_replicas_on_dual_t4_only():
-    for name in ("dual_t4", "dual_t4_fp16", "dual_t4_ddp_fp16"):
+    for name in ("dual_t4", "dual_t4_fp16", "dual_t4_ddp_fp16_4b"):
         assert ne.PROFILES[name]["replicas"] == 2
     for name, cfg in ne.PROFILES.items():
         if not name.startswith("dual_t4"):
@@ -37,8 +37,8 @@ def test_notebook_tables_match_module_replicas():
         nb = json.loads(Path(path).read_text(encoding="utf-8"))
         for cell in nb["cells"]:
             src = "".join(cell["source"]) if cell["cell_type"] == "code" else ""
-            if '"dual_t4_ddp_fp16": {' in src and '"tag"' in src and "EVAL_PROFILES" in src:
-                for key in ("dual_t4", "dual_t4_fp16", "dual_t4_ddp_fp16"):
+            if '"dual_t4_ddp_fp16_4b": {' in src and '"tag"' in src and "EVAL_PROFILES" in src:
+                for key in ("dual_t4", "dual_t4_fp16", "dual_t4_ddp_fp16_4b"):
                     block = src.split(f'"{key}": {{', 1)[1].split("}", 1)[0]
                     assert '"replicas": 2' in block, (path, key)
 

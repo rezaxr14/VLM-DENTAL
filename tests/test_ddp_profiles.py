@@ -75,12 +75,12 @@ def test_replica_fit_gate():
 def test_profile_tags_are_separate_cohorts():
     assert PROFILE_TAGS["dual_t4"] == "dual_t4_fp16"
     assert PROFILE_TAGS["dual_t4_fp16"] == "dual_t4_unquantized_fp16"
-    assert PROFILE_TAGS["dual_t4_ddp_fp16"] == "dual_t4_ddp_unquantized_fp16"
+    assert PROFILE_TAGS["dual_t4_ddp_fp16_4b"] == "dual_t4_ddp_unquantized_fp16"
     assert len(set(PROFILE_TAGS.values())) >= len(set(PROFILE_TAGS.keys())) - 1   # only rtx4090 / rtx4090_qlora share a tag
 
 
 def test_eval_profile_ddp_matches_the_single_process_runtime():
-    a, b = ne.PROFILES["dual_t4_fp16"], ne.PROFILES["dual_t4_ddp_fp16"]
+    a, b = ne.PROFILES["dual_t4_fp16"], ne.PROFILES["dual_t4_ddp_fp16_4b"]
     assert b["tag"] != a["tag"]
     assert {k: v for k, v in a.items() if k != "tag"} == {k: v for k, v in b.items() if k != "tag"}
 
@@ -88,9 +88,9 @@ def test_eval_profile_ddp_matches_the_single_process_runtime():
 def test_ddp_hardware_gate_is_per_gpu(monkeypatch):
     t4 = dict(name="T4", capability=(7, 5), gib=15.0)
     monkeypatch.setenv(ms.SIZE_ENV, "4b")
-    assert ne.hardware_reason("dual_t4_ddp_fp16", "sft", [t4, t4]) is None
+    assert ne.hardware_reason("dual_t4_ddp_fp16_4b", "sft", [t4, t4]) is None
     monkeypatch.setenv(ms.SIZE_ENV, "9b")
-    assert ne.hardware_reason("dual_t4_ddp_fp16", "sft", [t4, t4]) is not None     # 30 GiB pooled is not what a replica needs
+    assert ne.hardware_reason("dual_t4_ddp_fp16_4b", "sft", [t4, t4]) is not None     # 30 GiB pooled is not what a replica needs
     assert ne.hardware_reason("dual_t4_fp16", "sft", [t4, t4]) is None            # the layer-split profile pools both GPUs (unchanged)
 
 
@@ -118,13 +118,13 @@ def test_every_eval_table_knows_the_ddp_profile():
     for path in NOTEBOOKS:
         for src in _code(path):
             if '"dual_t4_fp16": {' in src:
-                assert '"dual_t4_ddp_fp16": {' in src and '"dual_t4_ddp_unquantized_fp16"' in src, Path(path).name
+                assert '"dual_t4_ddp_fp16_4b": {' in src and '"dual_t4_ddp_unquantized_fp16"' in src, Path(path).name
 
 
 @pytest.mark.parametrize("name", ["VLM_Dental_Colab_SFT.ipynb", "VLM_Dental_Colab_GRPO.ipynb"])
 def test_gpu_training_notebooks_have_both_dual_t4_profiles(name):
     text = "\n".join(_code(ROOT / "notebooks" / name))
-    assert '"dual_t4_fp16"' in text and '"dual_t4_ddp_fp16"' in text
+    assert '"dual_t4_fp16"' in text and '"dual_t4_ddp_fp16_4b"' in text
     assert "torch.distributed.run" in text and '"--data-parallel"' in text
     assert 'DATA_PARALLEL = WEIGHTS == "replicated" and not IS_TPU' in text      # the profile decides; no separate toggle
     assert "ddp=True" not in text and 'MODEL_SIZE != "4b"' not in text
@@ -196,7 +196,7 @@ def test_profile_parts():
     assert ms.profile_parts("dual_t4_fp16_4b") == ("dual_t4_fp16", "4b", "sharded")
     assert ms.profile_parts("tpu_4b") == ("tpu", "4b", "sharded")
     assert ms.profile_parts("tpu_4b_dp") == ("tpu", "4b", "replicated")
-    assert ms.profile_parts("dual_t4_ddp_fp16") == ("dual_t4_ddp_fp16", "4b", "replicated")
+    assert ms.profile_parts("dual_t4_ddp_fp16_4b") == ("dual_t4_ddp_fp16_4b", "4b", "replicated")
     assert ms.profile_parts("rtx4090") == ("rtx4090", "9b", "sharded")       # existing names stay 9B
 
 
@@ -263,14 +263,14 @@ def _all_notebooks():
 @pytest.mark.parametrize("name", _all_notebooks())
 def test_every_notebook_table_lists_the_4b_and_data_parallel_profiles_as_rows(name):
     for tname, table in _tables(ROOT / "notebooks" / name):
-        hardware = [k for k, v in table.items() if not (isinstance(v, dict) and "base" in v) and k != "dual_t4_ddp_fp16"]
+        hardware = [k for k, v in table.items() if not (isinstance(v, dict) and "base" in v) and k != "dual_t4_ddp_fp16_4b"]
         for k in hardware:
             row = table[k]
             assert isinstance(row, dict) and row["model"] == "9b" and row["weights"] == "sharded", (name, tname, k)   # the 9B rows say so
             assert table[k + "_4b"]["base"] == k and table[k + "_4b"]["model"] == "4b", (name, tname, k)
             assert ms.profile_parts(k + "_4b", table) == (k, "4b", "sharded")
-        if "dual_t4_ddp_fp16" in table:
-            assert ms.profile_parts("dual_t4_ddp_fp16", table) == ("dual_t4_ddp_fp16", "4b", "replicated")
+        if "dual_t4_ddp_fp16_4b" in table:
+            assert ms.profile_parts("dual_t4_ddp_fp16_4b", table) == ("dual_t4_ddp_fp16_4b", "4b", "replicated")
         if "tpu" in table:
             assert ms.profile_parts("tpu_4b_dp", table) == ("tpu", "4b", "replicated")
         for k in table:                                                    # every row selects, and an unknown name raises

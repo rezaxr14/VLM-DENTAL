@@ -29,7 +29,7 @@ PROFILES = {
     'dual_t4_fp16': dict(tag='dual_t4_unquantized_fp16', precision='fp16', compute='auto', attention='sdpa', kv='on', loader='staged', threads=1, letterbox=False, replicas=2),
     # `replicas`: with Qwen3.5-4B (a replica fits one T4) an evaluation runs one single-GPU process per GPU on alternate images instead of splitting one
     # model over the PCIe link; ignored for 9B. The data-parallel-trained adapter differs from dual_t4_fp16 only in its tag (the cohort).
-    'dual_t4_ddp_fp16': dict(tag='dual_t4_ddp_unquantized_fp16', precision='fp16', compute='auto', attention='sdpa', kv='on', loader='staged', threads=1, letterbox=False, replicas=2),
+    'dual_t4_ddp_fp16_4b': dict(tag='dual_t4_ddp_unquantized_fp16', precision='fp16', compute='auto', attention='sdpa', kv='on', loader='staged', threads=1, letterbox=False, replicas=2),
 }
 IDENTITY_EXCLUDED = ('replicas',)   # execution detail of a profile row: adding it must not change the fingerprint of any existing result
 ALIASES = {'rtx4090': 'rtx4090_qlora', 'rtxpro6000_48gb': 'workstation48_lora'}
@@ -127,7 +127,7 @@ def hardware_reason(profile, kind, devices, profiles=None):
     need = model_spec()['weights_gib_16bit']
     if p['precision'] != 'qlora' and sum(d['gib'] for d in devices) < need:
         return f"pending: device memory is below the 16-bit {model_spec()['folder']} weight footprint (about {need:g} GiB), before activations"
-    if (profile == 'dual_t4_ddp_fp16' or (p.get('replicas', 1) > 1 and model_spec()['size'] == '4b')) and p['precision'] != 'qlora' and any(d['gib'] < need + 1.0 for d in devices):   # a FULL replica on EACH GPU, memory is not pooled
+    if (profile == 'dual_t4_ddp_fp16_4b' or (p.get('replicas', 1) > 1 and model_spec()['size'] == '4b')) and p['precision'] != 'qlora' and any(d['gib'] < need + 1.0 for d in devices):   # a FULL replica on EACH GPU, memory is not pooled
         return f"pending: data parallel keeps a full 16-bit {model_spec()['folder']} replica (about {need:g} GiB, an estimate) on every GPU; a GPU here is smaller"
     if kind == 'speculative' and any(tuple(d['capability']) < (7, 5) for d in devices):
         return 'pending: the configured NVIDIA vLLM serving path requires compute capability 7.5 or newer'

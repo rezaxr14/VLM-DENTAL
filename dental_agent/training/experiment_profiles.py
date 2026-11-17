@@ -14,7 +14,7 @@ PROFILE_TAGS = {
     "dual_t4_fp16": "dual_t4_unquantized_fp16",
     # Two T4s, one full replica of the model on each (python -m torch.distributed.run, --data-parallel). A separate tag, so a DDP run is its own
     # cohort: one GRPO update averages two images, which is not the same recipe as the single-process dual_t4_fp16 profile.
-    "dual_t4_ddp_fp16": "dual_t4_ddp_unquantized_fp16",
+    "dual_t4_ddp_fp16_4b": "dual_t4_ddp_unquantized_fp16",
 }
 
 def grpo_name(track, k, stage, precision, tag=None, harness_mode="off"):
