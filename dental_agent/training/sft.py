@@ -15,6 +15,7 @@ import collections
 import json
 import os
 import glob
+import types
 from pathlib import Path
 from typing import Any, List, Dict, Optional
 from PIL import Image
@@ -1455,13 +1456,16 @@ def freeze_and_guard_vision_tower(model: torch.nn.Module, train_merger: bool = F
             print(f"[VISION GUARD] Whole vision tower wrapped in torch.no_grad() ({frozen_count:,} frozen params, 0 saved activations).")
     elif hasattr(visual, "blocks"):
         def make_no_grad(f):
-            def wrapped(*args, **kwargs):
+            def wrapped(self, *args, **kwargs):
                 with torch.no_grad():
                     return f(*args, **kwargs)
             return wrapped
 
+        # A bound method (like install_tpu_chunked_loss does for the root model), not a bare function: torch_xla's FSDPv2 refuses
+        # any wrapped module whose `forward` has no `__func__` ("must define a `forward` method"), and PEFT's auto-wrap policy
+        # wraps every Qwen3_5VisionBlock (it is in `_no_split_modules`).
         for blk in visual.blocks:
-            blk.forward = make_no_grad(blk.forward)
+            blk.forward = types.MethodType(make_no_grad(blk.forward), blk)
         if is_master:
             print(f"[VISION GUARD] {len(visual.blocks)} vision transformer blocks wrapped in torch.no_grad() "
                   f"({frozen_count:,} frozen params). Projector trainable via LoRA ({trained_count:,} params).")
