@@ -1,0 +1,30 @@
+All Rights Reserved (pre-publication licence)
+
+Copyright (c) 2026 Reza Nadimi (rezaxr14). All rights reserved.
+
+This source code and all associated assets (the "Work") are proprietary and
+confidential until the publication of the VLM-DENTAL paper. During this
+pre-publication period:
+
+  1. NO RIGHTS GRANTED: You may not copy, modify, distribute, sublicense,
+     publicly display, publicly perform, or create derivative works from the
+     Work without explicit written permission from the copyright holder.
+
+  2. NO COMMERCIAL USE: Any commercial use is strictly prohibited.
+
+  3. NO REVERSE ENGINEERING: You may not reverse engineer, decompile, or
+     disassemble the Work.
+
+AUTOMATIC RELICENSING:
+Upon the date of first public publication of the VLM-DENTAL paper
+(arXiv, conference proceedings, or journal), this licence AUTOMATICALLY
+CONVERTS to the Apache License 2.0 for all code in this repository.
+Third-party datasets, model weights, and dependencies remain governed by
+their own upstream licences.
+
+To verify publication status, check https://github.com/rezaxr14/VLM-DENTAL
+for the paper reference, or contact the copyright holder.
+
+---
+This licence does not constitute legal advice. Consult an attorney for
+your specific situation.
