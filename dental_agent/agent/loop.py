@@ -314,9 +314,14 @@ def run_agent_no_tools(
     temperature: float = 0.0,
     max_new_tokens: int = 2048,
     system_prompt: str | None = None,
+    reply_fn=None,
 ) -> AgentTrajectory:
     """H1 Ablation condition: One-turn direct reasoning without tool access (``NO_TOOLS_SYSTEM_PROMPT``; ``system_prompt`` overrides it
-    for the official_test250 cohort only, everything else keeps the default)."""
+    for the official_test250 cohort only, everything else keeps the default).
+
+    ``reply_fn`` (optional) replaces ``generate_agent_reply`` with the same call contract ``run_agent`` uses (a remote or
+    served model); it returns ``(text, prompt_len, token_ids, pkv, cache_state)`` and only the first three are read here.
+    ``None`` keeps the local path exactly as it was."""
     row = images_df[images_df["id"] == image_id].iloc[0]
     image = Image.open(row["local_path"]).convert("RGB")
     if canonical_resize:
@@ -333,9 +338,15 @@ def run_agent_no_tools(
         },
     ]
 
-    reply, prompt_len, gen_ids = generate_agent_reply(
-        model, processor, messages, max_new_tokens=max_new_tokens, temperature=temperature, return_ids=True
-    )
+    if reply_fn is None:
+        reply, prompt_len, gen_ids = generate_agent_reply(
+            model, processor, messages, max_new_tokens=max_new_tokens, temperature=temperature, return_ids=True
+        )
+    else:
+        reply, prompt_len, gen_ids = reply_fn(
+            model, processor, messages, max_new_tokens=max_new_tokens, temperature=temperature, return_ids=True,
+            past_key_values=None, cache_state=None, return_cache=True,
+        )[:3]
     parsed = parse_agent_json(reply)
 
     final_ans = (parsed or {}).get("final_answer")

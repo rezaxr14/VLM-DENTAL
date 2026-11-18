@@ -41,6 +41,30 @@ def load_rules(path: str | Path | None = None) -> dict:
     return data
 
 
+def _stable_dump(node) -> str:
+    """The Python 3.12 ``ast.dump(node, include_attributes=False)`` text, produced identically on every Python version.
+
+    The implementation bindings in ``rules.md`` pin digests of this text. ``ast.dump`` itself changed between releases (3.13 omits
+    empty/default fields, 3.11 has no ``type_params``), so hashing it directly made ``render_prompt()`` fail on any other interpreter
+    (for example Kaggle's 3.13). Reproducing the 3.12 rendering here keeps every pinned digest, and therefore ``rules.md`` and the
+    harness identities saved with checkpoints and traces, unchanged.
+    """
+    if isinstance(node, ast.AST):
+        fields = list(node._fields)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and 'type_params' not in fields:
+            fields.append('type_params')            # 3.12 always renders it, empty when unused; 3.11 has no such field
+        parts = []
+        for name in fields:
+            value = getattr(node, name, [] if name == 'type_params' else None)
+            if value is None and getattr(type(node), name, ...) is None:
+                continue                            # optional field left unset (3.12 skips these too)
+            parts.append(f'{name}={_stable_dump(value)}')
+        return f'{type(node).__name__}({", ".join(parts)})'
+    if isinstance(node, list):
+        return '[' + ', '.join(_stable_dump(item) for item in node) + ']' if node else '[]'
+    return repr(node)
+
+
 def validate_implementations(data: dict | None = None, root: Path | None = None) -> None:
     data = load_rules() if data is None else data
     root = Path(__file__).resolve().parents[2] if root is None else Path(root)
@@ -51,7 +75,7 @@ def validate_implementations(data: dict | None = None, root: Path | None = None)
             raise ValueError('Implementation path escapes source root')
         tree = ast.parse(path.read_text(encoding='utf-8'))
         nodes = [n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.ClassDef)) and n.name == binding['symbol']]
-        if len(nodes) != 1 or hashlib.sha256(ast.dump(nodes[0], include_attributes=False).encode()).hexdigest() != binding['sha256']:
+        if len(nodes) != 1 or hashlib.sha256(_stable_dump(nodes[0]).encode()).hexdigest() != binding['sha256']:
             raise ValueError(f'{rid}: implementation drift')
         symbols.add(binding['symbol'])
     reward_bindings={(b['path'],b['symbol']) for b in data['implementations'].values() if b['symbol'].startswith('reward_') or b['symbol'].endswith('_reward')}

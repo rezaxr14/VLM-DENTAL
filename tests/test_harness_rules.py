@@ -24,6 +24,15 @@ def test_prompt_golden(dataset,classes,monkeypatch):
 
 def test_bindings():rules.validate_implementations()
 
+def test_binding_digests_do_not_depend_on_the_python_version():
+    # The pinned digests are the Python 3.12 ast.dump text; _stable_dump must reproduce it on every interpreter (3.11 and 3.13 differ).
+    import ast
+    nodes=[n for n in ast.walk(ast.parse((ROOT/'dental_agent/rewards/components.py').read_text())) if isinstance(n,(ast.FunctionDef,ast.ClassDef))]
+    assert nodes
+    if sys.version_info[:2]==(3,12):
+        assert all(rules._stable_dump(n)==ast.dump(n,include_attributes=False) for n in nodes)
+    assert all('type_params=[]' in rules._stable_dump(n) for n in nodes)
+
 def test_missing_or_extra_binding():
     data=rules.load_rules();data['implementations'].pop('R009')
     import json,tempfile

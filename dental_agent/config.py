@@ -146,21 +146,100 @@ class EvaluationConfig:
     ece_n_bins: int = 10
 
 
+KAGGLE_INPUT = "/kaggle/input"
+ENV_FILE_NAMES = (".env", "env", "dot_env", "env.txt")   # Kaggle's dataset upload can drop hidden files, so a plain name works too
+ENV_PROTECTED_PREFIXES = ("MODEL_PROXY", "KAGGLE_", "LLM")   # the runner's own wiring: a .env dataset never overrides it
+
+
+def env_file_in(folder: str | Path) -> Path | None:
+    for name in ENV_FILE_NAMES:
+        cand = Path(folder) / name
+        if cand.is_file():
+            return cand
+    return None
+
+
+def parse_env_file(path: str | Path) -> dict[str, str]:
+    """``KEY=value`` lines (``export`` prefix, quotes and comments handled). Values are returned to the caller, never printed here."""
+    import re
+    out: dict[str, str] = {}
+    for line in Path(path).read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        m = re.match(r"\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)", line)
+        if m:
+            value = m.group(2).strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+                value = value[1:-1]
+            elif " #" in value:
+                value = value.split(" #", 1)[0].strip()
+            out[m.group(1)] = value
+    return out
+
+
+def apply_env_values(values: dict[str, str], environ=None) -> list[str]:
+    """Set the keys that are not already set (and are not the runner's own); returns the key NAMES set."""
+    environ = os.environ if environ is None else environ
+    set_keys = []
+    for key, value in values.items():
+        if value and not key.startswith(ENV_PROTECTED_PREFIXES) and not environ.get(key):
+            environ[key] = value
+            set_keys.append(key)
+    return sorted(set_keys)
+
+
+def discover_env_datasets(roots=(KAGGLE_INPUT,)) -> list[tuple[str, Path]]:
+    """Attached Kaggle datasets that hold a ``.env``: ``(dataset id, file)``. The id is ``owner/name`` in the interactive layout
+    (``<root>/datasets/<owner>/<name>``) and just ``name`` in a hosted run (``<root>/<name>``), so a notebook can pass the same
+    dataset on to the hosted runs it schedules without anyone typing its name."""
+    found: list[tuple[str, Path]] = []
+    for root in roots:
+        base = Path(root)
+        if not base.is_dir():
+            continue
+        for folder in sorted(p for p in base.iterdir() if p.is_dir() and p.name != "datasets"):
+            if (f := env_file_in(folder)) is not None:
+                found.append((folder.name, f))
+        for folder in sorted((base / "datasets").glob("*/*")) if (base / "datasets").is_dir() else []:
+            if folder.is_dir() and (f := env_file_in(folder)) is not None:
+                found.append((f"{folder.parent.name}/{folder.name}", f))
+    return found
+
+
+def load_env_from_datasets(roots=(KAGGLE_INPUT,), environ=None) -> dict[str, list[str]]:
+    """Fill unset variables from every attached dataset that holds a ``.env`` (no-op outside Kaggle). Existing values win."""
+    loaded: dict[str, list[str]] = {}
+    for dataset_id, path in discover_env_datasets(roots):
+        try:
+            loaded[dataset_id] = apply_env_values(parse_env_file(path), environ)
+        except OSError:
+            loaded[dataset_id] = []
+    return loaded
+
+
 def load_env(env_path: str | Path | None = None) -> bool:
     """Load environment variables from a .env file into os.environ.
 
-    Searches current working directory and parent directory tree by default.
+    Searches current working directory and parent directory tree by default. On Kaggle it also fills any variable that is
+    still unset from an attached dataset holding a ``.env`` (``load_env_from_datasets``), so one private dataset serves every
+    notebook and every hosted run.
     """
+    ok = False
     try:
         import dotenv
         if env_path is not None:
-            return dotenv.load_dotenv(dotenv_path=str(env_path), override=True)
-        found = dotenv.find_dotenv(usecwd=True)
-        if found:
-            return dotenv.load_dotenv(found, override=True)
-        return False
+            ok = dotenv.load_dotenv(dotenv_path=str(env_path), override=True)
+        else:
+            found = dotenv.find_dotenv(usecwd=True)
+            ok = bool(found) and dotenv.load_dotenv(found, override=True)
     except ImportError:
-        return False
+        ok = False
+    if env_path is None:
+        try:
+            ok = bool(sum(len(v) for v in load_env_from_datasets((KAGGLE_INPUT,)).values())) or ok
+        except Exception:                                # reading the dataset must never break an import
+            pass
+    return ok
 
 
 # ---------------------------------------------------------------------------
